@@ -39,6 +39,7 @@ OPERATORS={'owner','sales','dispatch'}
 READERS=OPERATORS|{'accounting'}
 QUOTERS={'owner','sales'}  # owner is displayed as Manager in this pilot
 COOKIE='crownops_session'
+SETUP_TOKEN_HASH='a2f107444f141c2a3d61af99ec02063038c77b60c0f639ef6bf7f5304fa21bb1'
 from .pricing import calculate_with_overrides
 from .operations import check_fleet_dispatch
 from .platform_common import settings as platform_settings
@@ -229,6 +230,28 @@ def create_app(database_path=None):
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
         return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.5.5.1'}
+
+    @app.post('/api/setup-owner')
+    def setup_owner(data:dict):
+        with closing(connect(path)) as db:
+            if db.execute('SELECT 1 FROM users LIMIT 1').fetchone():
+                raise HTTPException(409,'Initial setup is already complete.')
+        code=bounded(data.get('setup_code',''),'Setup code',200)
+        if not code or not hmac.compare_digest(sha(code),SETUP_TOKEN_HASH):
+            raise HTTPException(401,'Setup code is incorrect.')
+        name=bounded(data.get('name',''),'Name',150)
+        email=valid_email(bounded(data.get('email',''),'Email',254))
+        password=data.get('password','')
+        if not name:
+            raise HTTPException(422,'Enter your name.')
+        if not isinstance(password,str) or not 12<=len(password)<=200:
+            raise HTTPException(422,'Use a password between 12 and 200 characters.')
+        user=create_user(path,email,name,password,role='owner')
+        from .seed import seed_pricing
+        seed_pricing(path)
+        with transaction(path) as db:
+            audit(db,user['id'],'Initial manager account created','users',user['id'])
+        return {'ok':True,'email':user['email']}
 
     @app.post('/api/login')
     def login(data:dict,request:Request):
