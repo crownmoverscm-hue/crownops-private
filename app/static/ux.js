@@ -65,6 +65,8 @@ openLead=async function(id){
  const overview=await api('/ux/project/'+encodeURIComponent(id));
  await uxOldOpenLead(id);
  const body=modal.querySelector('.modal-body');if(!body)return;
+ const foot=modal.querySelector('.modal-foot');
+ if(foot&&may(['owner','sales','dispatch']))foot.insertAdjacentHTML('afterbegin',`<button class="btn-soft" data-ux="new-followup" data-id="${h(id)}">${icon('check')}Add follow-up</button>`);
  const steps=overview.lifecycle.steps.map((s,i)=>`<div class="lifecycle-step ${i<overview.lifecycle.current_index?'done':i===overview.lifecycle.current_index?'current':''}"><span>${i+1}</span><small>${h(s)}</small></div>`).join('');
  const notReady=overview.jobs.flatMap(j=>j.readiness.ready?[]:j.readiness.missing);
  const activity=overview.timeline.slice(0,12).map(t=>`<div class="activity-row"><span class="activity-dot"></span><div class="grow"><div class="tiny strong">${h(t.title)}</div><div class="tiny muted">${h(t.kind)} &middot; ${h(t.at)}${t.detail?' &middot; '+h(t.detail):''}</div></div>${t.status?pill(t.status):''}</div>`).join('')||'<p class="tiny muted">No project activity yet.</p>';
@@ -300,6 +302,7 @@ document.addEventListener('click',async e=>{
   }
   if(a==='search-open'){modal.close();if(el.dataset.type==='client')return openLead(id);if(el.dataset.type==='job')return openJob(id);if(el.dataset.type==='invoice')return openInvoice(id);}
   if(a==='estimate-open')return openQuote(id);
+  if(a==='new-followup'){return showModal('Add follow-up',`<form id="ux-followup-form" data-ux-form="followup"><input type="hidden" name="lead_id" value="${h(id)}"><div class="grid2">${select('title','Next action',['Call back client','Send estimate','Confirm missing details','Check decision / follow up','Confirm deposit / payment','Other follow-up'],'Call back client')}${field('due_date','Due date',today(),'date','required')}</div></form>`,`${btn('close','Cancel')}<button type="submit" form="ux-followup-form" class="btn-primary">Add follow-up</button>`);}
   if(a==='invoice-open')return openInvoice(id);
   if(a==='estimate-filter'){UX.estimateStatus=el.dataset.value||'all';return navigate('quotes');}
   if(a==='followup-filter'){UX.followupStatus=el.dataset.value||'open';return navigate('followups');}
@@ -350,6 +353,7 @@ document.addEventListener('submit',async e=>{
     for(const emp of team.employees){const common=f.elements['common_'+emp.id].checked;if(!common)exceptions[emp.id]={total_hours:Number(f.elements['hours_'+emp.id].value),note:f.elements['note_'+emp.id].value};}
     await api('/ux/jobs/'+encodeURIComponent(d.job_id)+'/crew-hours',{method:'POST',data:{employee_ids,team_hours:Number(d.team_hours),exceptions,note:d.note}});toast('Team hours saved.');modal.close();return navigate('team');
   }
+  if(kind==='followup'){await api('/tasks',{method:'POST',data:{lead_id:d.lead_id,title:d.title,due_date:d.due_date}});modal.close();toast('Follow-up added.');return navigate('followups');}
   if(kind==='company-email'){const r=await api('/ux/company-communications',{method:'PATCH',data:{...d,approved:f.approved.checked}});UX.companyComms=r;modal.close();toast('Company email rules saved.');return navigate('connections');}
  }catch(ex){modalError(ex);}
 });
