@@ -1,0 +1,200 @@
+/* CrownOps v5.4 simplified job review pass: simple defaults, useful exceptions, clean role-based UX. */
+'use strict';
+const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null};
+
+// ---------- Navigation: show the things people actually use ----------
+ensureNav(['communications','mail','Communications']);
+for(const [key,label] of [['dashboard','Today'],['team','Employee directory'],['payroll','Payroll'],['inventory','Materials'],['rates','Pricing & rates'],['documents','Documents & approvals']]){const n=nav.find(x=>x[0]===key);if(n)n[2]=label;}
+
+function uxGroups(){
+ const role=S.user.role;
+ if(role==='crew')return [
+   ['FIELD WORK',['schedule','timeoff','team','invoices','account']]
+ ];
+ const full=[
+   ['TODAY',['dashboard']],
+   ['SALES',['sales','quotes','communications']],
+   ['OPERATIONS',['schedule','invoices','payments','timeoff','documents','portalhub','care']],
+   ['TEAM',['team','payroll']],
+   ['COMPANY',['rates','inventory','fleet','connections','settings','account']]
+ ];
+ return full.map(([g,items])=>[g,items.filter(k=>allowedPages().includes(k))]).filter(x=>x[1].length);
+}
+function uxLabel(key){if(S.user.role==='crew'&&key==='schedule')return 'Jobs';return nav.find(n=>n[0]===key)?.[2]||key;}
+const uxOldShell=shell;
+shell=function(){
+ const allowed=allowedPages(),role=S.user.role,groups=uxGroups();
+ const navHtml=groups.map(([group,items])=>`<div class="nav-label">${h(group)}</div>`+items.map(k=>{const n=nav.find(x=>x[0]===k);if(!n)return '';return `<button class="nav-button ${S.page===k?'active':''}" data-page="${h(k)}">${icon(n[1])}<span>${h(uxLabel(k))}</span></button>`;}).join('')).join('');
+ const search=role==='crew'?'':`<div class="searchbox global-search">${icon('search')}<input id="ux-global-search" placeholder="Search clients, jobs, invoices..." aria-label="Global search"></div>`;
+ root.innerHTML=`<div class="app"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-icon">${crown}</div><div><strong>CrownOps</strong><small>CROWN MOVERS</small></div></div>${navHtml}<div class="sidebar-foot"><div class="workspace-label"><span class="dot"></span>Private UX review<div class="tiny" style="color:#91aacd;margin-top:4px">Simple first. Exceptions only when needed.</div></div><div class="profile"><div class="avatar">${h(initials(S.user.name))}</div><div><div style="color:white;font-size:12px;font-weight:600">${h(S.user.name)}</div><div style="font-size:10px">${h(role==='owner'?'manager':role)} access</div></div>${btn('logout',icon('logout'),'logout','aria-label="Sign out"')}</div></div></aside><main class="main"><header class="topbar">${btn('menu',icon('menu'),'mobile-toggle btn-icon','aria-label="Open navigation"')}<div class="breadcrumb">Crown Movers ${icon('right')} <b id="crumb">${h(uxLabel(S.page))}</b></div><div class="top-right">${search}<span class="date-label">Montr&eacute;al time &middot; ET</span><div class="avatar">${h(initials(S.user.name))}</div></div></header><div class="pilot-strip" id="pilot-strip">${icon('shield')}<span>Private simplified job review build v5.4. No live Gmail, QuickBooks, payments or production schedule changes.</span></div><section class="content" id="content"></section></main></div>`;
+ const gs=document.getElementById('ux-global-search');if(gs)gs.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();uxSearch(gs.value);}});
+};
+
+// ---------- Today: answer “what needs my attention?” ----------
+const uxOldDashboard=dashboard;
+dashboard=async function(){
+ if(S.user.role==='crew')return uxOldDashboard();
+ const d=await api('/ux/today');
+ const metrics=[['Jobs today',d.stats.jobs_today,'calendar'],['Needs attention',d.stats.attention,'shield'],['Follow-ups',d.stats.open_followups,'phone'],['Payments to verify',d.stats.unverified_payments,'wallet']];
+ const attention=d.attention.length?d.attention.slice(0,12).map(a=>`<div class="attention-row"><div class="attention-dot ${a.priority==='High'?'high':''}"></div><div class="grow"><div class="small strong">${h(a.title)}</div><div class="tiny muted">${h(a.detail||'')}</div></div>${uxAttentionButton(a)}</div>`).join(''):empty('Nothing urgent right now','CrownOps will surface exceptions here instead of making you hunt through every section.');
+ const jobs=d.jobs.length?d.jobs.map(j=>`<button class="today-job" data-ux="open-job" data-id="${h(j.id)}"><div><div class="strong">${h(j.title)}</div><div class="tiny muted">${h(j.phase)} &middot; ${timeLabel(j.start_at)} &middot; ${h(j.crew_names.join(', ')||'Crew needed')}</div></div><div>${j.readiness.ready?'<span class="pill teal">Ready</span>':`<span class="pill orange">${j.readiness.missing.length} item${j.readiness.missing.length===1?'':'s'}</span>`}</div></button>`).join(''):empty('No jobs today','Upcoming services will appear here automatically.');
+ return head('Today','The things that need your attention, without checking five screens.',btn('new-lead',icon('plus')+'New inquiry','btn-primary')+btn('new-job','New job'))+
+ `<div class="metric-grid">${metrics.map(m=>`<div class="panel metric"><div class="label"><span>${m[0]}</span><span class="ico">${icon(m[2])}</span></div><div class="value">${Number(m[1]||0).toLocaleString()}</div><div class="foot">Current review workspace</div></div>`).join('')}</div>`+
+ `<div class="split">${panel('Needs attention',attention)}${panel("Today's jobs",jobs)}</div><div class="spacer"></div>`+
+ `<div class="grid3">${panel('Sales',`<p class="small muted">New inquiries, quotes and client conversations.</p>${btn('go-sales','Open sales','btn-soft')}`)}${panel('Operations',`<p class="small muted">Schedule, invoices, time off and field work.</p>${btn('go-schedule','Open schedule','btn-soft')}`)}${panel('Company setup',`<p class="small muted">Rates, materials, documents, fleet and connections.</p><button data-page="settings" class="btn-soft">Open setup</button>`)}</div>`;
+};
+function uxAttentionButton(a){
+ const attrs=`data-ux="attention" data-kind="${h(a.type)}" data-id="${h(a.id||'')}" data-lead="${h(a.lead_id||'')}"`;
+ return `<button class="btn-small" ${attrs}>Open</button>`;
+}
+
+// ---------- Communications: calls, follow-ups and outgoing email in one place ----------
+X.pageRenderers.communications=async()=>{
+ const [tasks,calls,mail,inbox]=await Promise.all([api('/tasks?scope=active'),api('/calls'),api('/outbound'),api('/ux/inbox')]);
+ const due=tasks.slice(0,30),recentCalls=calls.slice(0,25),out=mail.slice(0,25);
+ const openInbox=inbox.filter(m=>!m.resolved_at),answered=inbox.filter(m=>m.resolved_at);
+ const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(m.created_at)}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}${m.claimed_by?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:`<button class="btn-small" data-ux="inbox-claim" data-id="${h(m.id)}">Claim</button>`}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');
+ return head('Communications','One shared place for client email, follow-ups and calls.',xbtn('new-email','Prepare email','','btn-primary'))+
+ `<div class="grid3"><div class="panel metric"><div class="label"><span>Unanswered email</span>${icon('mail')}</div><div class="value">${openInbox.length}</div></div><div class="panel metric"><div class="label"><span>Open follow-ups</span>${icon('check')}</div><div class="value">${tasks.filter(x=>x.status!=='Done').length}</div></div><div class="panel metric"><div class="label"><span>Recent calls</span>${icon('phone')}</div><div class="value">${calls.length}</div></div></div><div class="spacer"></div>`+
+ panel('Shared client inbox',inboxHtml)+
+ `<div class="spacer"></div>${panel('Follow-ups',xtable(['Client','Action','Due','Status',''],due.map(t=>[h(t.client_name||'Unmatched'),h(t.title),h(t.due_date||''),pill(t.status),t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Open</button>`:''])))}<div class="spacer"></div><div class="grid2">${panel('Recent calls',recentCalls.length?recentCalls.map(c=>`<div class="activity-row"><span class="activity-dot"></span><div><div class="small strong">${h(c.client_name||'Unmatched call')}</div><div class="tiny muted">${h(c.created_at)} &middot; ${h(c.details?.phone||c.details?.Phone||'')}</div></div></div>`).join(''):empty('No call activity','Connected call events will appear here.'))}${panel('Outgoing email',out.length?out.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name||m.recipient)}</div><div class="tiny muted">${h(m.subject)}</div></div>${pill(m.status)}${xbtn('read-email','Open',m.id,'btn-small')}</div>`).join(''):empty('No email activity','Drafts and sent messages will appear here.'))}</div>`;
+};
+// ---------- Client project: lifecycle + full activity, without more data entry ----------
+const uxOldOpenLead=openLead;
+openLead=async function(id){
+ const overview=await api('/ux/project/'+encodeURIComponent(id));
+ await uxOldOpenLead(id);
+ const body=modal.querySelector('.modal-body');if(!body)return;
+ const steps=overview.lifecycle.steps.map((s,i)=>`<div class="lifecycle-step ${i<overview.lifecycle.current_index?'done':i===overview.lifecycle.current_index?'current':''}"><span>${i+1}</span><small>${h(s)}</small></div>`).join('');
+ const notReady=overview.jobs.flatMap(j=>j.readiness.ready?[]:j.readiness.missing);
+ const activity=overview.timeline.slice(0,12).map(t=>`<div class="activity-row"><span class="activity-dot"></span><div class="grow"><div class="tiny strong">${h(t.title)}</div><div class="tiny muted">${h(t.kind)} &middot; ${h(t.at)}${t.detail?' &middot; '+h(t.detail):''}</div></div>${t.status?pill(t.status):''}</div>`).join('')||'<p class="tiny muted">No project activity yet.</p>';
+ const block=`<div class="ux-project-overview"><div class="lifecycle">${steps}</div><div class="spacer"></div><div class="callout ${notReady.length?'orange':'teal'}"><strong>${notReady.length?'Next: resolve the exceptions':'Project flow is clear'}</strong>${h(notReady.length?[...new Set(notReady)].join(', '):'CrownOps will surface the next exception instead of asking for repeated confirmations.')}</div><div class="spacer"></div><details class="ux-details"><summary>Full project activity (${overview.timeline.length})</summary><div class="timeline-list">${activity}</div></details><div class="spacer"></div></div>`;
+ const err=body.querySelector('.modal-error');if(err)err.insertAdjacentHTML('afterend',block);else body.insertAdjacentHTML('afterbegin',block);
+ // Remove the older short timeline so there is only one source of truth on screen.
+ [...body.querySelectorAll('h3')].forEach(h3=>{if(h3.textContent.trim()==='Client timeline'){const p=h3.parentElement;if(p)p.style.display='none';}});
+};
+
+// ---------- Jobs: readiness is visible, not another approval form ----------
+const uxOldOpenJob=openJob;
+openJob=async function(id){
+ const ready=await api('/ux/jobs/'+encodeURIComponent(id)+'/readiness').catch(()=>null);
+ await uxOldOpenJob(id);
+ if(!ready)return;const body=modal.querySelector('.modal-body');if(!body)return;
+ const tag=`<div class="callout ${ready.ready?'teal':'orange'}"><strong>${ready.ready?'Job ready':'Job needs attention'}</strong>${h(ready.ready?'Crew, client details and planning checks are in place.':ready.missing.join(', '))}</div><div class="spacer"></div>`;
+ const err=body.querySelector('.modal-error');if(err)err.insertAdjacentHTML('afterend',tag);
+};
+
+// ---------- Employee directory: public staff contact view, private manager details ----------
+function uxDefaultRange(){const end=new Date(today()+'T12:00:00'),start=new Date(end);start.setDate(start.getDate()-13);return [ymd(start),ymd(end)];}
+teamPage=async function(){
+ if(!UX.dirStart){[UX.dirStart,UX.dirEnd]=uxDefaultRange();}
+ const d=await api(`/ux/employee-directory?start=${encodeURIComponent(UX.dirStart)}&end=${encodeURIComponent(UX.dirEnd)}`);UX.directory=d;
+ const actions=d.private?`<button class="btn-primary" data-ux="employee-add">${icon('plus')}Add employee</button>`:'';
+ const filters=d.private?`<div class="filterbar"><label class="small">Payroll hours from <input id="ux-dir-start" type="date" value="${h(d.start)}"></label><label class="small">to <input id="ux-dir-end" type="date" value="${h(d.end)}"></label><button data-ux="directory-load">Load</button><div class="grow"></div><span class="tiny muted">Private fields are manager-only</span></div>`:'';
+ const rows_=d.employees.map(e=>d.private?[`<div class="client-name">${h(e.full_name)}</div><div class="tiny muted">${h(e.role)}</div>`,h(e.phone||'—'),h(e.start_date?String(e.start_date).slice(0,4):'—'),`${e.current_hours.toFixed(2)} h<div class="tiny muted">${e.current_jobs} job${e.current_jobs===1?'':'s'}</div>`,money(e.hourly_cents)+'/h',e.pending_time_entries?`<span class="pill orange">${e.pending_time_entries} pending</span>`:'<span class="pill teal">Current</span>',`<button class="btn-small" data-ux="employee-open" data-id="${h(e.id)}">Open</button>`]:[`<div class="client-name">${h(e.full_name)}</div><div class="tiny muted">${h(e.role)}</div>`,h(e.phone||'—'),`${h(e.emergency_contact.name||'—')}<br><span class="tiny muted">${h(e.emergency_contact.phone||'')}</span>`]);
+ return head('Employee directory',d.private?'Contact, employment and current-payroll information in one place.':'Company contacts. Private HR and payroll information is hidden.',actions)+filters+panel('Team',xtable(d.private?['Employee','Phone','Started','Current payroll','Pay rate','Status','']:['Employee','Phone','Emergency contact'],rows_));
+};
+function uxEmployeeForm(e){
+ if(!e)return;
+ showModal(h(e.full_name),`<form id="ux-employee-form" data-ux-form="employee"><input type="hidden" name="employee_id" value="${h(e.id)}"><div class="grid2">${field('email','Company / employee email',e.email||'','email')}${field('phone','Phone',e.phone||'')}${field('home_address','Home address',e.home_address||'')}${field('start_date','Start date',e.start_date||'','date')}${field('emergency_name','Emergency contact',e.emergency_contact.name||'')}${field('emergency_phone','Emergency phone',e.emergency_contact.phone||'')}${field('role','Role',e.role||'Mover')}${field('hourly_rate','Hourly pay rate',e.hourly_cents/100,'number','step="0.01" min="0"')}${checkedField('team_lead','Team Lead',e.team_lead)}${checkedField('driver_verified','Driver authorization verified',e.driver_verified)}${checkedField('active','Active employee',e.active)}${textArea('notes','Internal manager note',e.notes||'',3)}</div></form><div class="spacer"></div><div class="panel"><div class="panel-head"><h3>Driver licence</h3>${e.license_uploaded?`<a class="button-link" target="_blank" href="/api/ux/employee-directory/${encodeURIComponent(e.id)}/license">View ${h(e.license_name)}</a>`:''}</div><div class="panel-body"><form id="ux-license-form" data-ux-form="license"><input type="hidden" name="employee_id" value="${h(e.id)}"><input type="file" name="file" accept="image/jpeg,image/png,application/pdf" required><div class="spacer"></div><button type="submit" class="btn-small">Upload licence</button></form></div></div>`,`${btn('close','Cancel')}<button type="submit" form="ux-employee-form" class="btn-primary">Save employee</button>`,true);
+}
+
+// ---------- Payroll: one total-hours number per employee, selectable date range ----------
+X.pageRenderers.payroll=async()=>{
+ if(!UX.payStart){[UX.payStart,UX.payEnd]=uxDefaultRange();}
+ const d=await api(`/ux/payroll-summary?start=${encodeURIComponent(UX.payStart)}&end=${encodeURIComponent(UX.payEnd)}`);UX.payroll=d;
+ const actions=d.private?`<button class="btn-primary" data-ux="payroll-approve">Approve current range</button>`:'';
+ const rows_=d.employees.filter(e=>e.hours||e.pending_entries).map(e=>[h(e.employee_name),h(e.jobs),`<strong>${e.hours.toFixed(2)} h</strong>`,pill(e.status),...(d.private?[money(e.hourly_cents)+'/h',money(e.gross_cents)]:[]),`<button class="btn-small" data-ux="payroll-detail" data-id="${h(e.employee_id)}">Details</button>`]);
+ return head('Payroll','Choose the dates. CrownOps totals employee hours automatically.',actions)+`<div class="filterbar payroll-range"><label class="small">From <input id="ux-pay-start" type="date" value="${h(d.start)}"></label><label class="small">To <input id="ux-pay-end" type="date" value="${h(d.end)}"></label><button data-ux="payroll-load">Load payroll</button><div class="grow"></div><span class="pill blue">${d.total_hours.toFixed(2)} total hours</span></div>`+xnote('Payroll uses one total-hours value per employee. CrownOps does not ask managers to separately track service and transport time here.','teal')+panel('Payroll summary',rows_.length?xtable(['Employee','Jobs','Hours','State',...(d.private?['Rate','Gross estimate']:[]),''],rows_):empty('No hours in this range','Choose another date range or complete a service and enter the team hours.'));
+};
+function uxPayrollDetail(e){const canEdit=Boolean(UX.payroll?.private);const rows_=e.details.map(d=>[h(d.date),h(d.job_title),d.hours.toFixed(2)+' h',pill(d.status),canEdit?`<button class="btn-small" data-ux="payroll-time-edit" data-id="${h(d.time_id)}" data-hours="${h(d.hours)}">Edit</button>`:'']);showModal(h(e.employee_name)+' | '+e.hours.toFixed(2)+' hours',panel('Jobs in this payroll range',xtable(['Date','Job','Hours','State',''],rows_)),btn('close','Close'),true);}
+
+// ---------- Team hours: enter once, change only exceptions ----------
+addTime=async function(jid){
+ const data=await api('/ux/jobs/'+encodeURIComponent(jid)+'/crew-hours');UX.crewHours=data;
+ const existing=data.employees.filter(e=>e.total_hours!=null);const common=data.suggested_total_hours??(existing.length?existing[0].total_hours:'');
+ const rowsHtml=data.employees.map(e=>{const has=e.total_hours!=null,same=has&&Number(e.total_hours)===Number(common);return `<div class="simple-hours-row" data-employee="${h(e.id)}"><label class="checkbox-label"><input type="checkbox" name="common_${h(e.id)}" ${!has||same?'checked':''}><span><strong>${h(e.name)}</strong><br><span class="tiny muted">Use team hours</span></span></label>${field('hours_'+e.id,'Individual hours',has?e.total_hours:'','number',`${!has||same?'disabled':''} step="0.25" min="0" max="24"`)}${field('note_'+e.id,'Optional note',has?e.note:'','text',`${!has||same?'disabled':''}`)}</div>`;}).join('');
+ showModal('Team hours | '+h(data.job.title),`<form id="ux-crew-hours-form" data-ux-form="crew-hours"><input type="hidden" name="job_id" value="${h(jid)}"><div class="callout teal"><strong>Enter the hours once.</strong>Everyone is selected by default. Uncheck only the employee who worked a different amount.</div><div class="spacer"></div>${field('team_hours','Hours worked by selected team',common,'number','step="0.25" min="0" max="24" required')}<div class="row wrap" style="margin-top:12px">${data.suggested_total_hours!=null?`<button type="button" data-ux="crew-copy-suggested" class="btn-soft">Use invoice/job hours: ${h(data.suggested_total_hours)} h</button>`:''}<button type="button" data-ux="crew-select-all">Select all</button></div><div class="spacer"></div><div class="simple-hours-list">${rowsHtml}</div>${textArea('note','Optional team note','',2)}<p class="tiny muted">Each employee still gets an individual payroll record automatically.</p></form>`,`${btn('close','Cancel')}<button type="submit" form="ux-crew-hours-form" class="btn-primary">Save team hours</button>`,true);
+};
+
+// ---------- Connections: make company email + QuickBooks intent obvious ----------
+const uxOldConnections=X.pageRenderers.connections;
+X.pageRenderers.connections=async()=>{
+ const [s,r,c]=await Promise.all([api('/connections'),api('/readiness'),api('/ux/company-communications')]);X.cache.connections=s;UX.companyComms=c;
+ return head('Connections','Company accounts only. Nothing is treated as connected until it passes a real test.')+
+ `<div class="grid2">${panel('Company email',`<div class="info-grid"><div><div class="info-label">Connected Gmail / storage</div><div class="strong">${h(c.connected_mailbox||'crownmovers.cm@gmail.com')}</div></div><div><div class="info-label">Client sees From</div><div class="strong">${h(c.send_as||'info@crownmovers.ca')}</div></div><div><div class="info-label">Reply-To</div><div class="strong">${h(c.reply_to||'info@crownmovers.ca')}</div></div></div><div class="spacer"></div>${pill(s.gmail?.authorized_at?'Gmail authorized':'Not connected')}<p class="small muted">Store the conversation in the paid Gmail mailbox, while clients see the Crown Movers domain address after the alias is verified.</p>${may(['owner'])?`<div class="row wrap">${xbtn('connect-gmail',s.gmail?.authorized_at?'Reconnect Gmail':'Connect Gmail','gmail','btn-primary')}<button data-ux="company-email-edit">Email rules</button></div>`:''}`)}${panel('QuickBooks',`${pill(s.quickbooks?.authorized_at?'QuickBooks authorized':'Not connected')}<p class="small muted">CrownOps should create/sync customers, estimates, invoices and verified payments without duplicate records.</p>${may(['owner'])?xbtn('connect-quickbooks',s.quickbooks?.authorized_at?'Reconnect QuickBooks':'Connect QuickBooks','quickbooks','btn-primary'):''}`)}</div><div class="spacer"></div>`+
+ `<div class="grid3">${[['square','Payments'],['ai','AI assistant'],['intake','Forms / calls'],['scanner','Upload safety']].map(([k,n])=>panel(n,`${pill(s[k]?.configured?'Configured / test required':'Not configured')}<p class="tiny muted">Keep this off until the core workflow is approved.</p>`)).join('')}</div><div class="spacer"></div>${panel('Connection activity',xtable(['Provider','Action','Status','Details'],(s.operations||[]).slice(0,30).map(o=>[h(o.provider),h(o.kind),pill(o.status),h(o.error||o.object_id)])))}`;
+};
+
+// ---------- Settings: one calm place to find low-frequency configuration ----------
+const uxOldSettings=settingsPage;
+settingsPage=async function(){
+ if(S.user.role==='crew')return uxOldSettings();
+ return head('Company setup','Low-frequency settings live here so day-to-day work stays clean.')+`<div class="grid3">${[
+  ['Pricing & rates','Hourly rates by date and crew size.','rates'],['Materials','Selling prices, cost and stock.','inventory'],['Documents & approvals','Liability and acknowledgement templates.','documents'],['Fleet','Vehicles, inspections and maintenance.','fleet'],['Connections','Company email, QuickBooks and providers.','connections'],['Security & imports','Accounts, workbook imports and technical settings.','settings-legacy']
+ ].map(([t,d,p])=>panel(t,`<p class="small muted">${d}</p><button data-ux="setup-go" data-page-target="${p}" class="btn-soft">Open</button>`)).join('')}</div>`;
+};
+
+// ---------- Search ----------
+async function uxSearch(q){
+ q=String(q||'').trim();if(q.length<2)return toast('Type at least two characters.');
+ const r=await api('/ux/search?q='+encodeURIComponent(q));UX.searchResults=r;
+ const body=r.length?r.map(x=>`<button class="search-result" data-ux="search-open" data-type="${h(x.type)}" data-id="${h(x.id)}" data-lead="${h(x.lead_id||'')}"><span class="pill gray">${h(x.type)}</span><div class="grow"><div class="strong">${h(x.title)}</div><div class="tiny muted">${h(x.detail||'')}</div></div>${icon('right')}</button>`).join(''):empty('No matches','Try the client name, phone, address, job or invoice number.');
+ showModal('Search CrownOps',body,btn('close','Close'));
+}
+
+// ---------- Forms / actions ----------
+document.addEventListener('click',async e=>{
+ const el=e.target.closest('[data-ux]');if(!el)return;e.preventDefault();const a=el.dataset.ux,id=el.dataset.id;
+ try{
+  if(a==='open-job')return openJob(id);
+  if(a==='open-client')return openLead(id);
+  if(a==='attention'){
+    const k=el.dataset.kind,lid=el.dataset.lead;
+    if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='task'&&lid)return openLead(lid);if(k==='payment')return navigate('payments');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
+  }
+  if(a==='search-open'){modal.close();if(el.dataset.type==='client')return openLead(id);if(el.dataset.type==='job')return openJob(id);if(el.dataset.type==='invoice')return openInvoice(id);}
+  if(a==='directory-load'){UX.dirStart=document.getElementById('ux-dir-start').value;UX.dirEnd=document.getElementById('ux-dir-end').value;return navigate('team');}
+  if(a==='employee-open'){const emp=UX.directory?.employees.find(x=>x.id===id);return uxEmployeeForm(emp);}
+  if(a==='employee-add')return showModal('Add employee',`<form id="ux-add-employee" data-ux-form="employee-add"><div class="grid2">${field('name','Full name','','text','required')}${field('role','Role','Mover','text','required')}${field('hourly_rate','Hourly pay rate',0,'number','step="0.01" min="0"')}</div></form>`,`${btn('close','Cancel')}<button type="submit" form="ux-add-employee" class="btn-primary">Add employee</button>`);
+  if(a==='payroll-load'){UX.payStart=document.getElementById('ux-pay-start').value;UX.payEnd=document.getElementById('ux-pay-end').value;return navigate('payroll');}
+  if(a==='payroll-detail'){const emp=UX.payroll?.employees.find(x=>x.employee_id===id);if(emp)return uxPayrollDetail(emp);}
+  if(a==='payroll-time-edit'){const hours=prompt('Total paid hours for this job:',el.dataset.hours||'');if(hours===null)return;await api('/ux/payroll-time/'+encodeURIComponent(id),{method:'PATCH',data:{hours:Number(hours)}});toast('Hours updated.');modal.close();return navigate('payroll');}
+  if(a==='inbox-claim'){await api('/ux/inbox/'+encodeURIComponent(id)+'/claim',{method:'POST'});toast('Email claimed.');return navigate('communications');}
+  if(a==='inbox-resolve'){await api('/ux/inbox/'+encodeURIComponent(id)+'/resolve',{method:'POST'});toast('Email marked answered.');return navigate('communications');}
+  if(a==='payroll-approve'){if(!confirm(`Approve all submitted employee hours from ${UX.payroll.start} through ${UX.payroll.end}?`))return;const r=await api('/ux/payroll-summary/approve',{method:'POST',data:{start:UX.payroll.start,end:UX.payroll.end}});toast(`${r.approved} time entr${r.approved===1?'y':'ies'} approved.`);return navigate('payroll');}
+  if(a==='crew-copy-suggested'){document.querySelector('#ux-crew-hours-form [name=team_hours]').value=UX.crewHours.suggested_total_hours;return;}
+  if(a==='crew-select-all'){document.querySelectorAll('#ux-crew-hours-form input[name^="common_"]').forEach(c=>{c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));});return;}
+  if(a==='company-email-edit'){const c=UX.companyComms||{};return showModal('Company email rules',`<form id="ux-email-rules" data-ux-form="company-email"><div class="grid2">${field('connected_mailbox','Connected Gmail / storage',c.connected_mailbox||'crownmovers.cm@gmail.com','email','required')}${field('send_as','Client sees From',c.send_as||'info@crownmovers.ca','email','required')}${field('reply_to','Reply-To',c.reply_to||'info@crownmovers.ca','email','required')}${checkedField('approved','Approved for production after connection testing',Boolean(c.approved))}${textArea('note','Internal note',c.note||'',3)}</div></form>`,`${btn('close','Cancel')}<button type="submit" form="ux-email-rules" class="btn-primary">Save rules</button>`);}
+  if(a==='setup-go'){const target=el.dataset.pageTarget;if(target==='settings-legacy'){const html=await uxOldSettings();document.getElementById('content').innerHTML=html;return;}return navigate(target);}
+ }catch(ex){modal.open?modalError(ex):toast(ex.message);}
+});
+
+document.addEventListener('change',e=>{
+ if(e.target.matches('#ux-crew-hours-form input[name^="common_"]')){const row=e.target.closest('.simple-hours-row');row.querySelectorAll('input[name^="hours_"],input[name^="note_"]').forEach(i=>{i.disabled=e.target.checked;if(e.target.checked)i.value='';});}
+});
+
+document.addEventListener('submit',async e=>{
+ const f=e.target.closest('form[data-ux-form]');if(!f)return;e.preventDefault();const kind=f.dataset.uxForm,d=readForm(f);
+ try{
+  if(kind==='employee'){
+    const eid=d.employee_id;await api('/ux/employee-directory/'+encodeURIComponent(eid),{method:'PATCH',data:{...d,active:f.active.checked,team_lead:f.team_lead.checked,driver_verified:f.driver_verified.checked}});modal.close();toast('Employee profile saved.');return navigate('team');
+  }
+  if(kind==='employee-add'){await api('/employees',{method:'POST',data:d});modal.close();toast('Employee added to the directory.');return navigate('team');}
+  if(kind==='license'){const eid=d.employee_id;const fd=new FormData(f);fd.delete('employee_id');await api('/ux/employee-directory/'+encodeURIComponent(eid)+'/license',{method:'POST',form:fd});toast('Licence file uploaded.');return navigate('team');}
+  if(kind==='crew-hours'){
+    const team=UX.crewHours,employee_ids=team.employees.map(x=>x.id),exceptions={};
+    for(const emp of team.employees){const common=f.elements['common_'+emp.id].checked;if(!common)exceptions[emp.id]={total_hours:Number(f.elements['hours_'+emp.id].value),note:f.elements['note_'+emp.id].value};}
+    await api('/ux/jobs/'+encodeURIComponent(d.job_id)+'/crew-hours',{method:'POST',data:{employee_ids,team_hours:Number(d.team_hours),exceptions,note:d.note}});toast('Team hours saved.');modal.close();return navigate('team');
+  }
+  if(kind==='company-email'){const r=await api('/ux/company-communications',{method:'PATCH',data:{...d,approved:f.approved.checked}});UX.companyComms=r;modal.close();toast('Company email rules saved.');return navigate('connections');}
+ }catch(ex){modalError(ex);}
+});
+
+// Keep the direct page actions working after simplifying the sidebar.
+document.addEventListener('click',e=>{const p=e.target.closest('[data-page]');if(p&&!p.classList.contains('nav-button')){e.preventDefault();navigate(p.dataset.page);}});
+
+// First screen: field users go to My Jobs; everyone else goes to Today.
+const uxBootstrap=bootstrap;
+bootstrap=async function(){const out=await uxBootstrap();if(S.user?.role==='crew'){S.jobScope='mine';if(S.page!=='schedule')await navigate('schedule');}else if(S.user&&S.page!=='dashboard'){await navigate('dashboard');}return out;};
+bootstrap();
