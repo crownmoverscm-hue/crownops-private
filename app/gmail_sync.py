@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import requests
 
-from .store import one, rows, insert, audit, uid, now, dumps
+from .store import connect, transaction, one, rows, insert, audit, uid, now, dumps
 
 
 FEEDS = {
@@ -197,7 +197,8 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
         for mid in ids:
             summary['scanned'] += 1
             event_key = 'gmail:' + mid
-            with __import__('contextlib').closing(__import__('app.store', fromlist=['connect']).connect(path)) as db:
+            from contextlib import closing
+            with closing(connect(path)) as db:
                 if one(db, 'SELECT id FROM integration_events WHERE event_key=?', (event_key,)):
                     summary['duplicates'] += 1
                     continue
@@ -210,7 +211,7 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
             event_type = ''
             object_id = mid
             status = 'Needs review'
-            with __import__('app.store', fromlist=['transaction']).transaction(path) as db:
+            with transaction(path) as db:
                 if feed == 'quote':
                     data = _quote_fields(body, subject)
                     existing = one(db, 'SELECT id FROM leads WHERE external_id=?', (event_key,))
