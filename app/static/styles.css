@@ -112,3 +112,46 @@
   .weekly-nav-buttons button:nth-child(2){flex:1}
   .weekly-range-label{font-size:17px}
 }
+
+
+/* v5.6 commercial browsers: Estimates, Follow-ups and Invoices */
+.ux-overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0}
+.ux-overview-metric{padding:22px 24px;text-align:center;border-right:1px solid var(--line)}
+.ux-overview-metric:last-child{border-right:0}
+.ux-overview-value{font-size:25px;line-height:1.15;font-weight:700;letter-spacing:-.6px;color:#1f2f4a;font-variant-numeric:tabular-nums}
+.ux-overview-label{font-size:11px;color:#7f8ca1;margin-top:6px}
+.ux-overview-foot{font-size:10px;color:#9aa5b5;margin-top:3px}
+.ux-browser-toolbar{padding:13px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:#fff}
+.ux-filter-chips{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.ux-filter-chip{background:#fff;border:1px solid #dce4ef;color:#5f718a;padding:7px 10px;border-radius:999px;font-size:11px;font-weight:600}
+.ux-filter-chip span{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;margin-left:5px;border-radius:999px;background:#f0f4f9;color:#6d7d93;font-size:9px}
+.ux-filter-chip.selected{border-color:#8aa8d1;background:#edf4fe;color:#2e5f9f}
+.ux-filter-chip.selected span{background:#dbe9fb;color:#2e5f9f}
+.ux-browser-controls{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.ux-browser-search input{width:235px}
+.panel-body.flush{padding:0}
+.ux-overview-money .ux-overview-value{font-size:23px}
+@media(max-width:980px){
+  .ux-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .ux-overview-metric:nth-child(2){border-right:0}
+  .ux-overview-metric:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  .ux-browser-toolbar{align-items:flex-start}
+}
+@media(max-width:760px){
+  .ux-overview-grid{grid-template-columns:1fr 1fr}
+  .ux-overview-metric{padding:17px 12px}
+  .ux-overview-value{font-size:21px}
+  .ux-browser-toolbar{padding:12px 14px}
+  .ux-filter-chips{width:100%;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+  .ux-filter-chip{white-space:nowrap;flex:0 0 auto}
+  .ux-browser-controls{width:100%}
+  .ux-browser-controls .input-inline{max-width:none;flex:1 1 140px}
+  .ux-browser-search{flex:1 1 190px}
+  .ux-browser-search input{width:100%}
+}
+@media(max-width:420px){
+  .ux-overview-grid{grid-template-columns:1fr}
+  .ux-overview-metric{border-right:0;border-bottom:1px solid var(--line)!important;text-align:left}
+  .ux-overview-metric:last-child{border-bottom:0!important}
+  .ux-overview-label{margin-top:3px}
+}
