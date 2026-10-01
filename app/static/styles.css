@@ -40,3 +40,46 @@
 /* CrownOps v5.5 weekly truck-colour dispatch */
 .weekly-tools{margin-bottom:14px}.truck-legend-bar{display:flex;align-items:center;gap:16px;padding:12px 14px;margin-bottom:14px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}.truck-legend-title{min-width:150px}.truck-legend-title strong{display:block;font-size:12px}.truck-legend-title span{display:block;color:var(--muted);font-size:9px;margin-top:2px}.truck-legend-items{display:flex;gap:7px;flex-wrap:wrap;flex:1}.truck-legend-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid #e2e8f0;border-radius:999px;background:#fff;padding:5px 8px;font-size:9px;font-weight:650;color:#53657f}.truck-legend-chip i{width:9px;height:9px;border-radius:50%;box-shadow:0 0 0 2px #fff,0 0 0 3px #e3eaf3}.weekly-dispatch-scroll{overflow:auto;border:1px solid var(--line);border-radius:14px;background:#f8fafc;box-shadow:var(--shadow)}.weekly-dispatch-grid{display:grid;grid-template-columns:repeat(7,minmax(190px,1fr));min-width:1330px}.weekly-day-column{min-width:0;border-right:1px solid #dce5f1;background:#fff}.weekly-day-column:last-child{border-right:0}.weekly-day-head{height:72px;display:flex;justify-content:space-between;gap:10px;align-items:center;padding:12px 13px;border-bottom:1px solid #dce5f1;background:#fbfcfe;position:sticky;top:0;z-index:2}.weekly-day-head small{display:block;color:#6f819a;font-weight:700;text-transform:uppercase;letter-spacing:.5px}.weekly-day-head strong{display:block;font-size:18px;color:#223855;margin-top:3px}.weekly-day-head>span{font-size:9px;padding:5px 7px;border-radius:999px;background:#eef4fb;color:#5b7190;font-weight:650;white-space:nowrap}.weekly-off-row{padding:7px 8px 0;display:flex;gap:4px;flex-wrap:wrap}.weekly-off-row span{font-size:8px;background:#fff0f2;color:#9c5360;padding:4px 5px;border-radius:5px}.weekly-day-jobs{padding:8px;display:grid;grid-auto-rows:minmax(67px,auto);gap:6px;min-height:1040px;align-content:start}.weekly-dispatch-card{width:100%;min-height:67px;text-align:left;border:1px solid var(--truck-border);border-left:5px solid var(--truck);border-radius:9px;background:linear-gradient(90deg,var(--truck-soft),#fff 68%);padding:8px 9px;box-shadow:none;color:var(--ink);overflow:hidden}.weekly-dispatch-card:hover{transform:translateY(-1px);box-shadow:0 4px 12px #17375b13;border-color:var(--truck)}.weekly-card-top{display:flex;justify-content:space-between;gap:7px;align-items:center;font-size:8px;color:#61758f;font-weight:700}.weekly-card-top strong{font-size:9px;color:#405875;white-space:nowrap}.weekly-client{font-size:11px;font-weight:750;margin:3px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#263d5d}.weekly-service{font-size:8.5px;color:#71839c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.weekly-truck{margin-top:4px;display:flex;align-items:center;gap:4px;font-size:8px;font-weight:700;color:#536882;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.weekly-truck span:last-child{overflow:hidden;text-overflow:ellipsis}.truck-dot{width:7px;height:7px;display:inline-block;border-radius:50%;flex:0 0 auto}.weekly-open-slot{min-height:67px;border:1px dashed #e8edf4;border-radius:9px;background:#fcfdff}.truck-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.truck-management-card{background:linear-gradient(135deg,var(--truck-soft),#fff 44%);border:1px solid #dfe7f1;border-top:4px solid var(--truck);border-radius:13px;padding:17px;box-shadow:var(--shadow)}.truck-card-title{display:flex;align-items:center;gap:11px;margin-bottom:14px}.truck-card-title h2{margin:0 0 2px}.truck-card-title .pill{margin-left:auto}.truck-big-dot{width:18px;height:18px;border-radius:50%;box-shadow:0 0 0 4px #fff,0 0 0 5px #dce5f1;flex:0 0 auto}
 @media(max-width:760px){.truck-legend-bar{align-items:flex-start;flex-direction:column}.truck-legend-title{min-width:0}.weekly-dispatch-grid{grid-template-columns:repeat(7,190px);min-width:1330px}.weekly-day-jobs{min-height:920px}.truck-management-grid{grid-template-columns:1fr}}
+
+
+/* v5.5.2 responsive hardening: keep the same CrownOps workflow usable on phones, tablets and desktop. */
+@media(max-width:760px){
+  html,body{width:100%;max-width:100%;overflow-x:hidden}
+  .app,.main,.content{min-width:0}
+  .sidebar{height:100dvh;max-height:100dvh;padding-bottom:max(18px,env(safe-area-inset-bottom));overscroll-behavior:contain}
+  .topbar{padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+  .content{padding-left:max(14px,env(safe-area-inset-left));padding-right:max(14px,env(safe-area-inset-right));padding-bottom:max(24px,env(safe-area-inset-bottom))}
+  .pilot-strip{align-items:flex-start;line-height:1.35}
+  .page-head,.calendar-tools,.filterbar{min-width:0}
+  .head-actions{display:grid;grid-template-columns:1fr;gap:8px}
+  .head-actions>button,.head-actions>.button-link{width:100%}
+  .task-row,.activity-row{align-items:flex-start;flex-wrap:wrap}
+  .task-row>.grow,.activity-row>.grow{min-width:180px;flex:1 1 180px}
+  .task-row>button,.activity-row>button{min-height:38px}
+  .table-wrap{-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+  table{min-width:max-content}
+  dialog{width:calc(100vw - 16px);height:auto;max-height:94dvh}
+  dialog[open]{display:flex;flex-direction:column}
+  .modal-head,.modal-foot{flex:0 0 auto}
+  .modal-body{overflow-y:auto;min-height:0;-webkit-overflow-scrolling:touch}
+  .modal-foot{padding-bottom:max(14px,env(safe-area-inset-bottom))}
+  .modal-foot>button,.modal-foot>.button-link{flex:1 1 140px;min-height:42px}
+  .filterbar label{flex:1 1 145px;min-width:0}
+  .filterbar input,.filterbar select{width:100%}
+  .login-form{padding-bottom:max(35px,env(safe-area-inset-bottom))}
+}
+@media(max-width:480px){
+  .content{padding-top:18px}
+  .metric-grid{grid-template-columns:1fr}
+  .metric{padding:14px 16px}
+  .grid2,.grid3,.split,.info-grid,.quote-layout{grid-template-columns:minmax(0,1fr)}
+  .panel-head{align-items:flex-start;flex-wrap:wrap}
+  .panel-head>button,.panel-head>.button-link{max-width:100%}
+  .row.wrap>button{flex:1 1 140px}
+  .topbar .avatar{width:32px;height:32px}
+  .pilot-strip .icon{margin-top:1px}
+  .login-form{padding:28px 18px}
+  .login-form h2{font-size:23px}
+  .empty{padding:32px 18px}
+  #toast{bottom:max(14px,env(safe-area-inset-bottom));width:calc(100% - 24px);max-width:none}
+}
