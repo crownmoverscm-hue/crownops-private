@@ -143,7 +143,7 @@ def register_providers(app,path,auth,public_url):
 
     @app.post('/api/connect/{provider}')
     def start(provider:str,u=Depends(auth)):
-        require_role(u,MANAGERS);external_gate()
+        require_role(u,MANAGERS)
         if provider not in PROVIDERS:raise HTTPException(422,'Unknown provider.')
         secret_box();cfg=PROVIDERS[provider];cid=os.getenv(cfg['prefix']+'_CLIENT_ID','')
         if not cid:raise HTTPException(503,'Configure the app client ID and secret on the server first.')
@@ -165,7 +165,6 @@ def register_providers(app,path,auth,public_url):
             staff=one(db,"SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.active=1 AND u.role='owner'",(stamp_hash(raw),now()))
             if not staff or staff['user_id']!=s['user_id']:raise HTTPException(403,'Sign in as the manager who started the connection.')
             db.execute('UPDATE oauth_states SET used_at=? WHERE state_hash=?',(now(),stamp_hash(state)))
-        external_gate()
         cid=os.getenv(cfg['prefix']+'_CLIENT_ID','');cs=os.getenv(cfg['prefix']+'_CLIENT_SECRET','');body={'grant_type':'authorization_code','code':code,'redirect_uri':public_url+'/api/oauth/'+provider+'/callback'}
         kwargs={'auth':(cid,cs)} if provider=='quickbooks' else {}
         if provider=='gmail':body.update(client_id=cid,client_secret=cs)
