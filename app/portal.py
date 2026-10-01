@@ -26,7 +26,7 @@ def detect(content,name):
 def safe_attachment(r):return {k:r[k] for k in ('id','lead_id','job_id','category','original_name','mime','size','scan_status','created_at','deleted_at')}
 
 def register_portal(app,path,auth,public_url,secure):
-    storage=Path(os.getenv('CROWNOPS_UPLOAD_DIR',str(Path(path).parent/'uploads'))).resolve()
+    storage=Path(os.getenv('CROWNOPS_UPLOADS',os.getenv('CROWNOPS_UPLOAD_DIR',str(Path(path).parent/'uploads')))).resolve()
     storage.mkdir(parents=True,exist_ok=True,mode=0o700)
     def client_auth(request:Request):
         raw=request.cookies.get(PORTAL_COOKIE,'')
@@ -200,10 +200,10 @@ def register_portal(app,path,auth,public_url,secure):
                     status='Clean' if scan.returncode==0 else 'Rejected'
                 except (OSError,subprocess.TimeoutExpired):status='Quarantined'
             elif os.getenv('CROWNOPS_ENV','test')!='production':
-                # Private review build only: make local image previews usable without
-                # pretending production malware scanning exists. Production still requires
-                # the configured scanner and never uses this shortcut.
-                status='Clean'
+                # Shared staging remains quarantined until a configured scanner runs
+                # or a manager explicitly reviews the test upload. Local demos can opt
+                # into previews by using the review action rather than silently trusting files.
+                status='Quarantined'
             dest=storage/(key+Path(name).suffix.lower());temp.rename(dest);dest.chmod(0o600)
             with transaction(path) as db:
                 total=db.execute('SELECT coalesce(sum(size),0) FROM attachments WHERE lead_id=? AND deleted_at IS NULL',(lid,)).fetchone()[0]
