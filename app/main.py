@@ -229,7 +229,7 @@ def create_app(database_path=None):
     def health():
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.5.5.1'}
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.5.6'}
 
     @app.post('/api/setup-owner')
     def setup_owner(data:dict):
