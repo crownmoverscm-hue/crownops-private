@@ -157,7 +157,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         t=provider_token(path,'gmail',require_external=False)
         data=data or {}
         try:
-            return gmail_sync.sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',14),data.get('max_per_feed',30))
+            return gmail_sync.sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',14),data.get('max_per_feed',30),fluid=False)
         except HTTPException:
             raise
         except requests.RequestException as e:
@@ -165,6 +165,22 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             raise HTTPException(502,'Gmail read-only sync API error' + (f' (HTTP {status})' if status else '') + '. Gmail messages were not changed.')
         except Exception as e:
             raise HTTPException(500,'Gmail read-only sync internal error: ' + type(e).__name__ + ': ' + str(e)[:180])
+
+    @app.post('/api/gmail/sync-v8-test')
+    def gmail_sync_v8_test(data:dict=None,u=Depends(auth)):
+        require_role(u,MANAGERS)
+        if new_lead is None: raise HTTPException(503,'Lead intake is unavailable in this build.')
+        t=provider_token(path,'gmail',require_external=False)
+        data=data or {}
+        try:
+            return gmail_sync.sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',2),data.get('max_per_feed',20),fluid=True)
+        except HTTPException:
+            raise
+        except requests.RequestException as e:
+            status=getattr(getattr(e,'response',None),'status_code',None)
+            raise HTTPException(502,'V8 intake test Gmail API error' + (f' (HTTP {status})' if status else '') + '. Gmail messages were not changed.')
+        except Exception as e:
+            raise HTTPException(500,'V8 intake test internal error: ' + type(e).__name__ + ': ' + str(e)[:180])
 
     @app.post('/api/gmail/review/{eid}/reviewed')
     def gmail_mark_reviewed(eid:str,u=Depends(auth)):
