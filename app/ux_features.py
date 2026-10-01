@@ -425,14 +425,19 @@ def register_ux_features(app,path,auth):
     def inbox_claim(mid:str,u=Depends(auth)):
         require_role(u,OFFICE)
         with transaction(path) as db:
-            m=one(db,'SELECT id FROM messages WHERE id=?',(mid,))
+            m=one(db,'SELECT id,lead_id FROM messages WHERE id=?',(mid,))
             if not m:raise HTTPException(404,'Message not found.')
+            lead=one(db,'SELECT id,assigned_to FROM leads WHERE id=?',(m['lead_id'],))
+            if lead and lead.get('assigned_to') not in ('',u['id'],u['name']):
+                raise HTTPException(409,'This client is already assigned to another team member.')
             old=one(db,'SELECT * FROM inbox_claims WHERE message_id=?',(mid,))
             if old and old.get('claimed_by')!=u['id'] and not old.get('resolved_at'):raise HTTPException(409,'This email is already claimed by another team member.')
             if old:db.execute('UPDATE inbox_claims SET claimed_by=?,claimed_at=?,resolved_at=NULL WHERE message_id=?',(u['id'],now(),mid))
             else:insert(db,'inbox_claims',dict(message_id=mid,claimed_by=u['id'],claimed_at=now(),resolved_at=None))
-            audit(db,u['id'],'Client email claimed','messages',mid)
-        return {'ok':True}
+            if lead and not lead.get('assigned_to'):
+                db.execute('UPDATE leads SET assigned_to=?,version=version+1,updated_at=? WHERE id=?',(u['id'],now(),lead['id']))
+            audit(db,u['id'],'Client email claimed and lead assigned','messages',mid,{'lead_id':m['lead_id']})
+        return {'ok':True,'lead_id':m['lead_id']}
 
     @app.post('/api/ux/inbox/{mid}/resolve')
     def inbox_resolve(mid:str,u=Depends(auth)):
