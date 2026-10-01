@@ -449,7 +449,8 @@ def register_ux_features(app,path,auth):
             else:insert(db,'inbox_claims',dict(message_id=mid,claimed_by=u['id'],claimed_at=now(),resolved_at=None))
             if lead and not lead.get('assigned_to'):
                 db.execute('UPDATE leads SET assigned_to=?,version=version+1,updated_at=? WHERE id=?',(u['id'],now(),lead['id']))
-            audit(db,u['id'],'Client email claimed and lead assigned','messages',mid,{'lead_id':m['lead_id']})
+                db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND (owner='' OR owner IS NULL)",(u['id'],lead['id']))
+            audit(db,u['id'],'Client email claimed and lead assigned','messages',mid,{'lead_id':m['lead_id'],'open_followups_assigned':True})
         return {'ok':True,'lead_id':m['lead_id']}
 
     @app.post('/api/ux/inbox/{mid}/resolve')
