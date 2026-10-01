@@ -232,6 +232,64 @@ def _duplicate_call(db, parsed, seconds=90):
     return False
 
 
+
+def _digits(value):
+    return re.sub(r'\D', '', value or '')[-10:]
+
+
+def _caller_name(parsed):
+    raw = (parsed.get('caller') or '').strip()
+    phone = parsed.get('phone') or ''
+    if phone:
+        raw = re.sub(r'\b(?:1)?' + re.escape(phone) + r'\b', '', re.sub(r'\D', '', raw)) if raw.isdigit() else raw
+    raw = re.sub(r'\b\d{10,11}\b', '', raw).strip(' -:,.')
+    if not raw or raw.lower() in ('unknown caller', 'anonymous'):
+        return 'Unknown Caller'
+    return raw[:180]
+
+
+def _match_lead_by_phone(db, phone):
+    wanted = _digits(phone)
+    if not wanted:
+        return None
+    for lead in rows(db, "SELECT id,client_name,phone,assigned_to FROM leads WHERE phone<>'' ORDER BY updated_at DESC LIMIT 5000"):
+        if _digits(lead.get('phone')) == wanted:
+            return lead
+    return None
+
+
+def _record_incoming_message(db, lead_id, actor, subject, body, created_at=None):
+    existing = one(db, "SELECT id FROM messages WHERE lead_id=? AND subject=? AND kind='Incoming email' ORDER BY created_at DESC LIMIT 1", (lead_id, subject[:300]))
+    if existing:
+        return existing['id']
+    mid = uid('MSG')
+    insert(db, 'messages', dict(
+        id=mid, lead_id=lead_id, kind='Incoming email', subject=(subject or '')[:300],
+        body=(body or '')[:12000], language='English', author=actor, created_at=created_at or now()
+    ))
+    return mid
+
+
+def _record_call_and_followup(db, lead_id, parsed, subject, actor, gmail_id, event_type):
+    cid = uid('CALL')
+    title = 'Return missed call' if event_type == 'gmail_missed_call' else 'Review voicemail'
+    details = {
+        'phone': parsed.get('phone') or '',
+        'caller': _caller_name(parsed),
+        'call_time': parsed.get('call_time') or '',
+        'subject': subject or '',
+        'source': 'Gmail / UniFi',
+        'gmail_id': gmail_id,
+        'voicemail': event_type == 'gmail_voicemail',
+        'attachments': parsed.get('attachments') or [],
+    }
+    insert(db, 'calls', dict(id=cid, legacy_id=None, lead_id=lead_id, payload_json=dumps(details), created_at=now()))
+    open_task = one(db, "SELECT id FROM tasks WHERE lead_id=? AND title=? AND status!='Done' AND historical=0 ORDER BY created_at DESC LIMIT 1", (lead_id, title))
+    if not open_task:
+        insert(db, 'tasks', dict(id=uid('TASK'), legacy_id=None, lead_id=lead_id, title=title, due_date=now()[:10], owner='', status='Open', historical=0, raw_json=dumps({'call_id': cid, 'gmail_id': gmail_id}), created_at=now()))
+    return cid
+
+
 def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_feed=30):
     days = max(1, min(int(days), 60))
     max_per_feed = max(1, min(int(max_per_feed), 50))
@@ -281,14 +339,14 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                     existing = one(db, 'SELECT id FROM leads WHERE external_id=?', (event_key,))
                     if existing:
                         object_id = existing['id']
-                        status = 'Imported'
                     else:
                         lead = new_lead(db, data, actor, external_id=event_key, suppressed=1)
                         object_id = lead['id']
                         summary['new_leads'] += 1
-                        status = 'Imported'
+                    _record_incoming_message(db, object_id, actor, subject, body or message.get('snippet', ''))
                     payload['parsed'] = data
                     event_type = 'gmail_quote'
+                    status = 'Imported'
                 elif feed in ('bank', 'wix_payment'):
                     parsed = _payment_payload(feed, subject, body)
                     if not parsed:
@@ -299,12 +357,38 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                         payload['parsed'] = parsed
                         event_type = 'gmail_bank_payment' if feed == 'bank' else 'gmail_wix_payment'
                 elif feed in ('missed_call', 'voicemail'):
-                    payload['parsed'] = _call_payload(feed, subject, body, attachments)
+                    parsed = _call_payload(feed, subject, body, attachments)
+                    payload['parsed'] = parsed
                     event_type = 'gmail_missed_call' if feed == 'missed_call' else 'gmail_voicemail'
-                    if _duplicate_call(db, payload['parsed']):
+                    if _duplicate_call(db, parsed):
                         event_type = 'gmail_duplicate_call'
                         status = 'Ignored'
                         summary['ignored'] += 1
+                    else:
+                        matched = _match_lead_by_phone(db, parsed.get('phone'))
+                        if matched:
+                            object_id = matched['id']
+                        else:
+                            call_name = _caller_name(parsed)
+                            call_data = {
+                                'client_name': call_name,
+                                'phone': parsed.get('phone') or '',
+                                'email': '',
+                                'source': 'UniFi',
+                                'lead_type': 'Missed Call' if feed == 'missed_call' else 'Voicemail',
+                                'stage': 'New Lead',
+                                'priority': 'High',
+                                'notes': (subject + '\n' + (message.get('snippet') or '')).strip(),
+                                'language': 'English',
+                            }
+                            lead = new_lead(db, call_data, actor, external_id=event_key, suppressed=1)
+                            object_id = lead['id']
+                            summary['new_leads'] += 1
+                            db.execute("DELETE FROM tasks WHERE lead_id=? AND title='Review new inquiry' AND status='Open'", (object_id,))
+                        call_id = _record_call_and_followup(db, object_id, parsed, subject, actor, mid, event_type)
+                        payload['call_id'] = call_id
+                        payload['lead_id'] = object_id
+                        status = 'Imported'
                 else:
                     summary['ignored'] += 1
                     event_type = 'gmail_ignored'
