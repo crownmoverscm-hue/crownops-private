@@ -162,8 +162,9 @@ def create_app(database_path=None):
                 with suppress(asyncio.CancelledError):await task
     app=FastAPI(title='CrownOps Unified Application',version='0.5.1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     app.state.db_path=path
-    secure=os.environ.get('CROWNOPS_SECURE_COOKIES','0')=='1'
-    public_url=os.environ.get('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080').rstrip('/')
+    railway_domain=os.environ.get('RAILWAY_PUBLIC_DOMAIN','').strip()
+    public_url=(os.environ.get('CROWNOPS_PUBLIC_URL') or (f'https://{railway_domain}' if railway_domain else 'http://127.0.0.1:8080')).rstrip('/')
+    secure=os.environ.get('CROWNOPS_SECURE_COOKIES','0')=='1' or bool(railway_domain)
 
     @app.middleware('http')
     async def safety(request,call_next):
