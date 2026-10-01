@@ -83,14 +83,14 @@ def _attachments(payload):
 def _clean_html(text):
     if '<' not in text:
         return text
-    text = re.sub(r'(?is)<(script|style).*?>.*?</\\1>', ' ', text)
-    text = re.sub(r'(?i)<br\\s*/?>', '\n', text)
+    text = re.sub(r'(?is)<(script|style).*?>.*?</\1>', ' ', text)
+    text = re.sub(r'(?i)<br\s*/?>', '\n', text)
     text = re.sub(r'(?i)</(p|div|tr|li|h[1-6])>', '\n', text)
     return re.sub(r'(?s)<[^>]+>', ' ', text)
 
 
 def _value_after(text, label):
-    m = re.search(r'(?im)^\\s*' + re.escape(label) + r'\\s*:?\\s*(.*?)\\s*$', text)
+    m = re.search(r'(?im)^\s*' + re.escape(label) + r'\s*:?\s*(.*?)\s*$', text)
     if m and m.group(1):
         return m.group(1).strip()
     lines = [x.strip() for x in text.splitlines()]
@@ -120,7 +120,7 @@ def _quote_fields(body, subject):
         return ''
     name = anyv('Client Name', 'Name')
     email = anyv('Email')
-    phone = re.sub(r'\\D', '', anyv('Phone'))
+    phone = re.sub(r'\D', '', anyv('Phone'))
     move_date = anyv('Moving Date')
     pickup = anyv('Pickup Address', 'Pickup Address or Postal Code', 'Pickup')
     dropoff = anyv('Destination Address', 'Destination Address or Postal Code', 'Destination')
@@ -135,7 +135,7 @@ def _quote_fields(body, subject):
     photo = anyv('Photo / Video Link', 'Photo or Video Link', 'Client photo or video link')
     notes = details
     if subject.startswith('New Instant Moving Estimate Request'):
-        estimate = re.search(r'(?s)Calculator Estimate\\s*\\n+\\s*(\\$[^\\n]+)', text)
+        estimate = re.search(r'(?s)Calculator Estimate\s*\n+\s*(\$[^\n]+)', text)
         if estimate:
             notes = (notes + '\nCalculator estimate: ' + estimate.group(1).strip()).strip()
     return {
@@ -164,9 +164,9 @@ def _quote_fields(body, subject):
 
 def _payment_payload(kind, subject, body):
     if kind == 'wix_payment':
-        m = re.search(r'(.+?) paid ([\\d,.]+) CAD for Invoice (\\d+)', body, re.I)
+        m = re.search(r'(.+?) paid ([\d,.]+) CAD for Invoice (\d+)', body, re.I)
         return {'kind': 'Wix payment', 'payer': m.group(1).strip() if m else '', 'amount': m.group(2) if m else '', 'invoice': m.group(3) if m else '', 'subject': subject}
-    received = re.search(r"You've received \\$([\\d,.]+) from (.+?) and it has been automatically deposited", subject, re.I)
+    received = re.search(r"You've received \$([\d,.]+) from (.+?) and it has been automatically deposited", subject, re.I)
     if not received:
         return None
     ref = _value_after(body, 'Reference Number')
@@ -179,10 +179,10 @@ def _call_payload(kind, subject, body, attachments):
         who = subject.split(':', 1)[1].strip() if ':' in subject else subject
         event_type = 'Missed call'
     else:
-        who = re.sub(r'^You Have a New Voicemail from\\s+', '', subject, flags=re.I).strip()
+        who = re.sub(r'^You Have a New Voicemail from\s+', '', subject, flags=re.I).strip()
         event_type = 'Voicemail'
-    phone_match = re.search(r'(?<!\\d)(?:1)?([2-9]\\d{9})(?!\\d)', who + ' ' + body)
-    ts = re.search(r'(?<!\\d)(\\d{2}/\\d{2}/\\d{4}\\s+\\d{2}:\\d{2}:\\d{2})(?!\\d)', body)
+    phone_match = re.search(r'(?<!\d)(?:1)?([2-9]\d{9})(?!\d)', who + ' ' + body)
+    ts = re.search(r'(?<!\d)(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})(?!\d)', body)
     return {'kind': event_type, 'caller': who, 'phone': phone_match.group(1) if phone_match else '', 'call_time': ts.group(1) if ts else '', 'attachments': attachments}
 
 
