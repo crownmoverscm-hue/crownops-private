@@ -145,7 +145,10 @@ def register_providers(app,path,auth,public_url,new_lead=None):
     def gmail_review(u=Depends(auth)):
         require_role(u,OFFICE)
         from .gmail_sync import review_items
-        return review_items(path)
+        try:
+            return review_items(path)
+        except Exception as e:
+            raise HTTPException(500, 'Gmail review queue error: ' + type(e).__name__ + ': ' + str(e)[:180])
 
     @app.post('/api/gmail/sync-readonly')
     def gmail_sync_readonly(data:dict=None,u=Depends(auth)):
@@ -154,8 +157,15 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         from .gmail_sync import sync_gmail_readonly
         t=provider_token(path,'gmail',require_external=False)
         data=data or {}
-        try:return sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',14),data.get('max_per_feed',30))
-        except requests.RequestException:raise HTTPException(502,'Gmail read-only sync failed. No Gmail messages were changed.')
+        try:
+            return sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',14),data.get('max_per_feed',30))
+        except HTTPException:
+            raise
+        except requests.RequestException as e:
+            status=getattr(getattr(e,'response',None),'status_code',None)
+            raise HTTPException(502,'Gmail read-only sync API error' + (f' (HTTP {status})' if status else '') + '. Gmail messages were not changed.')
+        except Exception as e:
+            raise HTTPException(500,'Gmail read-only sync internal error: ' + type(e).__name__ + ': ' + str(e)[:180])
 
     @app.post('/api/gmail/review/{eid}/reviewed')
     def gmail_mark_reviewed(eid:str,u=Depends(auth)):
