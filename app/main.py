@@ -1224,7 +1224,7 @@ def create_app(database_path=None):
     register_portal(app,path,auth,public_url,secure)
     register_operations(app,path,auth)
     register_workflows(app,path,auth,new_lead,check_job_resources,public_url)
-    register_providers(app,path,auth,public_url)
+    register_providers(app,path,auth,public_url,new_lead)
     register_security(app,path,auth,public_url,PASSWORDS)
     from .extensions import register_extensions
     register_extensions(app,path,auth,public_url)

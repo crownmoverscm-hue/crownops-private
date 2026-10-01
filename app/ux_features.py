@@ -152,11 +152,29 @@ def register_ux_features(app,path,auth):
             for r in pending_changes:attention.append({'type':'client-change','id':r['id'],'lead_id':r['lead_id'],'title':r['client_name']+' updated their portal','detail':'Review before changing accepted scope.','priority':'Normal'})
             unverified=rows(db,"SELECT p.*,l.client_name FROM payments p JOIN leads l ON l.id=p.lead_id WHERE p.verified=0 AND p.amount_cents>0 ORDER BY p.created_at")
             for r in unverified:attention.append({'type':'payment','id':r['id'],'lead_id':r['lead_id'],'title':'Payment needs verification','detail':f"{r['client_name']} - CA${r['amount_cents']/100:,.2f}",'priority':'High'})
+            gmail_review=rows(db,"SELECT * FROM integration_events WHERE event_type LIKE 'gmail_%' AND status='Needs review' ORDER BY created_at DESC")
+            gmail_payment=[r for r in gmail_review if r['event_type'] in ('gmail_bank_payment','gmail_wix_payment')]
+            gmail_calls=[r for r in gmail_review if r['event_type'] in ('gmail_missed_call','gmail_voicemail')]
+            for r in gmail_review[:30]:
+                p=json.loads(r['payload_json']).get('parsed',{})
+                if r['event_type'] in ('gmail_bank_payment','gmail_wix_payment'):
+                    title='Gmail payment notice needs review'
+                    detail=(p.get('payer','')+' - $'+str(p.get('amount',''))).strip(' -')
+                    priority='High'
+                elif r['event_type']=='gmail_voicemail':
+                    title='New voicemail needs review'
+                    detail=p.get('caller') or p.get('phone') or 'Gmail voicemail'
+                    priority='Normal'
+                else:
+                    title='Missed call needs review'
+                    detail=p.get('caller') or p.get('phone') or 'Gmail missed call'
+                    priority='Normal'
+                attention.append({'type':'gmail','id':r['id'],'title':title,'detail':detail,'priority':priority})
             maint=rows(db,"SELECT m.*,v.name vehicle_name FROM maintenance m JOIN vehicles v ON v.id=m.vehicle_id WHERE m.status='Open' AND m.due_date!='' AND m.due_date<=? ORDER BY m.due_date",(today,))
             for r in maint:attention.append({'type':'fleet','id':r['id'],'title':r['vehicle_name']+' maintenance due','detail':r['title']+' - '+r['due_date'],'priority':'High'})
             stats={
               'jobs_today':len(jobs),'attention':len(attention),'pending_time_off':len(pending_off),
-              'unverified_payments':len(unverified),'open_followups':len(due),'pending_client_changes':len(pending_changes)
+              'unverified_payments':len(unverified)+len(gmail_payment),'open_followups':len(due)+len(gmail_calls),'pending_client_changes':len(pending_changes)
             }
         attention.sort(key=lambda x:(0 if x['priority']=='High' else 1,x['title']))
         return {'date':today,'stats':stats,'jobs':jobs,'attention':attention[:60]}
