@@ -19,8 +19,10 @@ from .store import connect, transaction, one, rows, insert, audit, uid, now, dum
 FEEDS = {
     'quote': 'New Quote Request',
     'bank': 'Scotia Bank',
-    'wix_payment': 'We Got Paid $
-
+    'wix_payment': 'We Got Paid $$$',
+    'missed_call': 'Missed Calls',
+    'voicemail': 'Voice Mail',
+}
 def _api(token, path, params=None):
     last = None
     for attempt in range(3):
