@@ -290,10 +290,10 @@ def _record_call_and_followup(db, lead_id, parsed, subject, actor, gmail_id, eve
     return cid
 
 
-def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_feed=30):
+def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_feed=30, fluid=False):
     days = max(1, min(int(days), 60))
     max_per_feed = max(1, min(int(max_per_feed), 50))
-    summary = {'scanned': 0, 'new_events': 0, 'new_leads': 0, 'duplicates': 0, 'ignored': 0, 'feeds': {}, 'errors': []}
+    summary = {'scanned': 0, 'new_events': 0, 'new_leads': 0, 'duplicates': 0, 'ignored': 0, 'feeds': {}, 'errors': [], 'fluid': bool(fluid)}
     label_rows = _api(access_token, 'labels').get('labels') or []
     label_ids = {x.get('name'): x.get('id') for x in label_rows if x.get('name') and x.get('id')}
     for feed, label_name in FEEDS.items():
@@ -343,7 +343,8 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                         lead = new_lead(db, data, actor, external_id=event_key, suppressed=1)
                         object_id = lead['id']
                         summary['new_leads'] += 1
-                    _record_incoming_message(db, object_id, actor, subject, body or message.get('snippet', ''))
+                    if fluid:
+                        _record_incoming_message(db, object_id, actor, subject, body or message.get('snippet', ''))
                     payload['parsed'] = data
                     event_type = 'gmail_quote'
                     status = 'Imported'
@@ -364,7 +365,7 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                         event_type = 'gmail_duplicate_call'
                         status = 'Ignored'
                         summary['ignored'] += 1
-                    else:
+                    elif fluid:
                         matched = _match_lead_by_phone(db, parsed.get('phone'))
                         if matched:
                             object_id = matched['id']
