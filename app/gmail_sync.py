@@ -318,9 +318,16 @@ def review_items(path, limit=100):
     from .store import connect
     with closing(connect(path)) as db:
         items = rows(db, "SELECT * FROM integration_events WHERE event_type LIKE 'gmail_%' AND status='Needs review' ORDER BY created_at DESC LIMIT ?", (min(max(int(limit), 1), 200),))
+    out = []
     for item in items:
-        item['payload'] = json.loads(item.pop('payload_json'))
-    return items
+        raw = item.pop('payload_json', '{}')
+        try:
+            item['payload'] = json.loads(raw or '{}')
+        except Exception:
+            item['payload'] = {'subject': 'Unreadable imported Gmail item', 'parsed': {}}
+            item['payload_error'] = True
+        out.append(item)
+    return out
 ,
     'missed_call': 'Missed Calls',
     'voicemail': 'Voice Mail',
