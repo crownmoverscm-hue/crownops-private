@@ -25,8 +25,8 @@ def token_save(db,provider,body):
     body=dict(body);body['expires_at']=time.time()+int(body.get('expires_in',3600))-60
     db.execute('INSERT INTO oauth_credentials(provider,ciphertext,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at',(provider,encrypt(body),now()))
 
-def provider_token(path,provider):
-    external_gate()
+def provider_token(path,provider,require_external=True):
+    if require_external: external_gate()
     cfg=PROVIDERS[provider]
     with transaction(path) as db:
         r=one(db,'SELECT * FROM oauth_credentials WHERE provider=?',(provider,))
@@ -127,7 +127,7 @@ def process_mail(path,mid):
         with transaction(path) as db:db.execute("UPDATE outbound_messages SET status='Unknown',error=? WHERE id=?",('Sending was not confirmed. Check Sent mail before retrying; no automatic retry.',mid))
         raise HTTPException(502,'Sending was not confirmed. Check Gmail Sent before taking further action.')
 
-def register_providers(app,path,auth,public_url):
+def register_providers(app,path,auth,public_url,new_lead=None):
     @app.get('/api/connections')
     def status(u=Depends(auth)):
         require_role(u,OFFICE)
@@ -140,6 +140,31 @@ def register_providers(app,path,auth,public_url):
           'ai':{'configured':bool(os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_MODEL'))},
           'intake':{'configured':len(os.getenv('CROWNOPS_WEBHOOK_SECRET',''))>=32},'scanner':{'configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND'))},
           'operations':operations,'note':'Configuration/authorization does not certify a successful end-to-end live test.'}
+
+    @app.get('/api/gmail/review')
+    def gmail_review(u=Depends(auth)):
+        require_role(u,OFFICE)
+        from .gmail_sync import review_items
+        return review_items(path)
+
+    @app.post('/api/gmail/sync-readonly')
+    def gmail_sync_readonly(data:dict=None,u=Depends(auth)):
+        require_role(u,MANAGERS)
+        if new_lead is None: raise HTTPException(503,'Lead intake is unavailable in this build.')
+        from .gmail_sync import sync_gmail_readonly
+        t=provider_token(path,'gmail',require_external=False)
+        data=data or {}
+        try:return sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',14),data.get('max_per_feed',30))
+        except requests.RequestException:raise HTTPException(502,'Gmail read-only sync failed. No Gmail messages were changed.')
+
+    @app.post('/api/gmail/review/{eid}/reviewed')
+    def gmail_mark_reviewed(eid:str,u=Depends(auth)):
+        require_role(u,OFFICE)
+        with transaction(path) as db:
+            ev=one(db,"SELECT * FROM integration_events WHERE id=? AND event_type LIKE 'gmail_%'",(eid,))
+            if not ev:raise HTTPException(404,'Gmail review item not found.')
+            db.execute("UPDATE integration_events SET status='Reviewed' WHERE id=?",(eid,));audit(db,u['id'],'Gmail review item marked reviewed','integration_events',eid)
+        return {'ok':True}
 
     @app.post('/api/connect/{provider}')
     def start(provider:str,u=Depends(auth)):
