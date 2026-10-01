@@ -159,19 +159,7 @@ def register_ux_features(app,path,auth):
                 p=json.loads(r['payload_json']).get('parsed',{})
                 if r['event_type'] in ('gmail_bank_payment','gmail_wix_payment'):
                     title='Gmail payment notice needs review'
-                    detail=(p.get('payer','')+' - $'+str(p.get('amount',''))).strip(' -')
-                    priority='High'
-                elif r['event_type']=='gmail_voicemail':
-                    title='New voicemail needs review'
-                    detail=p.get('caller') or p.get('phone') or 'Gmail voicemail'
-                    priority='Normal'
-                else:
-                    title='Missed call needs review'
-                    detail=p.get('caller') or p.get('phone') or 'Gmail missed call'
-                    priority='Normal'
-                attention.append({'type':'gmail','id':r['id'],'title':title,'detail':detail,'priority':priority})
-            maint=rows(db,"SELECT m.*,v.name vehicle_name FROM maintenance m JOIN vehicles v ON v.id=m.vehicle_id WHERE m.status='Open' AND m.due_date!='' AND m.due_date<=? ORDER BY m.due_date",(today,))
-            for r in maint:attention.append({'type':'fleet','id':r['id'],'title':r['vehicle_name']+' maintenance due','detail':r['title']+' - '+r['due_date'],'priority':'High'})
+                    detail=(p.get('payer','')+' -             for r in maint:attention.append({'type':'fleet','id':r['id'],'title':r['vehicle_name']+' maintenance due','detail':r['title']+' - '+r['due_date'],'priority':'High'})
             stats={
               'jobs_today':len(jobs),'attention':len(attention),'pending_time_off':len(pending_off),
               'unverified_payments':len(unverified)+len(gmail_payment),'open_followups':len(due)+len(gmail_calls),'pending_client_changes':len(pending_changes)
@@ -457,11 +445,16 @@ def register_ux_features(app,path,auth):
         cfg={'connected_mailbox':connected,'send_as':send_as,'reply_to':reply_to,'default_from':send_as,'secondary_inbox':connected,'client_email_rule':'Store mail in the connected Gmail mailbox and send as the Crown Movers domain alias after Google verifies the alias.','approved':bool(data.get('approved')),'note':text(data.get('note',''),'Note',2000)}
         with transaction(path) as db:put_setting(db,'company_communications',cfg);audit(db,u['id'],'Company communication defaults updated','settings','company_communications')
         return cfg
-+str(p.get('amount',''))).strip(' -');priority='High'
++str(p.get('amount',''))).strip(' -')
+                    priority='High'
                 elif r['event_type']=='gmail_voicemail':
-                    title='New voicemail needs review';detail=p.get('caller') or p.get('phone') or 'Gmail voicemail';priority='Normal'
+                    title='New voicemail needs review'
+                    detail=p.get('caller') or p.get('phone') or 'Gmail voicemail'
+                    priority='Normal'
                 else:
-                    title='Missed call needs review';detail=p.get('caller') or p.get('phone') or 'Gmail missed call';priority='Normal'
+                    title='Missed call needs review'
+                    detail=p.get('caller') or p.get('phone') or 'Gmail missed call'
+                    priority='Normal'
                 attention.append({'type':'gmail','id':r['id'],'title':title,'detail':detail,'priority':priority})
             maint=rows(db,"SELECT m.*,v.name vehicle_name FROM maintenance m JOIN vehicles v ON v.id=m.vehicle_id WHERE m.status='Open' AND m.due_date!='' AND m.due_date<=? ORDER BY m.due_date",(today,))
             for r in maint:attention.append({'type':'fleet','id':r['id'],'title':r['vehicle_name']+' maintenance due','detail':r['title']+' - '+r['due_date'],'priority':'High'})
