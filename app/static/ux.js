@@ -88,11 +88,26 @@ openJob=async function(id){
 function uxDefaultRange(){const end=new Date(today()+'T12:00:00'),start=new Date(end);start.setDate(start.getDate()-13);return [ymd(start),ymd(end)];}
 teamPage=async function(){
  if(!UX.dirStart){[UX.dirStart,UX.dirEnd]=uxDefaultRange();}
- const d=await api(`/ux/employee-directory?start=${encodeURIComponent(UX.dirStart)}&end=${encodeURIComponent(UX.dirEnd)}`);UX.directory=d;
- const actions=d.private?`<button class="btn-primary" data-ux="employee-add">${icon('plus')}Add employee</button>`:'';
+ let d=null,warning='';
+ try{
+   d=await api(`/ux/employee-directory?start=${encodeURIComponent(UX.dirStart)}&end=${encodeURIComponent(UX.dirEnd)}`);
+ }catch(err){
+   const basic=await api('/employees');
+   const privateView=may(['owner','accounting']);
+   d={start:UX.dirStart,end:UX.dirEnd,private:privateView,employees:basic.map(e=>({
+     id:e.id,full_name:e.name||'Employee',role:e.role||'Mover',active:Boolean(e.active),
+     phone:'',emergency_contact:{name:'',phone:''},email:'',home_address:'',start_date:'',
+     driver_verified:Boolean(e.driver_verified),hourly_cents:Number(e.hourly_cents||0),
+     license_uploaded:false,license_name:'',team_lead:false,notes:'',
+     current_hours:0,current_jobs:0,pending_time_entries:0
+   }))};
+   warning=`<div class="callout orange"><strong>Basic directory loaded.</strong>Private employee profile details are temporarily unavailable, but team access and invitations still work.</div><div class="spacer"></div>`;
+ }
+ UX.directory=d;
+ const actions=may(['owner'])?`${btn('invite',icon('plus')+'Invite team member','btn-primary')} ${d.private?`<button class="btn-soft" data-ux="employee-add">Add employee</button>`:''}`:(d.private?`<button class="btn-primary" data-ux="employee-add">${icon('plus')}Add employee</button>`:'');
  const filters=d.private?`<div class="filterbar"><label class="small">Payroll hours from <input id="ux-dir-start" type="date" value="${h(d.start)}"></label><label class="small">to <input id="ux-dir-end" type="date" value="${h(d.end)}"></label><button data-ux="directory-load">Load</button><div class="grow"></div><span class="tiny muted">Private fields are manager-only</span></div>`:'';
- const rows_=d.employees.map(e=>d.private?[`<div class="client-name">${h(e.full_name)}</div><div class="tiny muted">${h(e.role)}</div>`,h(e.phone||'—'),h(e.start_date?String(e.start_date).slice(0,4):'—'),`${e.current_hours.toFixed(2)} h<div class="tiny muted">${e.current_jobs} job${e.current_jobs===1?'':'s'}</div>`,money(e.hourly_cents)+'/h',e.pending_time_entries?`<span class="pill orange">${e.pending_time_entries} pending</span>`:'<span class="pill teal">Current</span>',`<button class="btn-small" data-ux="employee-open" data-id="${h(e.id)}">Open</button>`]:[`<div class="client-name">${h(e.full_name)}</div><div class="tiny muted">${h(e.role)}</div>`,h(e.phone||'—'),`${h(e.emergency_contact.name||'—')}<br><span class="tiny muted">${h(e.emergency_contact.phone||'')}</span>`]);
- return head('Employee directory',d.private?'Contact, employment and current-payroll information in one place.':'Company contacts. Private HR and payroll information is hidden.',actions)+filters+panel('Team',xtable(d.private?['Employee','Phone','Started','Current payroll','Pay rate','Status','']:['Employee','Phone','Emergency contact'],rows_));
+ const rows_=d.employees.map(e=>d.private?[`<div class="client-name">${h(e.full_name)}</div><div class="tiny muted">${h(e.role)}</div>`,h(e.phone||'—'),h(e.start_date?String(e.start_date).slice(0,4):'—'),`${Number(e.current_hours||0).toFixed(2)} h<div class="tiny muted">${Number(e.current_jobs||0)} job${Number(e.current_jobs||0)===1?'':'s'}</div>`,money(Number(e.hourly_cents||0))+'/h',e.pending_time_entries?`<span class="pill orange">${e.pending_time_entries} pending</span>`:'<span class="pill teal">Current</span>',`<button class="btn-small" data-ux="employee-open" data-id="${h(e.id)}">Open</button>`]:[`<div class="client-name">${h(e.full_name)}</div><div class="tiny muted">${h(e.role)}</div>`,h(e.phone||'—'),`${h(e.emergency_contact?.name||'—')}<br><span class="tiny muted">${h(e.emergency_contact?.phone||'')}</span>`]);
+ return head('Employee directory',d.private?'Contact, employment and current-payroll information in one place.':'Company contacts. Private HR and payroll information is hidden.',actions)+warning+filters+panel('Team',xtable(d.private?['Employee','Phone','Started','Current payroll','Pay rate','Status','']:['Employee','Phone','Emergency contact'],rows_));
 };
 function uxEmployeeForm(e){
  if(!e)return;
