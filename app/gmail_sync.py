@@ -7,6 +7,7 @@ marks Gmail messages read. Non-lead items enter an internal review queue.
 import base64
 import json
 import re
+from datetime import datetime
 from urllib.parse import quote
 
 import requests
@@ -119,8 +120,12 @@ def _quote_fields(body, subject):
                 return v
         return ''
     name = anyv('Client Name', 'Name')
-    email = anyv('Email')
-    phone = re.sub(r'\D', '', anyv('Phone'))
+    raw_email = anyv('Email')
+    em = re.search(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', raw_email, re.I)
+    email = em.group(0).lower() if em else ''
+    raw_phone = anyv('Phone')
+    pm = re.search(r'(?<!\d)(?:1[- .()]*)?([2-9]\d{2})[- .()]*([2-9]\d{2})[- .()]*([0-9]{4})(?!\d)', raw_phone)
+    phone = ''.join(pm.groups()) if pm else re.sub(r'\D', '', raw_phone)[:10]
     move_date = anyv('Moving Date')
     pickup = anyv('Pickup Address', 'Pickup Address or Postal Code', 'Pickup')
     dropoff = anyv('Destination Address', 'Destination Address or Postal Code', 'Destination')
@@ -186,6 +191,31 @@ def _call_payload(kind, subject, body, attachments):
     return {'kind': event_type, 'caller': who, 'phone': phone_match.group(1) if phone_match else '', 'call_time': ts.group(1) if ts else '', 'attachments': attachments}
 
 
+
+def _duplicate_call(db, parsed, seconds=90):
+    phone = parsed.get('phone') or ''
+    caller = (parsed.get('caller') or '').lower()
+    stamp = parsed.get('call_time') or ''
+    if not stamp:
+        return False
+    try:
+        current = datetime.strptime(stamp, '%m/%d/%Y %H:%M:%S')
+    except ValueError:
+        return False
+    recent = rows(db, "SELECT payload_json FROM integration_events WHERE event_type IN ('gmail_missed_call','gmail_voicemail') ORDER BY created_at DESC LIMIT 80")
+    for item in recent:
+        try:
+            old = json.loads(item['payload_json']).get('parsed', {})
+            old_stamp = old.get('call_time') or ''
+            old_dt = datetime.strptime(old_stamp, '%m/%d/%Y %H:%M:%S')
+        except Exception:
+            continue
+        same_identity = (phone and phone == old.get('phone')) or (caller and caller == (old.get('caller') or '').lower())
+        if same_identity and abs((current - old_dt).total_seconds()) <= seconds:
+            return True
+    return False
+
+
 def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_feed=30):
     days = max(1, min(int(days), 60))
     max_per_feed = max(1, min(int(max_per_feed), 50))
@@ -237,6 +267,10 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                 elif feed in ('missed_call', 'voicemail'):
                     payload['parsed'] = _call_payload(feed, subject, body, attachments)
                     event_type = 'gmail_missed_call' if feed == 'missed_call' else 'gmail_voicemail'
+                    if _duplicate_call(db, payload['parsed']):
+                        event_type = 'gmail_duplicate_call'
+                        status = 'Ignored'
+                        summary['ignored'] += 1
                 else:
                     summary['ignored'] += 1
                     event_type = 'gmail_ignored'
