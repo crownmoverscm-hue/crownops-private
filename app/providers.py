@@ -11,6 +11,7 @@ import base64, hashlib, hmac, json, os, secrets, time
 import requests
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from . import gmail_sync
 from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .platform_common import *
 from .pricing import cents,number
@@ -144,9 +145,8 @@ def register_providers(app,path,auth,public_url,new_lead=None):
     @app.get('/api/gmail/review')
     def gmail_review(u=Depends(auth)):
         require_role(u,OFFICE)
-        from .gmail_sync import review_items
         try:
-            return review_items(path)
+            return gmail_sync.review_items(path)
         except Exception as e:
             raise HTTPException(500, 'Gmail review queue error: ' + type(e).__name__ + ': ' + str(e)[:180])
 
@@ -154,11 +154,10 @@ def register_providers(app,path,auth,public_url,new_lead=None):
     def gmail_sync_readonly(data:dict=None,u=Depends(auth)):
         require_role(u,MANAGERS)
         if new_lead is None: raise HTTPException(503,'Lead intake is unavailable in this build.')
-        from .gmail_sync import sync_gmail_readonly
         t=provider_token(path,'gmail',require_external=False)
         data=data or {}
         try:
-            return sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',14),data.get('max_per_feed',30))
+            return gmail_sync.sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',14),data.get('max_per_feed',30))
         except HTTPException:
             raise
         except requests.RequestException as e:
