@@ -1,10 +1,10 @@
 /* CrownOps v5.4 simplified job review pass: simple defaults, useful exceptions, clean role-based UX. */
 'use strict';
-const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null};
+const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:''};
 
 // ---------- Navigation: show the things people actually use ----------
 ensureNav(['communications','mail','Communications']);
-for(const [key,label] of [['dashboard','Today'],['team','Employee directory'],['payroll','Payroll'],['inventory','Materials'],['rates','Pricing & rates'],['documents','Documents & approvals']]){const n=nav.find(x=>x[0]===key);if(n)n[2]=label;}
+for(const [key,label] of [['dashboard','Today'],['quotes','Estimates'],['followups','Follow-ups'],['invoices','Invoices'],['team','Employee directory'],['payroll','Payroll'],['inventory','Materials'],['rates','Pricing & rates'],['documents','Documents & approvals']]){const n=nav.find(x=>x[0]===key);if(n)n[2]=label;}
 
 function uxGroups(){
  const role=S.user.role;
@@ -13,7 +13,7 @@ function uxGroups(){
  ];
  const full=[
    ['TODAY',['dashboard']],
-   ['SALES',['sales','quotes','communications']],
+   ['SALES',['sales','quotes','followups','communications']],
    ['OPERATIONS',['schedule','invoices','payments','timeoff','documents','portalhub','care']],
    ['TEAM',['team','payroll']],
    ['COMPANY',['rates','inventory','fleet','connections','settings','account']]
@@ -143,6 +143,134 @@ X.pageRenderers.connections=async()=>{
  `<div class="spacer"></div><div class="grid3">${[['square','Payments'],['ai','AI assistant'],['intake','Forms / calls'],['scanner','Upload safety']].map(([k,n])=>panel(n,`${pill(s[k]?.configured?'Configured / test required':'Not configured')}<p class="tiny muted">Keep this off until the core workflow is approved.</p>`)).join('')}</div><div class="spacer"></div>${panel('Connection activity',xtable(['Provider','Action','Status','Details'],(s.operations||[]).slice(0,30).map(o=>[h(o.provider),h(o.kind),pill(o.status),h(o.error||o.object_id)])))} `;
 };
 
+// ---------- Estimates, follow-ups and invoices: browse like a real operating app ----------
+function uxOverviewMetric(label,value,foot=''){
+ return `<div class="ux-overview-metric"><div class="ux-overview-value">${value}</div><div class="ux-overview-label">${h(label)}</div>${foot?`<div class="ux-overview-foot">${h(foot)}</div>`:''}</div>`;
+}
+function uxStatusButton(kind,value,label,count,current){
+ return `<button class="ux-filter-chip ${current===value?'selected':''}" data-ux="${kind}" data-value="${h(value)}">${h(label)}<span>${Number(count||0).toLocaleString()}</span></button>`;
+}
+function uxInvoiceState(i){
+ const total=Number(i.calculation?.total_cents||0),balance=Number(i.calculation?.balance_cents||0);
+ if(i.status==='Draft')return 'Draft';
+ if(balance<=0)return 'Paid';
+ if(balance<total)return 'Partial';
+ return 'Balance due';
+}
+
+X.pageRenderers.quotes=async()=>{
+ const all=await api('/quotes');
+ const counts={all:all.length,Draft:0,Approved:0,Accepted:0};
+ all.forEach(q=>{counts[q.status]=(counts[q.status]||0)+1;});
+ const search=String(UX.estimateSearch||'').trim().toLowerCase();
+ const filtered=all.filter(q=>(UX.estimateStatus==='all'||q.status===UX.estimateStatus)&&(!search||[q.client_name,q.status,q.inputs?.move_date,q.inputs?.pickup,q.inputs?.dropoff].join(' ').toLowerCase().includes(search)));
+ const rows=filtered.map(q=>[
+   `<div class="client-name">${h(q.client_name)}</div><div class="tiny muted">Revision ${q.revision}</div>`,
+   h(q.inputs?.move_date||'Date to confirm'),
+   `${q.result?.movers||'—'} movers / ${q.result?.trucks||'—'} truck${Number(q.result?.trucks||0)===1?'':'s'}`,
+   `<span class="strong">${compact(q.result?.low_cents||0)} – ${compact(q.result?.high_cents||0)}</span><div class="tiny muted">before tax</div>`,
+   pill(q.status),
+   `<button class="btn-small" data-ux="estimate-open" data-id="${h(q.id)}">Open</button>`
+ ]);
+ const overview=`<div class="ux-overview-grid">${[
+   uxOverviewMetric('Total estimates',counts.all),
+   uxOverviewMetric('Draft',counts.Draft),
+   uxOverviewMetric('Approved',counts.Approved),
+   uxOverviewMetric('Accepted',counts.Accepted)
+ ].join('')}</div>`;
+ const filters=`<div class="ux-browser-toolbar"><div class="ux-filter-chips">${[
+   uxStatusButton('estimate-filter','all','All',counts.all,UX.estimateStatus),
+   uxStatusButton('estimate-filter','Draft','Draft',counts.Draft,UX.estimateStatus),
+   uxStatusButton('estimate-filter','Approved','Approved',counts.Approved,UX.estimateStatus),
+   uxStatusButton('estimate-filter','Accepted','Accepted',counts.Accepted,UX.estimateStatus)
+ ].join('')}</div><div class="searchbox ux-browser-search">${icon('search')}<input id="ux-estimate-search" value="${h(UX.estimateSearch)}" placeholder="Search client, date or address" aria-label="Search estimates"></div></div>`;
+ return head('Estimates','Create, review and browse every moving estimate in one place.',btn('choose-quote',icon('plus')+'New estimate','btn-primary')+btn('choose-ai',icon('spark')+'AI quote assistant','btn-soft'))+
+   panel('Overview',overview)+'<div class="spacer"></div>'+
+   `<div class="panel"><div class="panel-head"><h2>Estimates</h2><span class="tiny muted">${filtered.length.toLocaleString()} shown</span></div>${filters}<div class="panel-body flush">${rows.length?xtable(['Client','Move date','Crew','Estimate','Status',''],rows):empty('No estimates in this view','Change the filters or create a new estimate.')}</div></div>`;
+};
+
+X.pageRenderers.followups=async()=>{
+ const all=await api('/tasks?scope='+encodeURIComponent(UX.followupScope));
+ const nowDay=today();
+ const state=t=>{
+   if(t.status==='Done')return 'completed';
+   if(t.due_date&&t.due_date<nowDay)return 'overdue';
+   if(t.due_date===nowDay)return 'today';
+   return 'upcoming';
+ };
+ const counts={open:0,today:0,overdue:0,upcoming:0,completed:0};
+ all.forEach(t=>{const s=state(t);counts[s]++;if(s!=='completed')counts.open++;});
+ const search=String(UX.followupSearch||'').trim().toLowerCase();
+ const filtered=all.filter(t=>{
+   const s=state(t);
+   const statusOk=UX.followupStatus==='all'||(UX.followupStatus==='open'?s!=='completed':s===UX.followupStatus);
+   return statusOk&&(!search||[t.client_name,t.phone,t.email,t.title].join(' ').toLowerCase().includes(search));
+ }).sort((a,b)=>{
+   const rank=x=>{const s=state(x);return s==='overdue'?0:s==='today'?1:s==='upcoming'?2:3;};
+   return rank(a)-rank(b)||String(a.due_date||'9999').localeCompare(String(b.due_date||'9999'));
+ });
+ const rows=filtered.map(t=>[
+   `<div class="client-name">${h(t.client_name||'Internal / unmatched')}</div><div class="tiny muted">${h(t.phone||t.email||'')}</div>`,
+   `<div class="strong">${h(t.title)}</div>`,
+   h(t.due_date||'No date'),
+   t.owner?(t.owner===S.user.id?'<span class="pill blue">You</span>':'<span class="pill gray">Assigned</span>'):'<span class="pill orange">Unassigned</span>',
+   pill(state(t)==='completed'?'Done':state(t)==='overdue'?'Overdue':state(t)==='today'?'Due today':'Upcoming'),
+   `<div class="row">${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
+ ]);
+ const overview=`<div class="ux-overview-grid">${[
+   uxOverviewMetric('Open',counts.open),
+   uxOverviewMetric('Due today',counts.today),
+   uxOverviewMetric('Overdue',counts.overdue),
+   uxOverviewMetric('Upcoming',counts.upcoming)
+ ].join('')}</div>`;
+ const filters=`<div class="ux-browser-toolbar"><div class="ux-filter-chips">${[
+   uxStatusButton('followup-filter','open','Open',counts.open,UX.followupStatus),
+   uxStatusButton('followup-filter','today','Due today',counts.today,UX.followupStatus),
+   uxStatusButton('followup-filter','overdue','Overdue',counts.overdue,UX.followupStatus),
+   uxStatusButton('followup-filter','upcoming','Upcoming',counts.upcoming,UX.followupStatus),
+   uxStatusButton('followup-filter','completed','Completed',counts.completed,UX.followupStatus)
+ ].join('')}</div><div class="ux-browser-controls"><select id="ux-followup-scope" class="input-inline" aria-label="Follow-up source"><option value="active" ${UX.followupScope==='active'?'selected':''}>Current work</option><option value="imported" ${UX.followupScope==='imported'?'selected':''}>Imported backlog</option></select><div class="searchbox ux-browser-search">${icon('search')}<input id="ux-followup-search" value="${h(UX.followupSearch)}" placeholder="Search client or action" aria-label="Search follow-ups"></div></div></div>`;
+ return head('Follow-ups','Every callback, missing detail and next action your sales team needs to finish.',btn('go-sales','Open clients','btn-soft'))+
+   panel('Overview',overview)+'<div class="spacer"></div>'+
+   `<div class="panel"><div class="panel-head"><h2>Follow-ups</h2><span class="tiny muted">${filtered.length.toLocaleString()} shown</span></div>${filters}<div class="panel-body flush">${rows.length?xtable(['Client','Action','Due','Owner','Status',''],rows):empty('No follow-ups in this view','Your team is clear here, or the current filters have no matches.')}</div></div>`;
+};
+
+X.pageRenderers.invoices=async()=>{
+ const all=await api('/invoices');
+ const search=String(UX.invoiceSearch||'').trim().toLowerCase();
+ const derived=all.map(i=>({...i,display_state:uxInvoiceState(i)}));
+ const counts={all:derived.length,Draft:0,'Balance due':0,Partial:0,Paid:0};
+ derived.forEach(i=>counts[i.display_state]++);
+ const outstanding=derived.filter(i=>i.status!=='Draft').reduce((sum,i)=>sum+Math.max(0,Number(i.calculation?.balance_cents||0)),0);
+ const paid=derived.filter(i=>i.status!=='Draft').reduce((sum,i)=>sum+Math.max(0,Number(i.calculation?.total_cents||0)-Number(i.calculation?.balance_cents||0)),0);
+ const filtered=derived.filter(i=>(UX.invoiceStatus==='all'||i.display_state===UX.invoiceStatus)&&(!search||[i.number,i.client_name,i.service_date,i.display_state].join(' ').toLowerCase().includes(search)));
+ const rows=filtered.map(i=>[
+   `<span class="strong">${h(i.number)}</span><div class="tiny muted">Revision ${i.revision}</div>`,
+   h(i.client_name),
+   h(i.service_date||'—'),
+   `<span class="strong">${money(i.calculation?.total_cents||0)}</span>`,
+   `<span class="${Number(i.calculation?.balance_cents||0)>0?'strong':''}">${money(i.calculation?.balance_cents||0)}</span>`,
+   pill(i.display_state),
+   `<button class="btn-small" data-ux="invoice-open" data-id="${h(i.id)}">Open</button>`
+ ]);
+ const overview=`<div class="ux-overview-grid ux-overview-money">${[
+   uxOverviewMetric('Outstanding',money(outstanding)),
+   uxOverviewMetric('Recorded paid',money(paid)),
+   uxOverviewMetric('Paid invoices',counts.Paid),
+   uxOverviewMetric('Draft invoices',counts.Draft)
+ ].join('')}</div>`;
+ const filters=`<div class="ux-browser-toolbar"><div class="ux-filter-chips">${[
+   uxStatusButton('invoice-filter','all','All',counts.all,UX.invoiceStatus),
+   uxStatusButton('invoice-filter','Draft','Draft',counts.Draft,UX.invoiceStatus),
+   uxStatusButton('invoice-filter','Balance due','Balance due',counts['Balance due'],UX.invoiceStatus),
+   uxStatusButton('invoice-filter','Partial','Partial',counts.Partial,UX.invoiceStatus),
+   uxStatusButton('invoice-filter','Paid','Paid',counts.Paid,UX.invoiceStatus)
+ ].join('')}</div><div class="searchbox ux-browser-search">${icon('search')}<input id="ux-invoice-search" value="${h(UX.invoiceSearch)}" placeholder="Search invoice or client" aria-label="Search invoices"></div></div>`;
+ return head('Invoices','Browse every job invoice, balance and payment state from one screen.',btn('go-schedule','Open schedule','btn-soft'))+
+   panel('Overview',overview)+'<div class="spacer"></div>'+
+   `<div class="panel"><div class="panel-head"><h2>Invoices</h2><span class="tiny muted">${filtered.length.toLocaleString()} shown</span></div>${filters}<div class="panel-body flush">${rows.length?xtable(['Invoice','Customer','Service date','Total','Balance','Status',''],rows):empty('No invoices in this view','Finalized job billing will appear here automatically.')}</div></div>`;
+};
+
 // ---------- Settings: one calm place to find low-frequency configuration ----------
 const uxOldSettings=settingsPage;
 settingsPage=async function(){
@@ -171,6 +299,13 @@ document.addEventListener('click',async e=>{
     if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='task'&&lid)return openLead(lid);if(k==='payment')return navigate('payments');if(k==='gmail')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
   }
   if(a==='search-open'){modal.close();if(el.dataset.type==='client')return openLead(id);if(el.dataset.type==='job')return openJob(id);if(el.dataset.type==='invoice')return openInvoice(id);}
+  if(a==='estimate-open')return openQuote(id);
+  if(a==='invoice-open')return openInvoice(id);
+  if(a==='estimate-filter'){UX.estimateStatus=el.dataset.value||'all';return navigate('quotes');}
+  if(a==='followup-filter'){UX.followupStatus=el.dataset.value||'open';return navigate('followups');}
+  if(a==='invoice-filter'){UX.invoiceStatus=el.dataset.value||'all';return navigate('invoices');}
+  if(a==='followup-complete'){await api('/tasks/'+encodeURIComponent(id)+'/complete',{method:'POST'});toast('Follow-up completed.');return navigate('followups');}
+
   if(a==='directory-load'){UX.dirStart=document.getElementById('ux-dir-start').value;UX.dirEnd=document.getElementById('ux-dir-end').value;return navigate('team');}
   if(a==='employee-open'){const emp=UX.directory?.employees.find(x=>x.id===id);return uxEmployeeForm(emp);}
   if(a==='employee-add')return showModal('Add employee',`<form id="ux-add-employee" data-ux-form="employee-add"><div class="grid2">${field('name','Full name','','text','required')}${field('role','Role','Mover','text','required')}${field('hourly_rate','Hourly pay rate',0,'number','step="0.01" min="0"')}</div></form>`,`${btn('close','Cancel')}<button type="submit" form="ux-add-employee" class="btn-primary">Add employee</button>`);
@@ -192,6 +327,14 @@ document.addEventListener('click',async e=>{
 
 document.addEventListener('change',e=>{
  if(e.target.matches('#ux-crew-hours-form input[name^="common_"]')){const row=e.target.closest('.simple-hours-row');row.querySelectorAll('input[name^="hours_"],input[name^="note_"]').forEach(i=>{i.disabled=e.target.checked;if(e.target.checked)i.value='';});}
+ if(e.target.id==='ux-followup-scope'){UX.followupScope=e.target.value;return navigate('followups');}
+});
+
+document.addEventListener('keydown',e=>{
+ if(e.key!=='Enter')return;
+ if(e.target.id==='ux-estimate-search'){e.preventDefault();UX.estimateSearch=e.target.value;return navigate('quotes');}
+ if(e.target.id==='ux-followup-search'){e.preventDefault();UX.followupSearch=e.target.value;return navigate('followups');}
+ if(e.target.id==='ux-invoice-search'){e.preventDefault();UX.invoiceSearch=e.target.value;return navigate('invoices');}
 });
 
 document.addEventListener('submit',async e=>{
