@@ -411,6 +411,19 @@ def register_ux_features(app,path,auth):
             audit(db,u['id'],'Payroll hours corrected','times',tid,{'before_minutes':before,'after_minutes':round(hours*60)})
         return {'ok':True}
 
+    @app.get('/api/calls')
+    def calls_feed(u=Depends(auth)):
+        require_role(u,OFFICE)
+        with closing(connect(path)) as db:
+            items=rows(db,"""SELECT c.*,l.client_name FROM calls c
+              LEFT JOIN leads l ON l.id=c.lead_id
+              ORDER BY c.created_at DESC LIMIT 100""")
+        for item in items:
+            raw=item.pop('payload_json','{}')
+            try:item['details']=json.loads(raw or '{}')
+            except Exception:item['details']={}
+        return items
+
     @app.get('/api/ux/inbox')
     def inbox(u=Depends(auth)):
         require_role(u,OFFICE)
