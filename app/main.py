@@ -229,7 +229,7 @@ def create_app(database_path=None):
     def health():
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.5.5.1'}
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.5.6'}
 
     @app.post('/api/setup-owner')
     def setup_owner(data:dict):
@@ -451,7 +451,8 @@ def create_app(database_path=None):
             if lead['assigned_to'] not in ('',u['id'],u['name']):
                 raise HTTPException(409,'This inquiry has already been claimed.')
             db.execute('UPDATE leads SET assigned_to=?,version=version+1,updated_at=? WHERE id=?',(u['id'],now(),lid))
-            audit(db,u['id'],'Lead claimed','leads',lid)
+            db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND (owner='' OR owner IS NULL)",(u['id'],lid))
+            audit(db,u['id'],'Lead claimed','leads',lid,{'open_followups_assigned':True})
         return {'ok':True}
 
     @app.post('/api/leads/{lid}/activate')

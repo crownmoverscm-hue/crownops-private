@@ -1,11 +1,15 @@
-# CrownOps v5.5 v5.1 - Private Review Build
+# CrownOps v5.6 - Private Review Build
 
-> **Current private review build: v5.5** — week-first schedule with 14+ daily job slots, truck colour coding, multiple same-day services, simplified client/job workflow, and Terminal-printed demo logins. Live Gmail, QuickBooks, payments and production schedule sync remain off.
+> **Current private review build: v5.6** — week-first schedule, truck colour coding, fluid Gmail intake, dedicated Estimates / Follow-ups / Invoices browsers, simplified client/job workflow, mobile-responsive staff access, and role-based team collaboration. Live outbound Gmail, QuickBooks production writes, card payments and production schedule sync remain off until final review.
 
 
 Private single-company web application for Crown Movers: sales, reviewed estimates, dispatch, client portal, job invoicing, collections, payroll drafts, private uploads, fleet, inventory, and integration controls. Built from the v3 CrownOps pilot, not from Carl's deployed schedule source.
 
 **Start with START_HERE.md.** Runnable server code is the deliverable. No real accounts, private records, payment credentials or API keys are shipped in this source package. No deployment or live provider validation is implied.
+
+## v5.6 final-workflow polish
+
+The sales sidebar now separates **Sales & clients**, **Estimates**, **Follow-ups**, and **Communications**. Estimates and invoices have searchable status browsers and overview metrics; follow-ups have due/overdue/upcoming/completed views. Claiming a lead or inbox conversation assigns unowned open follow-ups to that staff member. Today surfaces CRM tasks and payment exceptions instead of historical Gmail call noise.
 
 ## Review-build purpose
 

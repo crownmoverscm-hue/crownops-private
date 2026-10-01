@@ -403,7 +403,7 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
 def review_items(path, limit=100):
     from contextlib import closing
     with closing(connect(path)) as db:
-        items = rows(db, "SELECT * FROM integration_events WHERE event_type LIKE 'gmail_%' AND status='Needs review' ORDER BY created_at DESC LIMIT ?", (min(max(int(limit), 1), 200),))
+        items = rows(db, "SELECT * FROM integration_events WHERE event_type IN ('gmail_bank_payment','gmail_wix_payment') AND status='Needs review' ORDER BY created_at DESC LIMIT ?", (min(max(int(limit), 1), 200),))
     out = []
     for item in items:
         raw = item.pop('payload_json', '{}')
