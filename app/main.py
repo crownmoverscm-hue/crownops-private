@@ -634,8 +634,12 @@ def create_app(database_path=None):
             if not p:raise HTTPException(422,'The pricing source used by this estimate is unavailable.')
             if q['lead_version']!=lead['version']:
                 raise HTTPException(409,'Client details changed after this quote. Create a new revision.')
-            if missing_fields(lead):
-                raise HTTPException(422,'Complete the client record first: '+', '.join(missing_fields(lead)))
+            core_missing=[]
+            for key,label in (('client_name','Client name'),('email','Email'),('phone','Phone'),('move_date','Move date'),('pickup','Pickup address'),('dropoff','Destination address')):
+                if not str(lead.get(key,'')).strip():core_missing.append(label)
+            if lead.get('email') and '@' not in lead['email'] and 'Email' not in core_missing:core_missing.append('Valid email')
+            if core_missing:
+                raise HTTPException(422,'Complete the basic client and route details first: '+', '.join(core_missing))
             if data.get('reviewed') is not True or not bounded(data.get('note',''),'Review note',3000):
                 raise HTTPException(422,'Confirm inventory, route, access, capacity and timing review, and add a review note.')
             db.execute("UPDATE quotes SET status='Approved',approved_by=?,approved_at=? WHERE id=?",(u['id'],now(),qid))
