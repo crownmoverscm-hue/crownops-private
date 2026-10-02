@@ -9,7 +9,7 @@ from .store import connect, transaction, rows, one, insert, audit, uid, now, dum
 
 MANAGERS={'owner'}
 OFFICE={'owner','sales','dispatch','accounting'}
-SALES={'owner','sales'}
+SALES={'owner','sales','dispatch'}
 
 def settings(db,key,default=None):
     r=one(db,'SELECT value_json FROM settings WHERE key=?',(key,))
