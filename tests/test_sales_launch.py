@@ -90,6 +90,7 @@ class SalesLaunchTests(unittest.TestCase):
     def test_confirmed_deposit_moves_job_to_confirmed_and_creates_assignment_task(self):
         path=self.make_db()
         with transaction(path) as db:
+            insert(db,"payments",{"id":"TEST-DEPOSIT-2","lead_id":"DEMO-LEAD-2","amount_cents":30000,"method":"Interac","purpose":"Deposit","reference":"TEST-DEP-2","verified":1,"recorded_by":"unit-test","created_at":now()})
             job=confirm_booking_after_deposit(db,"DEMO-QUOTE-2","unit-test")
             self.assertIsNotNone(job)
             state=db.execute("SELECT status FROM jobs WHERE id=?",(job["id"],)).fetchone()[0]
@@ -100,6 +101,15 @@ class SalesLaunchTests(unittest.TestCase):
         self.assertEqual(stage,"Booked")
         self.assertEqual(task,1)
         self.assertEqual(mail,1)
+
+    def test_partial_deposit_does_not_confirm_booking(self):
+        path=self.make_db()
+        with transaction(path) as db:
+            insert(db,"payments",{"id":"TEST-PARTIAL-2","lead_id":"DEMO-LEAD-2","amount_cents":10000,"method":"Interac","purpose":"Deposit","reference":"TEST-PARTIAL","verified":1,"recorded_by":"unit-test","created_at":now()})
+            job=confirm_booking_after_deposit(db,"DEMO-QUOTE-2","unit-test")
+            state=db.execute("SELECT status FROM jobs WHERE id='DEMO-JOB-2'").fetchone()[0]
+        self.assertIsNone(job)
+        self.assertEqual(state,"Tentative")
 
 
 if __name__=="__main__":
