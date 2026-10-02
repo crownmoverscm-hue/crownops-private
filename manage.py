@@ -69,7 +69,7 @@ try:
             if a.once:break
             time.sleep(a.interval)
     elif a.command=='doctor':
-        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
+        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','quickbooks_environment':os.getenv('QBO_ENV','sandbox'),'quickbooks_sandbox_writes':os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES')=='1','quickbooks_production_writes':os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
 except (ValueError,sqlite3.Error,OSError,zipfile.BadZipFile) as ex:
     print('Error: '+str(ex),file=sys.stderr);sys.exit(1)
 except KeyboardInterrupt:print('\nStopped.')
