@@ -84,8 +84,19 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             initialize(db_path)
             os.environ["QBO_SERVICE_ITEM_ID"] = "env-item"
             with transaction(db_path) as db:
-                put_setting(db, "quickbooks_mappings", {"service_item_id": "saved-item"})
+                put_setting(db, "quickbooks_mappings_sandbox", {"service_item_id": "saved-item"})
             self.assertEqual(qbo_mapping(db_path, "service_item_id"), "saved-item")
+
+    def test_sandbox_mapping_never_leaks_into_production(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "crownops.sqlite3"
+            initialize(db_path)
+            with transaction(db_path) as db:
+                put_setting(db, "quickbooks_mappings_sandbox", {"service_item_id": "sandbox-item"})
+            self.assertEqual(qbo_mapping(db_path, "service_item_id"), "sandbox-item")
+            os.environ["QBO_ENV"] = "production"
+            os.environ.pop("QBO_SERVICE_ITEM_ID", None)
+            self.assertEqual(qbo_mapping(db_path, "service_item_id"), "")
 
     def test_invoice_payload_uses_reviewed_item_tax_and_discount_refs(self):
         doc = {
