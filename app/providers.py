@@ -187,11 +187,35 @@ def register_providers(app,path,auth,public_url,new_lead=None):
           'discount_account_id':str(saved.get('discount_account_id') or os.getenv('QBO_DISCOUNT_ACCOUNT_ID','')),
           'deposit_account_id':str(saved.get('deposit_account_id') or os.getenv('QBO_DEPOSIT_ACCOUNT_ID',''))
         }
+        item_rows=[{'id':str(x.get('Id','')),'name':x.get('FullyQualifiedName') or x.get('Name',''),'type':x.get('Type','')} for x in items if x.get('Id')]
+        tax_rows=[{'id':str(x.get('Id','')),'name':x.get('Name',''),'description':x.get('Description','')} for x in taxes if x.get('Id')]
+        account_rows=[{'id':str(x.get('Id','')),'name':x.get('FullyQualifiedName') or x.get('Name',''),'type':x.get('AccountType',''),'subtype':x.get('AccountSubType','')} for x in accounts if x.get('Id')]
+        service_rows=[x for x in item_rows if str(x.get('type','')).lower()=='service']
+        def pick(rows,*tests):
+            for test in tests:
+                for row in rows:
+                    if test(row):return row.get('id','')
+            return rows[0].get('id','') if rows else ''
+        service_id=pick(service_rows,
+          lambda x:'moving' in x['name'].lower(),
+          lambda x:'hour' in x['name'].lower(),
+          lambda x:'service' in x['name'].lower())
+        bad_tax=('adjust','exempt','zero','out of scope','non-tax')
+        regular_taxes=[x for x in tax_rows if not any(w in (x['name']+' '+x.get('description','')).lower() for w in bad_tax)]
+        tax_id=pick(regular_taxes,
+          lambda x:'gst/qst qc' in x['name'].lower(),
+          lambda x:'gst' in x['name'].lower() and 'qst' in x['name'].lower(),
+          lambda x:x['name'].strip().lower() in ('s','standard'))
+        deposit_id=pick(account_rows,
+          lambda x:str(x.get('subtype','')).lower()=='undepositedfunds',
+          lambda x:'undeposited' in x['name'].lower())
+        discount_id=pick([x for x in account_rows if 'discount' in x['name'].lower()],
+          lambda x:'discounts given' in x['name'].lower(),
+          lambda x:True)
         return {'environment':quickbooks_environment(),'realm_id':realm,'company_name':company.get('CompanyName') or company.get('LegalName') or '',
           'writes_enabled':quickbooks_write_enabled(),'mappings':current,'errors':errors,
-          'items':[{'id':str(x.get('Id','')),'name':x.get('FullyQualifiedName') or x.get('Name',''),'type':x.get('Type','')} for x in items if x.get('Id')],
-          'tax_codes':[{'id':str(x.get('Id','')),'name':x.get('Name',''),'description':x.get('Description','')} for x in taxes if x.get('Id')],
-          'accounts':[{'id':str(x.get('Id','')),'name':x.get('FullyQualifiedName') or x.get('Name',''),'type':x.get('AccountType',''),'subtype':x.get('AccountSubType','')} for x in accounts if x.get('Id')]}
+          'recommendations':{'service_item_id':service_id,'tax_code_id':tax_id,'discount_account_id':discount_id,'deposit_account_id':deposit_id},
+          'items':item_rows,'tax_codes':tax_rows,'accounts':account_rows}
 
     @app.patch('/api/quickbooks/setup')
     def quickbooks_save_setup(data:dict,u=Depends(auth)):
