@@ -1243,7 +1243,8 @@ def create_app(database_path=None):
     register_ux_features(app,path,auth)
     from .final_features import register_final_features
     register_final_features(app,path,auth)
-    from .sales_launch import register_sales_launch
+    from .sales_launch import register_sales_launch,seed_sales_launch_defaults
+    seed_sales_launch_defaults(path)
     register_sales_launch(app,path,auth,new_lead,public_url)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app
