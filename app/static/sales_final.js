@@ -244,7 +244,7 @@ openQuote=async function(qid){
  let action='';
  if(q.status==='Draft'&&canFinalize)action=`<form id="approve-quote-form" data-form="approve-quote"><input type="hidden" name="id" value="${h(qid)}">${textArea('note','Final review note','Inventory, access, route, timing and pricing reviewed.',2)}<label class="checkbox-label"><input name="reviewed" type="checkbox" required>I reviewed the scope and pricing. Finalizing does not send anything yet.</label><div class="spacer"></div><button class="btn-primary" type="submit">Finalize estimate</button></form>`;
  if(q.status==='Approved')action=`<div class="callout teal"><strong>Ready for the client</strong>Prepare the branded email. The client will open the private CrownOps estimate, accept it, then see deposit options.</div><div class="spacer"></div><button class="btn-primary" data-sf="prepare-delivery" data-id="${h(qid)}">${icon('mail')}Prepare client email</button>`;
- if(q.status==='Accepted')action=`<div class="callout teal"><strong>Accepted by client</strong>A tentative schedule hold is created from the accepted move date. Once the deposit is verified, CrownOps marks the booking locked while crew/truck assignment can still be completed.</div><div class="spacer"></div><button class="btn-soft" data-sf="booking-exception" data-id="${h(qid)}">Cash / cheque booking arrangement</button>`;
+ if(q.status==='Accepted')action=`<div class="callout teal"><strong>Accepted by client</strong>A tentative schedule hold is created from the accepted move date. Once the deposit is verified, CrownOps marks the booking locked while crew/truck assignment can still be completed.</div><div class="spacer"></div><div class="row wrap"><button class="btn-primary" data-sf="deposit-reminder" data-id="${h(qid)}">${icon('mail')}Prepare deposit reminder</button><button class="btn-soft" data-sf="booking-exception" data-id="${h(qid)}">Cash / cheque booking arrangement</button></div>`;
  showModal('Estimate · '+h(q.client_name),`<div class="row"><div><div class="eyebrow">REVISION ${q.revision}</div><h3>${h(q.client_name)}</h3></div><div class="grow"></div>${pill(q.status)}</div><div class="spacer"></div>
  <div class="quote-layout"><div>${sfQuoteSummary(q.result)}<p class="source-warning">${h(q.result.tax_note||'Before applicable taxes.')}</p></div>
  <div class="stack"><div class="panel panel-body"><div class="info-grid"><div><div class="info-label">Service date</div><div class="strong">${dateLabel(q.inputs.move_date)}</div></div><div><div class="info-label">Deposit</div><div class="strong">${money(Number(q.inputs.deposit_required??300)*100)}</div></div><div><div class="info-label">Template</div><div>${h(q.inputs.template_id||'Standard')}</div></div><div><div class="info-label">Language</div><div>${h(q.inputs.template_language||'Client preference')}</div></div></div></div>
@@ -306,7 +306,14 @@ document.addEventListener('click',async e=>{
   if(a==='send-mail'){
    if(!document.getElementById('sf-send-reviewed')?.checked)throw Error('Check the review box before sending.');
    const out=await api('/ux/outbound/'+encodeURIComponent(id)+'/send-reviewed',{method:'POST',data:{reviewed:true,contact_confirmed:document.getElementById('sf-contact-confirmed')?.checked===true}});
-   modal.close();toast(out.sent?'Estimate email sent.':'Email was not confirmed as sent.');return navigate('quotes');
+   modal.close();toast(out.sent?'Email sent.':'Email was not confirmed as sent.');return navigate('quotes');
+  }
+  if(a==='deposit-reminder'){
+   const r=await api('/ux/quotes/'+encodeURIComponent(id)+'/prepare-deposit-reminder',{method:'POST'});
+   return showModal('Deposit reminder',`<div class="callout teal"><strong>Friendly reminder ready</strong>Review the amount and recipient before sending.</div><div class="spacer"></div>
+    ${field('sf_subject','Subject',r.subject)}${textArea('sf_body','Message',r.body,10)}
+    <label class="checkbox-label"><input id="sf-send-reviewed" type="checkbox">I reviewed this reminder and want to send it.</label>`,
+    `${btn('close','Cancel')}<button class="btn-primary" data-sf="send-mail" data-id="${h(r.mail_id)}">Send reminder</button>`,true);
   }
   if(a==='booking-exception'){
    return showModal('Approve cash / cheque arrangement',`<form id="sf-booking-exception" data-sf-form="booking-exception"><input type="hidden" name="id" value="${h(id)}">
