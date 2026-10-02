@@ -7,6 +7,17 @@ Private single-company web application for Crown Movers: sales, reviewed estimat
 
 **Start with START_HERE.md.** Runnable server code is the deliverable. No real accounts, private records, payment credentials or API keys are shipped in this source package. No deployment or live provider validation is implied.
 
+## QuickBooks release safety
+
+QuickBooks authorization and QuickBooks writes are deliberately separate.
+
+- `QBO_ENV=sandbox` selects the Intuit sandbox.
+- Sandbox writes require `CROWNOPS_ALLOW_QBO_SANDBOX_WRITES=1`.
+- Production writes require both `CROWNOPS_ENV=production` and `CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES=1`.
+- The general `CROWNOPS_ALLOW_EXTERNAL` switch does not enable QuickBooks writes.
+- QuickBooks mappings can be read from the connected sandbox and saved from CrownOps Connections without enabling writes.
+- Never enable production QuickBooks writes until customer, estimate, invoice, payment, duplicate-protection and amount-matching tests pass in sandbox.
+
 ## v5.6 final-workflow polish
 
 The sales sidebar now separates **Sales & clients**, **Estimates**, **Follow-ups**, and **Communications**. Estimates and invoices have searchable status browsers and overview metrics; follow-ups have due/overdue/upcoming/completed views. Claiming a lead or inbox conversation assigns unowned open follow-ups to that staff member. Today surfaces CRM tasks and payment exceptions instead of historical Gmail call noise.
