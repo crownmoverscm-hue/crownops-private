@@ -323,13 +323,32 @@ document.addEventListener('click',async e=>{
   if(a==='gmail-sync'){const rr=await api('/gmail/sync-readonly',{method:'POST',data:{days:14,max_per_feed:30}});toast(`Gmail sync: ${rr.new_leads} new lead(s), ${rr.new_events} new item(s).`);return navigate('connections');}
   if(a==='gmail-v8-test'){const rr=await api('/gmail/sync-v8-test',{method:'POST',data:{days:2,max_per_feed:20}});toast(`V8 test: ${rr.new_leads} new lead(s), ${rr.new_events} processed.`);return navigate('communications');}
   if(a==='gmail-reviewed'){await api('/gmail/review/'+encodeURIComponent(id)+'/reviewed',{method:'POST'});toast('Marked reviewed.');return navigate('connections');}
-  if(a==='qbo-test'){const q=await api('/quickbooks/test-connection');toast('QuickBooks sandbox connected: '+(q.company_name||q.realm_id));return navigate('connections');}
+  if(a==='qbo-test'){const q=await api('/quickbooks/test-connection');toast('QuickBooks '+q.environment+' connected: '+(q.company_name||q.realm_id));return navigate('connections');}
   if(a==='qbo-setup'){
-    const q=await api('/quickbooks/setup');UX.qboSetup=q;
-    const items=[['','Choose service item'],...q.items.map(x=>[x.id,x.name+' ('+x.type+')'])];
-    const taxes=[['','Choose tax code'],...q.tax_codes.map(x=>[x.id,x.name])];
-    const accounts=[['','Choose account'],...q.accounts.map(x=>[x.id,x.name+(x.subtype?' - '+x.subtype:'')])];
-    return showModal('QuickBooks setup',`<form id="ux-qbo-setup" data-ux-form="qbo-setup"><div class="callout"><strong>${h(q.company_name||'QuickBooks company')}</strong><div class="tiny muted">Environment: ${h(q.environment)}. This screen only reads the connected company and saves mappings in CrownOps. No accounting record is created here.</div></div><div class="spacer"></div><div class="grid2">${select('service_item_id','Moving service item',items,q.mappings.service_item_id,'required')}${select('tax_code_id','Sales tax code',taxes,q.mappings.tax_code_id,'required')}${select('discount_account_id','Discount account',accounts,q.mappings.discount_account_id)}${select('deposit_account_id','Deposit account',accounts,q.mappings.deposit_account_id,'required')}</div>${q.errors?.length?`<div class="spacer"></div><div class="callout orange">QuickBooks could not load: ${h(q.errors.join(', '))}. Reconnect or retry before saving.</div>`:''}</form>`,`${btn('close','Cancel')}<button type="submit" form="ux-qbo-setup" class="btn-primary">Save ${h(q.environment)} mapping</button>`);
+    const q=await api('/quickbooks/setup');UX.qboSetup=q;const rec=q.recommendations||{};
+    const serviceRows=q.items.filter(x=>String(x.type).toLowerCase()==='service');
+    const serviceValue=q.mappings.service_item_id||rec.service_item_id||'';
+    const taxValue=q.mappings.tax_code_id||rec.tax_code_id||'';
+    const depositValue=q.mappings.deposit_account_id||rec.deposit_account_id||'';
+    const discountValue=q.mappings.discount_account_id||'';
+    const items=[['','Choose a moving-service item'],...serviceRows.map(x=>[x.id,x.name+(x.id===rec.service_item_id?' — recommended for test':'')])];
+    const specialTax=x=>/adjust|exempt|zero|out of scope|non-tax/i.test((x.name||'')+' '+(x.description||''));
+    const normalTaxes=q.tax_codes.filter(x=>!specialTax(x)),otherTaxes=q.tax_codes.filter(specialTax);
+    const taxes=[['','Choose the normal Quebec sales-tax code'],...normalTaxes.map(x=>[x.id,x.name+(x.id===rec.tax_code_id?' — recommended':'')]),...otherTaxes.map(x=>[x.id,x.name+' — special/adjustment'])];
+    const accounts=[['','Choose where received payments wait'],...q.accounts.map(x=>[x.id,x.name+(x.subtype?' - '+x.subtype:'')+(x.id===rec.deposit_account_id?' — recommended':'')])];
+    const discountAccounts=[['','No discount account yet'],...q.accounts.filter(x=>/discount/i.test(x.name||'')).map(x=>[x.id,x.name+(x.id===rec.discount_account_id?' — recommended':'')]),...q.accounts.filter(x=>!/discount/i.test(x.name||'')).map(x=>[x.id,x.name+(x.subtype?' - '+x.subtype:'')])];
+    const env=q.environment==='sandbox'?'TEST SANDBOX':'LIVE COMPANY';
+    return showModal('QuickBooks for Crown Movers',`<form id="ux-qbo-setup" data-ux-form="qbo-setup">
+      <div class="callout teal"><strong>${h(q.company_name||'QuickBooks company')} · ${env}</strong><div class="small muted" style="margin-top:6px">This is not general accounting setup. CrownOps only needs three simple defaults for moving jobs. Saving this screen does not create an invoice or payment.</div></div>
+      <div class="spacer"></div>
+      <div class="stack">
+        <div class="panel panel-body"><div class="eyebrow">1 · WHAT WE SELL</div><h3>Moving service</h3><p class="small muted">QuickBooks needs one Product/Service name for Crown Movers' labour and moving charges. Only Service items are shown here; inventory and event categories are hidden.</p>${select('service_item_id','QuickBooks service item',items,serviceValue,'required')}</div>
+        <div class="panel panel-body"><div class="eyebrow">2 · TAX ON A NORMAL QUEBEC MOVE</div><h3>GST + QST</h3><p class="small muted">For an ordinary taxable Quebec move, use the regular combined Quebec GST/QST code. Do not use an Adjustment, Exempt or Zero-rated code for a normal move. Special/out-of-province jobs should be reviewed separately before syncing.</p>${select('tax_code_id','Default Quebec tax code',taxes,taxValue,'required')}</div>
+        <div class="panel panel-body"><div class="eyebrow">3 · WHEN A CLIENT PAYS</div><h3>Payment holding account</h3><p class="small muted"><strong>Undeposited Funds</strong> is the normal test choice: QuickBooks records the payment as received, then it can be matched to the actual bank deposit later.</p>${select('deposit_account_id','Received payments go to',accounts,depositValue,'required')}</div>
+        <details class="panel panel-body"><summary class="strong">Advanced: discounts</summary><div class="spacer"></div><p class="small muted">Leave this blank for now unless you are testing an estimate or invoice with a discount. CrownOps will refuse to export a discounted invoice until this account is reviewed.</p>${select('discount_account_id','Discounts-given account',discountAccounts,discountValue)}</details>
+      </div>
+      ${q.errors?.length?`<div class="spacer"></div><div class="callout orange">QuickBooks could not load: ${h(q.errors.join(', '))}. Reconnect or retry before saving.</div>`:''}
+    </form>`,`${btn('close','Cancel')}<button type="submit" form="ux-qbo-setup" class="btn-primary">Save moving-company setup</button>`,true);
   }
   if(a==='company-email-edit'){const c=UX.companyComms||{};return showModal('Company email rules',`<form id="ux-email-rules" data-ux-form="company-email"><div class="grid2">${field('connected_mailbox','Connected Gmail / storage',c.connected_mailbox||'crownmovers.cm@gmail.com','email','required')}${field('send_as','Client sees From',c.send_as||'info@crownmovers.ca','email','required')}${field('reply_to','Reply-To',c.reply_to||'info@crownmovers.ca','email','required')}${checkedField('approved','Approved for production after connection testing',Boolean(c.approved))}${textArea('note','Internal note',c.note||'',3)}</div></form>`,`${btn('close','Cancel')}<button type="submit" form="ux-email-rules" class="btn-primary">Save rules</button>`);}
   if(a==='setup-go'){const target=el.dataset.pageTarget;if(target==='settings-legacy'){const html=await uxOldSettings();document.getElementById('content').innerHTML=html;return;}return navigate(target);}
