@@ -60,13 +60,13 @@ def register_operations(app,path,auth):
     def get_settings(u=Depends(auth)):
         require_role(u,OFFICE)
         with closing(connect(path)) as db:
-            result={k:settings(db,k,{}) for k in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy')}
+            result={k:settings(db,k,{}) for k in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy','deposit_policy')}
         return result
 
     @app.post('/api/platform/settings/{key}')
     def set_settings(key:str,data:dict,u=Depends(auth)):
         require_role(u,MANAGERS)
-        if key not in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy'):raise HTTPException(422,'Unknown settings group.')
+        if key not in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy','deposit_policy'):raise HTTPException(422,'Unknown settings group.')
         if key in ('client_terms','media_program'):
             if not text(data.get('version',''),'Version',100):raise HTTPException(422,'A version is required.')
             field='release_text' if key=='media_program' else 'text'
@@ -90,6 +90,15 @@ def register_operations(app,path,auth):
             allowed={'preparation','invoice_followup','review_request','fleet_tasks'}
             if set(data)-allowed-{'review_url','enabled'}:raise HTTPException(422,'Unknown automation setting.')
             if data.get('review_url') and not str(data['review_url']).startswith('https://'):raise HTTPException(422,'Use a secure review URL.')
+        if key=='deposit_policy':
+            allowed={'etransfer_email','autodeposit','card_enabled','cash_cheque_exception','note'}
+            if set(data)-allowed:raise HTTPException(422,'Unknown deposit setting.')
+            email=str(data.get('etransfer_email') or '').strip().lower()
+            if email and ('@' not in email or ' ' in email):raise HTTPException(422,'Enter a valid e-transfer email address.')
+            data['etransfer_email']=email
+            data['autodeposit']=bool(data.get('autodeposit'))
+            data['card_enabled']=bool(data.get('card_enabled'))
+            data['cash_cheque_exception']=bool(data.get('cash_cheque_exception'))
         if data.get('approved') is True and not data.get('review_note'):raise HTTPException(422,'Record who reviewed these operational terms and rules.')
         with transaction(path) as db:
             put_setting(db,key,{**data,'updated_by':u['id'],'updated_at':now()});audit(db,u['id'],'Configuration updated','settings',key,{'approved':data.get('approved',False)})
