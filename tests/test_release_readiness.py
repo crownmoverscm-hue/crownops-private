@@ -99,6 +99,20 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             os.environ.pop("QBO_SERVICE_ITEM_ID", None)
             self.assertEqual(qbo_mapping(db_path, "service_item_id"), "")
 
+    def test_production_mapping_is_separate_and_can_be_prepared_while_writes_are_off(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "crownops.sqlite3"
+            initialize(db_path)
+            with transaction(db_path) as db:
+                put_setting(db, "quickbooks_mappings_sandbox", {"service_item_id": "sandbox-item"})
+                put_setting(db, "quickbooks_mappings_production", {"service_item_id": "production-item"})
+            os.environ["QBO_ENV"] = "production"
+            os.environ["CROWNOPS_ENV"] = "production"
+            os.environ.pop("CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES", None)
+            self.assertFalse(quickbooks_write_enabled())
+            self.assertEqual(qbo_mapping(db_path, "service_item_id"), "production-item")
+
+
     def test_invoice_payload_uses_reviewed_item_tax_and_discount_refs(self):
         doc = {
             "id": "INV-TEST-1",
