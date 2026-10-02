@@ -209,6 +209,37 @@ def mark_booking_locked(db, lead_id, actor, reason):
     audit(db, actor, "Booking locked pending dispatch assignment", "leads", lead_id, {"reason": reason})
 
 
+def queue_booking_confirmation(db, lead_id, quote_id, actor, reason):
+    lead = one(db, "SELECT * FROM leads WHERE id=?", (lead_id,))
+    if not lead or not lead.get("email") or lead.get("notifications_suppressed"):
+        return None
+    fr = str(lead.get("language") or "").lower().startswith("fr")
+    if fr:
+        subject = "Votre déménagement est réservé | Crown Movers"
+        body = (
+            f"Bonjour {lead['client_name']},\n\nC'est confirmé : votre service Crown Movers est maintenant réservé pour le "
+            f"{lead.get('move_date') or 'date convenue'}.\n\nSi une urgence vous oblige à changer la date, prévenez-nous dès que possible. "
+            "Conformément aux conditions de réservation acceptées, nous demandons au moins 10 jours de préavis. "
+            "Un changement avec moins de 10 jours de préavis peut entraîner la perte du dépôt. Une nouvelle date demeure "
+            "sujette aux disponibilités et le tarif peut changer selon la nouvelle date. Nous ferons toujours notre possible "
+            "pour trouver la meilleure option disponible.\n\nMerci de votre confiance!\nCrown Movers"
+        )
+    else:
+        subject = "You're booked and ready to go! | Crown Movers"
+        body = (
+            f"Hi {lead['client_name']},\n\nYou're confirmed: your Crown Movers service is now booked for "
+            f"{lead.get('move_date') or 'the agreed date'}.\n\nIf an emergency means you need to change the date, please tell us as early as possible. "
+            "Under the booking terms you accepted, we require at least 10 days' notice. A change with less than 10 days' notice "
+            "may result in loss of the deposit. A replacement date is subject to availability, and the rate may change based on "
+            "the new date. We will always work with you to find the best available option.\n\nThank you for choosing Crown Movers!\nCrown Movers"
+        )
+    key = "booking-confirmation:" + quote_id
+    mail = queue_message(db, lead_id, subject, body, "Preparation", actor, key)
+    db.execute("UPDATE outbound_messages SET status='Approved',approved_by=? WHERE id=? AND status='Draft'", (actor, mail["id"]))
+    audit(db, actor, "Booking confirmation prepared for automatic delivery", "outbound_messages", mail["id"], {"reason": reason})
+    return mail["id"]
+
+
 def register_sales_final(app, path, auth, public_url):
     @app.get("/api/ux/clients")
     def clients(q: str = "", u=Depends(auth)):
@@ -314,7 +345,8 @@ def register_sales_final(app, path, auth, public_url):
                 created_by=u["id"], created_at=now()
             ))
             link = public_url + "/portal#access=" + raw
-            fr = str(lead.get("language") or "").lower().startswith("fr")
+            quote_inputs = json.loads(q["inputs_json"])
+            fr = str(quote_inputs.get("template_language") or lead.get("language") or "").lower().startswith("fr")
             if fr:
                 subject = "Votre devis Crown Movers est prêt"
                 body = (
@@ -373,8 +405,18 @@ def register_sales_final(app, path, auth, public_url):
             if job:
                 db.execute("UPDATE jobs SET exception_reason=?,version=version+1 WHERE id=?", (method + ": " + note, job["id"]))
             mark_booking_locked(db, q["lead_id"], u["id"], method)
+            confirmation_mail_id = queue_booking_confirmation(db, q["lead_id"], qid, u["id"], method)
             add_task(db, q["lead_id"], "Collect " + method.lower() + " and verify receipt", u["id"], "cash-arrangement:" + qid)
-        return {"ok": True, "booking_locked": True, "payment_received": False, "job_id": job["id"] if job else None}
+        sent = False
+        if confirmation_mail_id:
+            try:
+                from .providers import process_mail
+                sent = bool(process_mail(path, confirmation_mail_id).get("sent"))
+            except Exception:
+                with transaction(path) as db:
+                    add_task(db, q["lead_id"], "Send booking confirmation email", u["id"], "booking-confirmation-send:" + qid)
+        return {"ok": True, "booking_locked": True, "payment_received": False, "job_id": job["id"] if job else None,
+                "confirmation_mail_id": confirmation_mail_id, "confirmation_sent": sent}
 
     @app.post("/api/ux/jobs/{jid}/prepare-review-request")
     def prepare_review_request(jid: str, u=Depends(auth)):
@@ -389,7 +431,8 @@ def register_sales_final(app, path, auth, public_url):
             if one(db, "SELECT id FROM cases WHERE lead_id=? AND status!='Resolved' LIMIT 1", (lead["id"],)):
                 raise HTTPException(409, "Resolve the open client concern before sending a routine review request.")
             cfg = settings(db, "review_request_v1", {})
-            url = str(cfg.get("google_review_url") or "").strip()
+            automation = settings(db, "automation_policy", {}) or {}
+            url = str(cfg.get("google_review_url") or automation.get("review_url") or "").strip()
             link_text = url if url else "Reply to this email with your feedback."
             fr = str(lead.get("language") or "").lower().startswith("fr")
             template = cfg.get("french" if fr else "english") or DEFAULT_TEMPLATES[0]["liability_text"]
