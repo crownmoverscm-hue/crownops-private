@@ -81,6 +81,14 @@ def seed_sales_final_defaults(path):
                 "tv_protection_package": 35.00,
                 "limited_liability_per_lb": 0.60,
             })
+        if settings(db, "deposit_policy") is None:
+            put_setting(db, "deposit_policy", {
+                "etransfer_email": "",
+                "autodeposit": True,
+                "card_enabled": True,
+                "cash_cheque_exception": True,
+                "note": "Add the verified Crown Movers e-transfer address before production client use."
+            })
         if settings(db, "client_terms") is None:
             put_setting(db, "client_terms", {
                 "approved": False,
