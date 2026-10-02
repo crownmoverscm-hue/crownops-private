@@ -201,11 +201,13 @@ def register_providers(app,path,auth,public_url,new_lead=None):
           lambda x:'hour' in x['name'].lower(),
           lambda x:'service' in x['name'].lower())
         bad_tax=('adjust','exempt','zero','out of scope','non-tax')
-        regular_taxes=[x for x in tax_rows if not any(w in (x['name']+' '+x.get('description','')).lower() for w in bad_tax)]
-        tax_id=pick(regular_taxes,
-          lambda x:'gst/qst qc' in x['name'].lower(),
-          lambda x:'gst' in x['name'].lower() and 'qst' in x['name'].lower(),
-          lambda x:x['name'].strip().lower() in ('s','standard'))
+        def is_quebec_combo(x):
+            label=(x.get('name','')+' '+x.get('description','')).lower()
+            return (('gst' in label and 'qst' in label) or ('tps' in label and 'tvq' in label)) and not any(w in label for w in bad_tax)
+        quebec_taxes=[x for x in tax_rows if is_quebec_combo(x)]
+        tax_id=pick(quebec_taxes,
+          lambda x:'gst/qst qc' in (x['name']+' '+x.get('description','')).lower(),
+          lambda x:'tps/tvq' in (x['name']+' '+x.get('description','')).lower())
         deposit_id=pick(account_rows,
           lambda x:str(x.get('subtype','')).lower()=='undepositedfunds',
           lambda x:'undeposited' in x['name'].lower())
@@ -214,7 +216,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
           lambda x:True)
         return {'environment':quickbooks_environment(),'realm_id':realm,'company_name':company.get('CompanyName') or company.get('LegalName') or '',
           'writes_enabled':quickbooks_write_enabled(),'mappings':current,'errors':errors,
-          'recommendations':{'service_item_id':service_id,'tax_code_id':tax_id,'discount_account_id':discount_id,'deposit_account_id':deposit_id},
+          'recommendations':{'service_item_id':service_id,'tax_code_id':tax_id,'discount_account_id':discount_id,'deposit_account_id':deposit_id},'quebec_tax_ready':bool(quebec_taxes),'quebec_tax_codes':quebec_taxes,
           'items':item_rows,'tax_codes':tax_rows,'accounts':account_rows}
 
     @app.patch('/api/quickbooks/setup')
