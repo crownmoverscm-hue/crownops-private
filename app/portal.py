@@ -165,8 +165,10 @@ def register_portal(app,path,auth,public_url,secure):
             ref=dumps({'name':data['signed_name'],'portal_email':c['email'],'terms_version':terms['version'],'terms_text':terms['text'],'accepted_at':now()})
             db.execute("UPDATE quotes SET status='Accepted',acceptance_ref=?,accepted_at=? WHERE id=?",(ref,now(),qid))
             db.execute("UPDATE leads SET stage='Accepted' WHERE id=?",(c['lead_id'],))
-            add_task(db,c['lead_id'],'Verify deposit and dispatch capacity after acceptance',l['assigned_to'],'accepted:'+qid)
-            audit(db,'client:'+c['email'],'Quote accepted in portal','quotes',qid,{'terms_version':terms['version']})
+            from .sales_launch import ensure_tentative_job
+            ensure_tentative_job(db,qid,'client:'+c['email'])
+            add_task(db,c['lead_id'],'Verify deposit and assign crew / truck',l['assigned_to'],'accepted:'+qid)
+            audit(db,'client:'+c['email'],'Quote accepted in portal','quotes',qid,{'terms_version':terms['version'],'tentative_schedule_hold':True})
         return {'ok':True,'booking_confirmed':False,'message':'Estimate accepted. Crown will verify the deposit and scheduling before confirming your booking.'}
 
     def get_file(db,aid,lid=None,u=None):
