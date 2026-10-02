@@ -140,7 +140,7 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
         if not subject or not body:raise HTTPException(422,'Subject and message are required.')
         if '\r' in subject or '\n' in subject:raise HTTPException(422,'Subject must be one line.')
         category=data.get('category','Reply')
-        if category not in ('Reply','Follow-up','Preparation','Invoice','Collection','Review request'):raise HTTPException(422,'Choose an operational message category.')
+        if category not in ('Reply','Follow-up','Preparation','Invoice','Collection','Review request','Estimate','Booking confirmation','Deposit reminder'):raise HTTPException(422,'Choose an operational message category.')
         with transaction(path) as db:
             l=staff_read_project(db,data.get('lead_id'),u);r=queue_message(db,l['id'],subject,body,category,u['id'],'manual:'+uid('MESSAGE'))
             audit(db,u['id'],'Client email draft created; not sent','outbound_messages',r['id'])
