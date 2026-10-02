@@ -409,6 +409,8 @@ def register_review_features(app,path,auth,public_url):
         with transaction(path) as db:
             tmpl=one(db,'SELECT * FROM document_templates WHERE id=? AND active=1',(tid,))
             if not tmpl:raise HTTPException(404,'Active template not found.')
+            if os.getenv('CROWNOPS_ENV','test')=='production' and 'TEST TEMPLATE - LEGAL REVIEW REQUIRED BEFORE LIVE USE.' in tmpl['body']:
+                raise HTTPException(409,'This acknowledgement still contains test wording. Replace it with reviewed production wording before use.')
             if u['role']=='crew' and tmpl['manager_only']:raise HTTPException(403,'This template is management-only.')
             if jid:
                 j=_job_assigned(db,jid,u,write=(u['role']=='crew'))

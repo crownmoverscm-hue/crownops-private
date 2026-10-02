@@ -72,7 +72,8 @@ def qbo_query(path,statement):
 
 def qbo_mapping(path,key):
     env_key={'service_item_id':'QBO_SERVICE_ITEM_ID','tax_code_id':'QBO_TAX_CODE_ID','discount_account_id':'QBO_DISCOUNT_ACCOUNT_ID','deposit_account_id':'QBO_DEPOSIT_ACCOUNT_ID'}[key]
-    with closing(connect(path)) as db:saved=settings(db,'quickbooks_mappings',{}) or {}
+    mapping_key='quickbooks_mappings_'+quickbooks_environment()
+    with closing(connect(path)) as db:saved=settings(db,mapping_key,{}) or {}
     return str(saved.get(key) or os.getenv(env_key,'')).strip()
 
 def qbo_customer(path,l):
@@ -179,7 +180,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         except Exception:accounts=[];errors.append('accounts')
         try:company=qbo_read(path,'companyinfo/'+realm).get('CompanyInfo',{})
         except Exception:company={};errors.append('company')
-        with closing(connect(path)) as db:saved=settings(db,'quickbooks_mappings',{}) or {}
+        with closing(connect(path)) as db:saved=settings(db,'quickbooks_mappings_'+quickbooks_environment(),{}) or {}
         current={
           'service_item_id':str(saved.get('service_item_id') or os.getenv('QBO_SERVICE_ITEM_ID','')),
           'tax_code_id':str(saved.get('tax_code_id') or os.getenv('QBO_TAX_CODE_ID','')),
@@ -205,7 +206,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         if mapped['deposit_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a deposit account from the connected QuickBooks sandbox.')
         if mapped['discount_account_id'] and mapped['discount_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a discount account from the connected QuickBooks sandbox.')
         with transaction(path) as db:
-            put_setting(db,'quickbooks_mappings',mapped);audit(db,u['id'],'QuickBooks sandbox mappings saved','settings','quickbooks_mappings',mapped)
+            put_setting(db,'quickbooks_mappings_sandbox',mapped);audit(db,u['id'],'QuickBooks sandbox mappings saved','settings','quickbooks_mappings_sandbox',mapped)
         return {'ok':True,'environment':'sandbox','mappings':mapped,'writes_enabled':quickbooks_write_enabled()}
 
     @app.get('/api/quickbooks/test-connection')
