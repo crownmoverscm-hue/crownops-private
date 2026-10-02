@@ -79,7 +79,9 @@ def qbo_customer(path,l):
     with closing(connect(path)) as db:old=one(db,"SELECT external_id FROM external_records WHERE provider='quickbooks' AND kind='Customer' AND object_id=? AND revision=0",(l['id'],))
     if old:return old['external_id']
     name=(l['client_name'][:65]+' | '+l['id'][-12:])
-    body={'DisplayName':name,'PrimaryEmailAddr':{'Address':l['email']},'PrimaryPhone':{'FreeFormNumber':l['phone']}}
+    body={'DisplayName':name}
+    if (l.get('email') or '').strip():body['PrimaryEmailAddr']={'Address':l['email'].strip()}
+    if (l.get('phone') or '').strip():body['PrimaryPhone']={'FreeFormNumber':l['phone'].strip()}
     r=qbo_call(path,'POST','customer',body,'customer:'+l['id'])['Customer']
     with transaction(path) as db:
         db.execute('INSERT OR IGNORE INTO external_records(provider,kind,object_id,external_id,updated_at) VALUES(?,?,?,?,?)',('quickbooks','Customer',l['id'],r['Id'],now()))
