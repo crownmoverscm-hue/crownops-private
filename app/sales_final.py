@@ -81,6 +81,22 @@ def seed_sales_final_defaults(path):
                 "tv_protection_package": 35.00,
                 "limited_liability_per_lb": 0.60,
             })
+        if settings(db, "client_terms") is None:
+            put_setting(db, "client_terms", {
+                "approved": False,
+                "version": "CROWN-BOOKING-DRAFT-2026-10",
+                "text": (
+                    "DRAFT - MANAGEMENT REVIEW REQUIRED BEFORE ACTIVATION. "
+                    "Your accepted estimate reserves the quoted scope and rates, subject to the stated minimums, transportation, fuel, materials and applicable taxes. "
+                    "A booking is locked when the required deposit is verified or Crown Movers approves a documented cash/cheque arrangement. "
+                    "If an emergency requires a date change, please provide at least 10 days' notice. A change with less than 10 days' notice may result in loss of the deposit. "
+                    "Replacement dates are subject to availability, and pricing may change according to the rates applicable to the new date. "
+                    "Crown Movers will make reasonable efforts to accommodate requested changes. "
+                    "Standard limited liability coverage is $0.60 per pound per article unless separate additional coverage is accepted in writing. "
+                    "Fragile items such as televisions, large mirrors and glass require suitable packing/protection; any special handling or coverage terms shown on the estimate also apply."
+                ),
+                "review_note": "Draft created from Crown Movers requested workflow; management/legal review required before activation."
+            })
         if settings(db, "review_request_v1") is None:
             put_setting(db, "review_request_v1", {
                 "google_review_url": "",
