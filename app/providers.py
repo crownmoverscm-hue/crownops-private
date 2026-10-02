@@ -310,7 +310,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
 
     @app.post('/api/invoices/{iid}/quickbooks')
     def sync_invoice(iid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'});external_gate()
+        require_role(u,{'owner','accounting'});quickbooks_gate()
         if data.get('confirmed',data.get('confirm')) is not True:raise HTTPException(422,'Confirm the accounting write after reviewing mappings and totals.')
         with transaction(path) as db:
             inv,calc=invoice_current(db,iid)
