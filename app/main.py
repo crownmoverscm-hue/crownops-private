@@ -975,6 +975,21 @@ def create_app(database_path=None):
             p=dict(id=uid('PAY'),lead_id=lead['id'],amount_cents=amount,method=data['method'],purpose=purpose,
                 reference=reference,verified=int(verified),recorded_by=u['id'],created_at=now())
             insert(db,'payments',p);audit(db,u['id'],'Payment recorded','payments',p['id'],{'verified':verified,'amount_cents':amount})
+            if verified and purpose=='Deposit':
+                q=one(db,"SELECT * FROM quotes WHERE lead_id=? AND status='Accepted' ORDER BY revision DESC LIMIT 1",(lead['id'],))
+                if q:
+                    from .sales_final import ensure_booking_hold,mark_booking_locked,queue_booking_confirmation
+                    ensure_booking_hold(db,lead['id'],q['id'],u['id'])
+                    mark_booking_locked(db,lead['id'],u['id'],'Verified '+data['method']+' deposit')
+                    confirmation_mail_id=queue_booking_confirmation(db,lead['id'],q['id'],u['id'],'Verified '+data['method']+' deposit')
+                else:confirmation_mail_id=None
+            else:confirmation_mail_id=None
+        if confirmation_mail_id:
+            try:
+                from .providers import process_mail
+                process_mail(path,confirmation_mail_id)
+            except Exception:
+                with transaction(path) as db:add_task(db,p['lead_id'],'Send booking confirmation email',u['id'],'booking-confirmation-send:'+p['id'])
         return p
 
     @app.post('/api/payments/{pid}/verify')
@@ -987,7 +1002,22 @@ def create_app(database_path=None):
             if p['reverses_id']:raise HTTPException(422,'Verify the original and reversal together through accounting review.')
             db.execute('UPDATE payments SET verified=1 WHERE id=? OR reverses_id=?',(pid,pid))
             audit(db,u['id'],'Payment receipt verified','payments',pid)
-        return {'ok':True}
+            if p['purpose']=='Deposit':
+                q=one(db,"SELECT * FROM quotes WHERE lead_id=? AND status='Accepted' ORDER BY revision DESC LIMIT 1",(p['lead_id'],))
+                if q:
+                    from .sales_final import ensure_booking_hold,mark_booking_locked,queue_booking_confirmation
+                    ensure_booking_hold(db,p['lead_id'],q['id'],u['id'])
+                    mark_booking_locked(db,p['lead_id'],u['id'],'Verified '+p['method']+' deposit')
+                    confirmation_mail_id=queue_booking_confirmation(db,p['lead_id'],q['id'],u['id'],'Verified '+p['method']+' deposit')
+                else:confirmation_mail_id=None
+            else:confirmation_mail_id=None
+        if confirmation_mail_id:
+            try:
+                from .providers import process_mail
+                process_mail(path,confirmation_mail_id)
+            except Exception:
+                with transaction(path) as db:add_task(db,p['lead_id'],'Send booking confirmation email',u['id'],'booking-confirmation-send:'+pid)
+        return {'ok':True,'booking_locked':bool(confirmation_mail_id)}
 
     @app.post('/api/payments/{pid}/reverse')
     def reverse_payment(pid:str,data:dict,u=Depends(auth)):
