@@ -79,11 +79,11 @@ async function slQuoteBuilder(lid){
  slSelect('movers','Movers',[2,3,4,5,6],2)+slSelect('trucks','Trucks',[[0,'0 trucks'],[1,'1 truck'],[2,'2 trucks'],[3,'3 trucks'],[4,'4 trucks']],1)+
  '</div></div>'+
  '<div class="panel panel-body"><div class="eyebrow">2 · LABOUR & HOURS</div><p class="small muted">The saved date and mover count determine the standard hourly rate. You can override it for this estimate.</p><div class="grid2">'+
- slField('hourly_rate_override','Hourly rate override (leave 0 for saved rate)',0,'number','min="0" step="0.01"')+
+ slField('hourly_rate_override','Hourly rate',0,'number','min="0" step="0.01"')+
  slField('minimum_hours','Service minimum',3,'number','min="0" step="0.25"')+
  slField('hours_low','Estimated service hours · low','','number','min="0" step="0.25"')+
  slField('hours_high','Estimated service hours · high','','number','min="0" step="0.25"')+
- '</div><div class="tiny muted" id="sl-rate-help">Click Calculate and CrownOps will fill the saved rate and a suggested hour range when these are blank.</div></div>'+
+ '</div><div class="tiny muted" id="sl-rate-help">The date and mover count automatically load the saved hourly rate and a suggested hour range. You can edit them.</div></div>'+
  '<div class="panel panel-body"><div class="eyebrow">3 · TRANSPORT & FUEL</div><div class="grid2">'+
  slSelect('transport_mode','Transportation charge',[['hours','Hourly calculation'],['fixed','Fixed client-facing amount']],'hours')+
  slField('transport_hours','Transportation hours',1,'number','min="0" step="0.25"')+
@@ -109,8 +109,7 @@ async function slQuoteBuilder(lid){
  slField('junk_labor_blocks','Extra 30-minute 2-person labour blocks',0,'number','min="0" step="1"')+
  '</div><p class="tiny muted">$80 per additional 30 minutes for 2 crew members.</p></details>'+
  '</div><div><div id="sl-quote-result">'+slResult(null)+'</div><div class="spacer"></div><div class="callout teal"><strong>Simple rule</strong>Change any number you need. CrownOps keeps the saved company rate as the default but never hides the rate you are actually offering the client.</div></div></div></form>';
- showModal('New estimate · '+h(l.client_name),body,'<button class="btn-soft" data-sl="calculate">'+icon('refresh')+' Calculate</button><button class="btn-primary" type="submit" form="sl-quote-form">Save draft</button>',true);
-}
+ showModal('New estimate · '+h(l.client_name),body,'<button class="btn-soft" data-sl="calculate">'+icon('refresh')+' Calculate</button><button class="btn-primary" type="submit" form="sl-quote-form">Save draft</button>',true);\n setTimeout(slRefreshRate,0);\n}
 newQuote=slQuoteBuilder;
 
 function slQuoteData(){
@@ -119,6 +118,20 @@ function slQuoteData(){
  ['lead_version','movers','trucks','hourly_rate_override','minimum_hours','hours_low','hours_high','transport_hours','transport_amount','distance_km','km_rate','fuel_amount','plastic_qty','plastic_unit','bubble_qty','bubble_unit','tv_qty','tv_unit','mirror_qty','mirror_unit','fragile_qty','fragile_unit','materials_other','other_amount','discount_amount','deposit_required','junk_labor_blocks'].forEach(function(k){if(d[k]!==''&&d[k]!=null)d[k]=Number(d[k]);});
  return d;
 }
+async function slRefreshRate(){
+ const f=document.getElementById('sl-quote-form');if(!f)return;
+ const date=slVal('move_date'),movers=slNum('movers',2),lead=slVal('lead_id'),kind=slVal('service_kind','Moving - Local');
+ if(!date||kind==='Junk Removal')return;
+ try{
+  const r=await api('/launch/rate?move_date='+encodeURIComponent(date)+'&movers='+encodeURIComponent(movers)+'&lead_id='+encodeURIComponent(lead)+'&service_kind='+encodeURIComponent(kind));
+  const rate=f.querySelector('[name="hourly_rate_override"]'),low=f.querySelector('[name="hours_low"]'),high=f.querySelector('[name="hours_high"]');
+  if(rate&&!rate.dataset.userEdited){rate.value=(r.hourly_rate_cents/100).toFixed(2);}
+  if(low&&!low.value)low.value=r.suggested_hours_low||'';
+  if(high&&!high.value)high.value=r.suggested_hours_high||'';
+  const help=document.getElementById('sl-rate-help');if(help)help.innerHTML='Saved rate: <strong>'+slCash(r.hourly_rate_cents)+'/h</strong> · '+h(r.label||'rate calendar')+'. Edit the hourly rate if this client has a special offer.';
+ }catch(ex){const help=document.getElementById('sl-rate-help');if(help)help.textContent=ex.message;}
+}
+
 async function slCalculate(){
  const d=slQuoteData();if(!d)return;
  const out=await api('/launch/quotes/calculate',{method:'POST',data:d});SL.calc=out;
@@ -147,7 +160,7 @@ X.pageRenderers.sales=async function(){
 };
 
 function slQuoteStatusActions(q){
- if(q.status==='Draft')return '<button class="btn-primary" data-sl="finalize" data-id="'+h(q.id)+'">Finalize & prepare client email</button>';
+ if(q.status==='Draft')return '<button class="btn-primary" data-sl="finalize" data-id="'+h(q.id)+'">Finalize & send estimate</button>';
  if(q.status==='Approved')return '<button class="btn-primary" data-page="outbox">Open email outbox</button>';
  if(q.status==='Accepted')return '<div class="stack"><div class="callout teal"><strong>Accepted by client</strong>The service is on the schedule as tentative until the deposit is verified or you approve an alternate arrangement.</div><button class="btn-soft" data-sl="deposit-reminder" data-id="'+h(q.id)+'">Prepare deposit reminder</button><button class="btn-soft" data-sl="deposit-transfer" data-id="'+h(q.id)+'">Record verified e-transfer deposit</button><div class="row"><button class="btn-small" data-sl="deposit-cash" data-id="'+h(q.id)+'">Approve cash on move day</button><button class="btn-small" data-sl="deposit-cheque" data-id="'+h(q.id)+'">Approve cheque on move day</button></div></div>';
  return '';
@@ -170,14 +183,24 @@ document.addEventListener('click',async function(e){
   if(a==='open-launch-quote')return openQuote(b.dataset.id);
   if(a==='finalize'){
    const out=await api('/launch/quotes/'+encodeURIComponent(b.dataset.id)+'/finalize',{method:'POST',data:{confirmed:true}});
-   try{await api('/outbound/'+encodeURIComponent(out.message_id)+'/approve',{method:'POST',data:{reviewed:true}});}catch(_){}
-   toast('Estimate finalized. The client email is ready in the Outbox.');return openQuote(b.dataset.id);
+   try{
+    await api('/outbound/'+encodeURIComponent(out.message_id)+'/approve',{method:'POST',data:{reviewed:true}});
+    const sent=await api('/outbound/'+encodeURIComponent(out.message_id)+'/send',{method:'POST',data:{confirm:true}});
+    toast(sent.sent?'Estimate finalized and emailed to the client.':'Estimate finalized; email remains in Outbox.');
+   }catch(ex){toast('Estimate finalized. Email is approved in Outbox and will send once live Gmail actions are enabled.');}
+   return openQuote(b.dataset.id);
   }
   if(a==='deposit-reminder'){const r=await api('/launch/quotes/'+encodeURIComponent(b.dataset.id)+'/deposit-action',{method:'POST',data:{action:'reminder'}});try{await api('/outbound/'+encodeURIComponent(r.message_id)+'/approve',{method:'POST',data:{reviewed:true}});}catch(_){}toast('Deposit reminder prepared in Outbox.');return openQuote(b.dataset.id);}
   if(a==='deposit-transfer')return showModal('Record verified e-transfer deposit','<form id="sl-deposit-form" data-sl-form="deposit"><input type="hidden" name="quote_id" value="'+h(b.dataset.id)+'">'+slField('amount','Amount received',300,'number','min="0.01" step="0.01" required')+slField('reference','Transfer / bank reference','','text','required')+'</form>',btn('close','Cancel')+'<button type="submit" form="sl-deposit-form" class="btn-primary">Confirm received deposit</button>');
   if(a==='deposit-cash'){if(confirm('Confirm this booking with cash due on the service day? No payment will be recorded as received yet.')){await api('/launch/quotes/'+encodeURIComponent(b.dataset.id)+'/deposit-action',{method:'POST',data:{action:'cash_on_day'}});toast('Booking confirmed with cash-due exception.');return openQuote(b.dataset.id);}}
   if(a==='deposit-cheque'){if(confirm('Confirm this booking with cheque due on the service day? No payment will be recorded as received yet.')){await api('/launch/quotes/'+encodeURIComponent(b.dataset.id)+'/deposit-action',{method:'POST',data:{action:'cheque_on_day'}});toast('Booking confirmed with cheque-due exception.');return openQuote(b.dataset.id);}}
  }catch(ex){modal.open?modalError(ex):toast(ex.message);}
+});
+
+document.addEventListener('change',function(e){
+ if(!e.target.closest('#sl-quote-form'))return;
+ if(e.target.name==='hourly_rate_override')e.target.dataset.userEdited='1';
+ if(['move_date','movers','service_kind'].includes(e.target.name))slRefreshRate();
 });
 
 document.addEventListener('keydown',function(e){
