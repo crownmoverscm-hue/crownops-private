@@ -143,7 +143,7 @@ def calculate(db,l,d):
  lines=[{"code":"service","name":str(movers)+" Movers"+((" + 20 Foot Truck" if trucks==1 else " + "+str(trucks)+" Trucks") if kind.startswith("Moving") else ""),"qty":float(lo),"unit_cents":cents(rate),"total_cents":money(lo*rate)},{"code":"transport","name":"Transportation Fee","qty":1,"unit_cents":money(transport),"total_cents":money(transport)},{"code":"fuel","name":"Long-distance route / fuel" if kind=="Moving - Long Distance" else "Gas Fee","qty":1,"unit_cents":money(fuel),"total_cents":money(fuel)}]
  for code,name,qty,unit in [("plastic","Plastic protection",plastic,pu),("bubble","Bubble wrap",bubble,bu),("tv","TV protection package",tv,tvu),("mirror","Large mirror protection package",mirror,mu),("fragile","Fragile glass / table protection package",fragile,fu)]:
   if qty:lines.append({"code":code,"name":name,"qty":float(qty),"unit_cents":money(unit),"total_cents":money(qty*unit)})
- result={"currency":"CAD","before_tax":True,"hourly_rate_cents":cents(rate),"standard_hourly_rate_cents":cents(standard),"manual_rate_override":override>0,"service_low":float(lo),"service_high":float(hi),"minimum_hours":float(minimum),"transport_hours":float(th if mode!="fixed" else 0),"transport_mode":mode,"transport_cents":money(transport),"fuel_cents":money(fuel),"distance_km":float(km),"km_rate_cents":money(kmrate),"materials_cents":money(materials),"other_cents":money(other),"discount_cents":money(discount),"service_low_cents":money(lo*rate),"service_high_cents":money(hi*rate),"low_cents":money(low),"high_cents":money(high),"movers":movers,"trucks":trucks,"season":label,"pricing_id":p["id"],"service_kind":kind,"template_key":key,"line_items":lines,"tax_note":"Before applicable taxes. Quebec GST/QST is applied through the reviewed accounting mapping.","liability_note":"Free limited liability coverage: $0.60/lb per article. TVs, mirrors and fragile glass require appropriate protection/boxing. Higher-value protection requires separate insurance terms."}
+ result={"currency":"CAD","before_tax":True,"hourly_rate_cents":cents(rate),"standard_hourly_rate_cents":cents(standard),"manual_rate_override":bool(override>0 and override!=standard),"service_low":float(lo),"service_high":float(hi),"minimum_hours":float(minimum),"transport_hours":float(th if mode!="fixed" else 0),"transport_mode":mode,"transport_cents":money(transport),"fuel_cents":money(fuel),"distance_km":float(km),"km_rate_cents":money(kmrate),"materials_cents":money(materials),"other_cents":money(other),"discount_cents":money(discount),"service_low_cents":money(lo*rate),"service_high_cents":money(hi*rate),"low_cents":money(low),"high_cents":money(high),"movers":movers,"trucks":trucks,"season":label,"pricing_id":p["id"],"service_kind":kind,"template_key":key,"line_items":lines,"tax_note":"Before applicable taxes. Quebec GST/QST is applied through the reviewed accounting mapping.","liability_note":"Free limited liability coverage: $0.60/lb per article. TVs, mirrors and fragile glass require appropriate protection/boxing. Higher-value protection requires separate insurance terms."}
  inputs=dict(d);inputs.update({"service_kind":kind,"move_date":date,"language":language,"template_key":key,"movers":movers,"trucks":trucks,"start_time":str(d.get("start_time") or "09:00")[:5],"pricing_id":p["id"],"deposit_required":deposit})
  return inputs,result,{"hours_low":float(slo),"hours_high":float(shi),"standard_rate_cents":cents(standard),"rate_label":label}
 
@@ -201,7 +201,7 @@ def register_sales_launch(app,path,auth,new_lead,public_url):
   return {"templates":TEMPLATES,"junk_pricing":{k:{"name":v[0],"price_cents":money(v[1])} for k,v in JUNK.items()},"defaults":{"local_gas_per_truck_cents":3500,"extra_truck_transport_cents":2500,"long_distance_per_km_cents":94,"tv_protection_cents":3500,"fragile_protection_cents":3500,"plastic_unit_cents":money(plastic),"bubble_unit_cents":money(bubble),"liability":"Free limited liability coverage: $0.60/lb per article."}}
 
  @app.get("/api/launch/rate")
- def quote_rate(move_date:str,movers:int,u=Depends(auth)):
+ def quote_rate(move_date:str,movers:int,lead_id:str="",service_kind:str="Moving - Local",u=Depends(auth)):
   req(u)
   if not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}",move_date):raise HTTPException(422,"Choose a valid service date.")
   if movers<2 or movers>6:raise HTTPException(422,"Choose 2 to 6 movers.")
@@ -209,7 +209,9 @@ def register_sales_launch(app,path,auth,new_lead,public_url):
    p=one(db,"SELECT * FROM pricing_versions ORDER BY created_at DESC LIMIT 1")
    if not p:raise HTTPException(422,"Load the rate calendar before quoting.")
    rate,label=rate_for(db,p,move_date,movers)
-  return {"hourly_rate_cents":cents(rate),"label":label}
+   lead=one(db,"SELECT * FROM leads WHERE id=?",(lead_id,)) if lead_id else None
+   lo,hi=suggested_hours(lead,movers) if lead else (D("0"),D("0"))
+  return {"hourly_rate_cents":cents(rate),"label":label,"suggested_hours_low":float(lo),"suggested_hours_high":float(hi)}
 
  @app.get("/api/launch/clients")
  def clients(q:str="",limit:int=60,u=Depends(auth)):
