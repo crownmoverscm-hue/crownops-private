@@ -141,9 +141,9 @@ function sfApplyTemplate(){
  f.elements.fragile_text.value=t.fragile_text||'';
  f.elements.deposit_required.value=t.default_deposit??300;
  const long=Boolean(t.long_distance),junk=t.service_type==='Junk Removal';
- document.querySelectorAll('.sf-long-distance').forEach(x=>x.hidden=!long);
- document.querySelectorAll('.sf-hourly-service').forEach(x=>x.hidden=junk);
- const junkBox=document.getElementById('sf-junk-box');if(junkBox)junkBox.hidden=!junk;
+ document.querySelectorAll('.sf-long-distance').forEach(x=>{x.hidden=!long;x.querySelectorAll('input,select,textarea').forEach(i=>i.disabled=!long);});
+ document.querySelectorAll('.sf-hourly-service').forEach(x=>{x.hidden=junk;x.querySelectorAll('input,select,textarea').forEach(i=>i.disabled=junk);});
+ const junkBox=document.getElementById('sf-junk-box');if(junkBox){junkBox.hidden=!junk;junkBox.querySelectorAll('input,select,textarea').forEach(i=>i.disabled=!junk);}
  if(long&&f.elements.long_distance_gas_per_km)f.elements.long_distance_gas_per_km.value=String(SF.defaults.long_distance_gas_per_km_per_truck??0.94);
 }
 function sfQuoteData(){
