@@ -294,6 +294,14 @@ def register_sales_launch(app,path,auth,new_lead,public_url):
    l=one(db,"SELECT * FROM leads WHERE id=?",(d.get("lead_id"),))
    if not l:raise HTTPException(404,"Client service not found.")
    if int(d.get("lead_version") or l["version"])!=l["version"]:raise HTTPException(409,"Client details changed. Reload before saving.")
+   updates={}
+   if d.get("move_date") and str(d.get("move_date"))!=l["move_date"]:updates["move_date"]=str(d.get("move_date"))
+   if d.get("language") and str(d.get("language"))!=l["language"]:updates["language"]=str(d.get("language"))
+   if d.get("service_kind") and str(d.get("service_kind"))!=l["lead_type"]:updates["lead_type"]=str(d.get("service_kind"))
+   if updates:
+    assigns=",".join(k+"=?" for k in updates)
+    db.execute("UPDATE leads SET "+assigns+",version=version+1,updated_at=? WHERE id=?",list(updates.values())+[now(),l["id"]])
+    l=one(db,"SELECT * FROM leads WHERE id=?",(l["id"],))
    i,r,_=calculate(db,l,d);rev=db.execute("SELECT COALESCE(MAX(revision),0)+1 FROM quotes WHERE lead_id=?",(l["id"],)).fetchone()[0]
    snap={k:l.get(k,"") for k in ("client_name","email","phone","move_date","pickup","dropoff","home_size","boxes","pickup_access","dropoff_access","pickup_walk","dropoff_walk","inventory","heavy_items","photo_link","language","source","lead_type","stage","assigned_to","priority","notes")}
    rec={"id":uid("QUOTE"),"lead_id":l["id"],"revision":rev,"status":"Draft","inputs_json":dumps(i),"result_json":dumps(r),"pricing_id":r.get("pricing_id") or one(db,"SELECT id FROM pricing_versions ORDER BY created_at DESC LIMIT 1")["id"],"lead_snapshot_json":dumps(snap),"lead_version":l["version"],"created_by":u["id"],"created_at":now()}
