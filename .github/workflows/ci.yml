@@ -1,0 +1,51 @@
+name: CrownOps CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "audit/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      - name: Compile Python
+        run: python -m compileall -q app manage.py tests
+      - name: Run release-readiness tests
+        env:
+          CROWNOPS_ENV: test
+          CROWNOPS_ALLOW_EXTERNAL: "0"
+          QBO_ENV: sandbox
+        run: python -m unittest discover -s tests -v
+      - name: Check JavaScript syntax
+        run: |
+          for f in app/static/*.js; do
+            echo "Checking $f"
+            node --check "$f"
+          done
+      - name: Smoke-create application
+        env:
+          CROWNOPS_ENV: test
+          CROWNOPS_ALLOW_EXTERNAL: "0"
+        run: |
+          python - <<'PY'
+          import tempfile
+          from pathlib import Path
+          from app.main import create_app
+          with tempfile.TemporaryDirectory() as td:
+              app=create_app(Path(td)/"crownops.sqlite3")
+              print("routes", len(app.routes))
+          PY
