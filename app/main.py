@@ -161,7 +161,7 @@ def create_app(database_path=None):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.5.1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.6.0-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     app.state.db_path=path
     railway_domain=os.environ.get('RAILWAY_PUBLIC_DOMAIN','').strip()
     public_url=(os.environ.get('CROWNOPS_PUBLIC_URL') or (f'https://{railway_domain}' if railway_domain else 'http://127.0.0.1:8080')).rstrip('/')
@@ -229,7 +229,7 @@ def create_app(database_path=None):
     def health():
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.5.6'}
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.6.0-rc1'}
 
     @app.post('/api/setup-owner')
     def setup_owner(data:dict):
