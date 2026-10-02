@@ -177,6 +177,7 @@ def register_portal(app,path,auth,public_url,secure):
         return r
 
     async def upload_one(file,lid,jid,category,actor):
+        if not uploads_enabled():raise HTTPException(503,'Private file uploads are disabled until production malware scanning is configured.')
         if category not in ('Move photos','Inventory','Access','Testimonial','Incident'):raise HTTPException(422,'Unsupported file category.')
         name=Path((file.filename or 'upload').replace('\\','/')).name[:180]
         if any(ord(c)<32 for c in name):raise HTTPException(422,'Invalid filename.')
