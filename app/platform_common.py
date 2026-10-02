@@ -60,6 +60,10 @@ def decrypt(v):return json.loads(secret_box().decrypt(v.encode()))
 
 def live_enabled():return os.getenv('CROWNOPS_ALLOW_EXTERNAL','0')=='1'
 
+def uploads_enabled():
+    default='0' if os.getenv('CROWNOPS_ENV','test')=='production' else '1'
+    return os.getenv('CROWNOPS_UPLOADS_ENABLED',default)=='1'
+
 def external_gate():
     if not live_enabled():raise HTTPException(503,'External actions are disabled. Enable them on the authorized test/server installation first.')
 
