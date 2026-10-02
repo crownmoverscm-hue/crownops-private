@@ -200,3 +200,27 @@ CREATE TABLE IF NOT EXISTS employee_directory_profiles (
 CREATE TABLE IF NOT EXISTS inbox_claims (
  message_id TEXT PRIMARY KEY REFERENCES messages(id), claimed_by TEXT NOT NULL REFERENCES users(id), claimed_at TEXT NOT NULL, resolved_at TEXT
 );
+
+
+-- v5.7 durable CRM contacts. Existing lead/service rows stay authoritative;
+-- this mapping groups repeat business without rewriting historical services.
+CREATE TABLE IF NOT EXISTS crm_contacts (
+ id TEXT PRIMARY KEY,
+ client_name TEXT NOT NULL,
+ email TEXT NOT NULL DEFAULT '',
+ email_norm TEXT NOT NULL DEFAULT '',
+ phone TEXT NOT NULL DEFAULT '',
+ phone_norm TEXT NOT NULL DEFAULT '',
+ language TEXT NOT NULL DEFAULT 'English',
+ notes TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS crm_contacts_email ON crm_contacts(email_norm);
+CREATE INDEX IF NOT EXISTS crm_contacts_phone ON crm_contacts(phone_norm);
+CREATE TABLE IF NOT EXISTS crm_contact_leads (
+ contact_id TEXT NOT NULL REFERENCES crm_contacts(id) ON DELETE CASCADE,
+ lead_id TEXT NOT NULL UNIQUE REFERENCES leads(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL,
+ PRIMARY KEY(contact_id,lead_id)
+);
