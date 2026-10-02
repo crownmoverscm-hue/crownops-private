@@ -12,7 +12,8 @@ def validate_deployment(url,secure):
     if os.getenv('CROWNOPS_ENV','test')=='production':
         if not secure or not url.startswith('https://'):raise RuntimeError('Production requires HTTPS public URL and secure cookies.')
         secret_box()
-        if not os.getenv('CROWNOPS_SCAN_COMMAND'):raise RuntimeError('Production requires a malware scanning command for private uploads.')
+        if uploads_enabled() and not os.getenv('CROWNOPS_SCAN_COMMAND'):
+            raise RuntimeError('Production uploads require a malware scanning command. Keep CROWNOPS_UPLOADS_ENABLED=0 until scanning is configured.')
 
 
 def totp(secret,step):
