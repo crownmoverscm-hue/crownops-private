@@ -63,6 +63,24 @@ def live_enabled():return os.getenv('CROWNOPS_ALLOW_EXTERNAL','0')=='1'
 def external_gate():
     if not live_enabled():raise HTTPException(503,'External actions are disabled. Enable them on the authorized test/server installation first.')
 
+def quickbooks_environment():
+    env=os.getenv('QBO_ENV','sandbox').strip().lower()
+    if env not in ('sandbox','production'):
+        raise HTTPException(503,'QBO_ENV must be sandbox or production.')
+    return env
+
+def quickbooks_write_enabled():
+    env=quickbooks_environment()
+    if env=='sandbox':
+        return os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES','0')=='1'
+    return os.getenv('CROWNOPS_ENV','test')=='production' and os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES','0')=='1'
+
+def quickbooks_gate():
+    env=quickbooks_environment()
+    if not quickbooks_write_enabled():
+        flag='CROWNOPS_ALLOW_QBO_SANDBOX_WRITES' if env=='sandbox' else 'CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES'
+        raise HTTPException(503,f'QuickBooks {env} writes are disabled. Enable {flag}=1 only after mappings and tests are approved.')
+
 def audit_safe_error(e):
     return 'Provider request failed. Review connection, permissions and provider dashboard; no success was confirmed.'
 
