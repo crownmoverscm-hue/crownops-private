@@ -279,12 +279,13 @@ document.addEventListener('click',async e=>{
    SF.delivery=r;
    return showModal('Client estimate email',`<div class="callout teal"><strong>Ready to send</strong>This branded email opens the client\'s private estimate page. Acceptance and deposit options happen there.</div><div class="spacer"></div>
    ${field('sf_subject','Subject',r.subject)}${textArea('sf_body','Message',r.body,12)}
-   <div class="spacer"></div><label class="checkbox-label"><input id="sf-send-reviewed" type="checkbox">I reviewed the recipient, dates and message.</label>`,
+   <div class="spacer"></div><label class="checkbox-label"><input id="sf-send-reviewed" type="checkbox">I reviewed the recipient, dates and message.</label>
+   ${r.communication_suppressed?'<label class="checkbox-label"><input id="sf-contact-confirmed" type="checkbox">The client requested/authorized this operational estimate email.</label>':''}`,
    `${btn('close','Cancel')}<button class="btn-primary" data-sf="send-mail" data-id="${h(r.mail_id)}">Send estimate email</button>`,true);
   }
   if(a==='send-mail'){
    if(!document.getElementById('sf-send-reviewed')?.checked)throw Error('Check the review box before sending.');
-   const out=await api('/ux/outbound/'+encodeURIComponent(id)+'/send-reviewed',{method:'POST',data:{reviewed:true}});
+   const out=await api('/ux/outbound/'+encodeURIComponent(id)+'/send-reviewed',{method:'POST',data:{reviewed:true,contact_confirmed:document.getElementById('sf-contact-confirmed')?.checked===true}});
    modal.close();toast(out.sent?'Estimate email sent.':'Email was not confirmed as sent.');return navigate('quotes');
   }
   if(a==='booking-exception'){
