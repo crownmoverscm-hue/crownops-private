@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from app.main import create_app
 from app.store import initialize, transaction
 from app.platform_common import put_setting, quickbooks_gate, quickbooks_write_enabled
-from app.providers import qbo_invoice_payload, qbo_mapping, qbo_read
+from app.providers import qbo_customer, qbo_invoice_payload, qbo_mapping, qbo_read
 
 
 class EnvMixin:
@@ -107,6 +107,18 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
         self.assertEqual(body["Line"][0]["SalesItemLineDetail"]["TaxCodeRef"]["value"], "tax-3")
         self.assertEqual(body["Line"][1]["DiscountLineDetail"]["DiscountAccountRef"]["value"], "account-9")
         self.assertEqual(body["CurrencyRef"]["value"], "CAD")
+
+    def test_qbo_customer_omits_blank_contact_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "crownops.sqlite3"
+            initialize(db_path)
+            lead = {"id": "LEAD-1234567890123456", "client_name": "Sandbox Customer", "email": "", "phone": "514-555-0101"}
+            with patch("app.providers.qbo_call", return_value={"Customer": {"Id": "77"}}) as call:
+                external_id = qbo_customer(db_path, lead)
+            self.assertEqual(external_id, "77")
+            payload = call.call_args.args[3]
+            self.assertNotIn("PrimaryEmailAddr", payload)
+            self.assertEqual(payload["PrimaryPhone"]["FreeFormNumber"], "514-555-0101")
 
     def test_read_only_qbo_call_does_not_need_global_external_switch(self):
         response = Mock()
