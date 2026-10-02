@@ -164,6 +164,54 @@ def register_providers(app,path,auth,public_url,new_lead=None):
           'intake':{'configured':len(os.getenv('CROWNOPS_WEBHOOK_SECRET',''))>=32},'scanner':{'configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND'))},
           'operations':operations,'note':'Configuration/authorization does not certify a successful end-to-end live test.'}
 
+    @app.get('/api/quickbooks/setup')
+    def quickbooks_setup(u=Depends(auth)):
+        require_role(u,MANAGERS)
+        _,realm,_=_qbo_connection(path)
+        errors=[]
+        try:items=qbo_query(path,"select * from Item where Active = true maxresults 100").get('Item',[])
+        except Exception:items=[];errors.append('items')
+        try:taxes=qbo_query(path,"select * from TaxCode maxresults 100").get('TaxCode',[])
+        except Exception:taxes=[];errors.append('tax_codes')
+        try:accounts=qbo_query(path,"select * from Account where Active = true maxresults 100").get('Account',[])
+        except Exception:accounts=[];errors.append('accounts')
+        try:company=qbo_read(path,'companyinfo/'+realm).get('CompanyInfo',{})
+        except Exception:company={};errors.append('company')
+        with closing(connect(path)) as db:saved=settings(db,'quickbooks_mappings',{}) or {}
+        current={
+          'service_item_id':str(saved.get('service_item_id') or os.getenv('QBO_SERVICE_ITEM_ID','')),
+          'tax_code_id':str(saved.get('tax_code_id') or os.getenv('QBO_TAX_CODE_ID','')),
+          'discount_account_id':str(saved.get('discount_account_id') or os.getenv('QBO_DISCOUNT_ACCOUNT_ID','')),
+          'deposit_account_id':str(saved.get('deposit_account_id') or os.getenv('QBO_DEPOSIT_ACCOUNT_ID',''))
+        }
+        return {'environment':quickbooks_environment(),'realm_id':realm,'company_name':company.get('CompanyName') or company.get('LegalName') or '',
+          'writes_enabled':quickbooks_write_enabled(),'mappings':current,'errors':errors,
+          'items':[{'id':str(x.get('Id','')),'name':x.get('FullyQualifiedName') or x.get('Name',''),'type':x.get('Type','')} for x in items if x.get('Id')],
+          'tax_codes':[{'id':str(x.get('Id','')),'name':x.get('Name',''),'description':x.get('Description','')} for x in taxes if x.get('Id')],
+          'accounts':[{'id':str(x.get('Id','')),'name':x.get('FullyQualifiedName') or x.get('Name',''),'type':x.get('AccountType',''),'subtype':x.get('AccountSubType','')} for x in accounts if x.get('Id')]}
+
+    @app.patch('/api/quickbooks/setup')
+    def quickbooks_save_setup(data:dict,u=Depends(auth)):
+        require_role(u,MANAGERS)
+        if quickbooks_environment()!='sandbox':raise HTTPException(409,'Edit QuickBooks mappings in sandbox first.')
+        current=quickbooks_setup(u)
+        valid_items={x['id'] for x in current['items']};valid_taxes={x['id'] for x in current['tax_codes']};valid_accounts={x['id'] for x in current['accounts']}
+        mapped={'service_item_id':str(data.get('service_item_id','')).strip(),'tax_code_id':str(data.get('tax_code_id','')).strip(),
+          'discount_account_id':str(data.get('discount_account_id','')).strip(),'deposit_account_id':str(data.get('deposit_account_id','')).strip()}
+        if mapped['service_item_id'] not in valid_items:raise HTTPException(422,'Choose a service item from the connected QuickBooks sandbox.')
+        if mapped['tax_code_id'] not in valid_taxes:raise HTTPException(422,'Choose a tax code from the connected QuickBooks sandbox.')
+        if mapped['deposit_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a deposit account from the connected QuickBooks sandbox.')
+        if mapped['discount_account_id'] and mapped['discount_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a discount account from the connected QuickBooks sandbox.')
+        with transaction(path) as db:
+            put_setting(db,'quickbooks_mappings',mapped);audit(db,u['id'],'QuickBooks sandbox mappings saved','settings','quickbooks_mappings',mapped)
+        return {'ok':True,'environment':'sandbox','mappings':mapped,'writes_enabled':quickbooks_write_enabled()}
+
+    @app.get('/api/quickbooks/test-connection')
+    def quickbooks_test_connection(u=Depends(auth)):
+        require_role(u,MANAGERS);_,realm,_=_qbo_connection(path)
+        info=qbo_read(path,'companyinfo/'+realm).get('CompanyInfo',{})
+        return {'ok':True,'environment':quickbooks_environment(),'realm_id':realm,'company_name':info.get('CompanyName') or info.get('LegalName') or '','writes_enabled':quickbooks_write_enabled()}
+
     @app.get('/api/gmail/review')
     def gmail_review(u=Depends(auth)):
         require_role(u,OFFICE)
