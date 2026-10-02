@@ -108,7 +108,7 @@ def calculate(inputs, pricing):
             'materials_cents':cents(materials),'other_cents':cents(other),'discount_cents':cents(discount),
             'service_low_cents':cents(lo*rate),'service_high_cents':cents(hi*rate),
             'low_cents':cents(lo*rate+fixed-discount),'high_cents':cents(hi*rate+fixed-discount),
-            'movers':movers,'trucks':trucks,'season':season,'allowance_percent':float(allowance),
+            'movers':movers,'trucks':trucks,'season':season,'allowance_percent':float(allowance),'service_type':service_type,
             'pricing_id':pricing['id'], 'pricing_approved':bool(pricing.get('approved')),
             'scope':'Local move only. Service hours include travel between customer stops. Separate transport is base travel only.',
             'tax_note':'Before applicable taxes. Tax treatment must be reviewed in accounting; no tax is inferred here.'}
