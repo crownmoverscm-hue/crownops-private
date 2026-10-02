@@ -142,7 +142,7 @@ document.addEventListener('click',async e=>{
   if(a==='new-quote')return newQuote(id);
   if(a==='open-quote')return openQuote(id);
   if(a==='calculate-quote'){const d=quoteData();if(!d)return;const r=await api('/quotes/calculate',{method:'POST',data:d});S.modalContext.lastResult=r;document.getElementById('quote-result').innerHTML=quoteSummary(r);return;}
-  if(a==='qbo-quote-low'||a==='qbo-quote-high'){const basis=a.endsWith('low')?'low':'high';if(!confirm('Create the '+basis.toUpperCase()+' estimate endpoint in the connected QuickBooks sandbox?'))return;const out=await api('/quotes/'+id+'/quickbooks',{method:'POST',data:{confirm:true,basis}});toast('QuickBooks sandbox estimate created'+(out.duplicate?' (already existed).':'.'));return openQuote(id);}
+  if(a==='qbo-quote-low'||a==='qbo-quote-high'){const basis=a.endsWith('low')?'low':'high';if(!confirm('Create the '+basis.toUpperCase()+' estimate endpoint in the connected QuickBooks company?'))return;const out=await api('/quotes/'+id+'/quickbooks',{method:'POST',data:{confirm:true,basis}});toast('QuickBooks estimate created'+(out.duplicate?' (already existed).':'.'));return openQuote(id);}
   if(a==='quote-text'){const t=await api('/quotes/'+id+'/draft-text');S.modalContext={...S.modalContext,draft:t};return showModal('Email draft',`<div class="callout orange">Not sent. Review the text and booking status before delivery.</div><div class="spacer"></div>${field('draft_subject','Subject',t.subject)}${textArea('draft_body','Message',t.body,15)}`,btn('copy-draft','Copy email text','btn-primary'));}
   if(a==='copy-draft')return copyText(document.getElementById('f-draft_body').value);
   if(a==='ai-compose')return aiCompose(id);
@@ -162,7 +162,7 @@ document.addEventListener('click',async e=>{
   if(a==='complete-task'){await api('/tasks/'+id+'/complete',{method:'POST'});return navigate('followups');}
   if(a==='new-payment')return newPayment();
   if(a==='verify-payment'){if(!confirm('Have you verified that the funds were received?'))return;await api('/payments/'+id+'/verify',{method:'POST'});toast('Receipt verified.');return navigate('payments');}
-  if(a==='qbo-payment'){if(!confirm('Post this fully allocated verified receipt to the connected QuickBooks sandbox? This does not charge a card.'))return;const out=await api('/payments/'+id+'/quickbooks',{method:'POST',data:{confirm:true}});toast('QuickBooks sandbox payment posted'+(out.duplicate?' (already matched).':'.'));return navigate('payments');}
+  if(a==='qbo-payment'){if(!confirm('Post this fully allocated verified receipt to the connected QuickBooks company? This does not charge a card.'))return;const out=await api('/payments/'+id+'/quickbooks',{method:'POST',data:{confirm:true}});toast('QuickBooks payment posted'+(out.duplicate?' (already matched).':'.'));return navigate('payments');}
 
   if(a==='reverse-payment')return noteAction('Reverse a payment entry','reverse-payment',id,'This creates an offsetting ledger entry. It does not issue a refund or delete the original payment.');
   if(a==='invite')return inviteForm();
@@ -231,7 +231,7 @@ async function invoiceClick(a,id){
  if(a==='download-invoice'){
   let text;if(demo())text=await api('/invoices/'+id+'/document');else{const response=await fetch('/api/invoices/'+id+'/document');if(!response.ok)throw Error('Invoice document could not be downloaded.');text=await response.text();}
   const url=URL.createObjectURL(new Blob([text],{type:'text/html'})),link=document.createElement('a');link.href=url;link.download=(i?.number||id)+'-r'+i.revision+'.html';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return toast('Invoice document downloaded. No email sent.');}
- if(a==='qbo-invoice'){if(!confirm('Sync this issued invoice to the connected QuickBooks sandbox?'))return;const out=await api('/invoices/'+id+'/quickbooks',{method:'POST',data:{confirmed:true}});toast('QuickBooks sandbox invoice synchronized'+(out.duplicate?' (already matched).':'.'));return openInvoice(id);}
+ if(a==='qbo-invoice'){if(!confirm('Sync this issued invoice to the connected QuickBooks company?'))return;const out=await api('/invoices/'+id+'/quickbooks',{method:'POST',data:{confirmed:true}});toast('QuickBooks invoice synchronized'+(out.duplicate?' (already matched).':'.'));return openInvoice(id);}
  if(a==='invoice-deposit'){const jobs=await api('/jobs'),j=jobs.find(x=>x.id===i.job_id);const p=(await api('/payments')).filter(x=>x.lead_id===j.lead_id&&x.verified&&x.amount_cents>0&&!x.reverses_id);return showModal('Apply an existing verified payment',`<form id="invoice-payment-form" data-form="invoice-payment"><input type="hidden" name="id" value="${h(id)}">${select('payment_id','Verified payment',p.map(x=>[x.id,x.reference+' | '+money(x.amount_cents)]))}${field('amount','Amount to apply','','number','min="0.01" step="0.01" required')}<p class="small muted">Payments cannot be reused across multiple invoices beyond their remaining unallocated amount.</p></form>`,formFooter('invoice-payment-form','Apply payment'));}
 }
 async function invoiceSubmit(type,d,form){
