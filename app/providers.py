@@ -7,7 +7,7 @@ from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
 from urllib.parse import urlencode, quote
-import base64, hashlib, hmac, json, os, secrets, time
+import base64, hashlib, hmac, html, json, os, re, secrets, time
 import requests
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -105,8 +105,34 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
        'BillEmail':{'Address':t['customer'].get('email','')},'TxnDate':doc['service_date'],'PrivateNote':'CrownOps '+doc['id']+' revision '+str(doc['revision']),
        'CustomerMemo':{'value':t.get('approval_reference','')[:1000]},'ApplyTaxAfterDiscount':True}
 
+def _branded_html(message):
+    body=str(message.get('body') or '')
+    escaped=html.escape(body)
+    url_match=re.search(r'https://[^\\s<]+',body)
+    button=''
+    if url_match:
+        url=html.escape(url_match.group(0),quote=True)
+        label='VIEW ESTIMATE / VOIR LE DEVIS' if message.get('category')=='Preparation' else 'LEAVE FEEDBACK / DONNER VOTRE AVIS'
+        button=f'<p style="margin:28px 0"><a href="{url}" style="display:inline-block;background:#18263f;color:white;text-decoration:none;padding:14px 22px;border-radius:6px;font-weight:700;letter-spacing:.5px">{label}</a></p>'
+        escaped=escaped.replace(html.escape(url_match.group(0)),'')
+    paragraphs=''.join('<p style="margin:0 0 15px;line-height:1.6">'+p.replace('\\n','<br>')+'</p>' for p in escaped.split('\\n\\n') if p.strip())
+    return f"""<!doctype html><html><body style="margin:0;background:#f6f7fb;font-family:Arial,Helvetica,sans-serif;color:#1c2940">
+    <div style="max-width:650px;margin:0 auto;padding:34px 18px">
+      <div style="font-size:28px;font-weight:800;color:#f4813a;margin-bottom:20px">CROWN MOVERS</div>
+      <div style="background:white;border:1px solid #e4e8ef;border-radius:12px;padding:30px">
+        <h1 style="font-size:22px;margin:0 0 22px;color:#18263f">{html.escape(message.get('subject') or 'Crown Movers')}</h1>
+        {paragraphs}{button}
+        <div style="margin-top:28px;padding-top:18px;border-top:1px solid #e7ebf1;font-size:12px;color:#718096">
+          Crown Movers · Montreal, Quebec · Reply to this email if you need help.
+        </div>
+      </div>
+    </div></body></html>"""
+
+
 def send_gmail(path,message):
     t=provider_token(path,'gmail');m=EmailMessage();m['To']=message['recipient'];m['Subject']=message['subject'];m['Message-ID']='<'+message['id'].lower()+'@crownops.local>';m.set_content(message['body'])
+    if message.get('category') in ('Preparation','Review request'):
+        m.add_alternative(_branded_html(message),subtype='html')
     if message['category']=='Invoice':
         marker=message['event_key'].split(':')
         if marker[0] in ('invoice-delivery','invoice-mail') and len(marker)==3:
