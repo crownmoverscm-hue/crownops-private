@@ -57,6 +57,5 @@ def record_deposit_callback(db,p,event_id):
     db.execute("UPDATE deposit_links SET status='Paid' WHERE id=?",(link['id'],))
     from .sales_launch import confirm_booking_after_deposit
     job=confirm_booking_after_deposit(db,link['quote_id'],'square-webhook')
-    add_task(db,link['lead_id'],'Assign crew and truck for confirmed booking',key='deposit:'+pid)
     audit(db,'square-webhook','Deposit verified and booking confirmed','payments',pid,{'amount_cents':money['amount'],'job_id':job['id'] if job else None})
     return {'applied':True,'payment_id':pid,'purpose':'Deposit','booking_confirmed':bool(job),'job_id':job['id'] if job else None}
