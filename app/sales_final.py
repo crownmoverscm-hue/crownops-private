@@ -306,8 +306,7 @@ def register_sales_final(app, path, auth, public_url):
             lead = one(db, "SELECT * FROM leads WHERE id=?", (q["lead_id"],))
             if not lead or "@" not in (lead.get("email") or ""):
                 raise HTTPException(422, "Confirm the client email first.")
-            if lead["notifications_suppressed"]:
-                raise HTTPException(409, "Client communication is currently suppressed. Activate/review this client before sending.")
+            communication_suppressed = bool(lead["notifications_suppressed"])
             raw = secrets.token_urlsafe(32)
             expires = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(timespec="seconds")
             insert(db, "portal_invites", dict(
@@ -334,7 +333,8 @@ def register_sales_final(app, path, auth, public_url):
                 )
             mail = queue_message(db, lead["id"], subject, body, "Preparation", u["id"], "quote-delivery:" + qid + ":" + uid("D"), None, None)
             audit(db, u["id"], "Estimate delivery prepared", "quotes", qid, {"mail_id": mail["id"], "portal_expires": expires})
-            return {"mail_id": mail["id"], "subject": subject, "body": body, "portal_url": link, "sent": False}
+            return {"mail_id": mail["id"], "subject": subject, "body": body, "portal_url": link, "sent": False,
+                    "communication_suppressed": communication_suppressed}
 
     @app.post("/api/ux/outbound/{mid}/send-reviewed")
     def send_reviewed(mid: str, data: dict, u=Depends(auth)):
@@ -345,6 +345,12 @@ def register_sales_final(app, path, auth, public_url):
             m = one(db, "SELECT * FROM outbound_messages WHERE id=?", (mid,))
             if not m or m["status"] != "Draft":
                 raise HTTPException(409, "Only a current draft can be sent.")
+            lead = one(db, "SELECT * FROM leads WHERE id=?", (m["lead_id"],))
+            if lead and lead["notifications_suppressed"]:
+                if data.get("contact_confirmed") is not True:
+                    raise HTTPException(422, "Confirm that the client requested or authorized this operational email.")
+                db.execute("UPDATE leads SET notifications_suppressed=0,updated_at=? WHERE id=?", (now(), lead["id"]))
+                audit(db, u["id"], "Operational quote email permission confirmed", "leads", lead["id"], {"mail_id": mid})
             db.execute("UPDATE outbound_messages SET status='Approved',approved_by=? WHERE id=?", (u["id"], mid))
             audit(db, u["id"], "Client email reviewed and approved for sending", "outbound_messages", mid)
         from .providers import process_mail
