@@ -122,6 +122,8 @@ def calculate(inputs, pricing):
             'movers':movers,'trucks':trucks,'season':season,'allowance_percent':0.0,
             'pricing_id':pricing['id'],'pricing_approved':bool(pricing.get('approved')),
             'service_type':service_type,'junk_base_cents':cents(base),'junk_extra_half_hours':float(half_hours),
+            'materials_lines':inputs.get('materials_lines',[]),'template_id':inputs.get('template_id',''),
+            'liability_text':inputs.get('liability_text',''),'fragile_text':inputs.get('fragile_text',''),
             'scope':'Junk removal fixed-volume estimate. Extra on-site labour is billed in 30-minute blocks when selected.',
             'tax_note':'Before applicable taxes. Tax treatment must be reviewed in accounting; no tax is inferred here.'
         }
@@ -177,6 +179,8 @@ def calculate(inputs, pricing):
         'low_cents':cents(lo*rate+fixed-discount),'high_cents':cents(hi*rate+fixed-discount),
         'movers':movers,'trucks':trucks,'season':season,'allowance_percent':float(allowance),
         'service_type':service_type,'pricing_id':pricing['id'],'pricing_approved':bool(pricing.get('approved')),
+        'materials_lines':inputs.get('materials_lines',[]),'template_id':inputs.get('template_id',''),
+        'liability_text':inputs.get('liability_text',''),'fragile_text':inputs.get('fragile_text',''),
         'scope':'Service hours include travel between customer stops. Transportation is displayed as a separate reviewed charge.',
         'tax_note':'Before applicable taxes. Tax treatment must be reviewed in accounting; no tax is inferred here.'
     }
