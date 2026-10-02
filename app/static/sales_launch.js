@@ -109,7 +109,9 @@ async function slQuoteBuilder(lid){
  slField('junk_labor_blocks','Extra 30-minute 2-person labour blocks',0,'number','min="0" step="1"')+
  '</div><p class="tiny muted">$80 per additional 30 minutes for 2 crew members.</p></details>'+
  '</div><div><div id="sl-quote-result">'+slResult(null)+'</div><div class="spacer"></div><div class="callout teal"><strong>Simple rule</strong>Change any number you need. CrownOps keeps the saved company rate as the default but never hides the rate you are actually offering the client.</div></div></div></form>';
- showModal('New estimate · '+h(l.client_name),body,'<button class="btn-soft" data-sl="calculate">'+icon('refresh')+' Calculate</button><button class="btn-primary" type="submit" form="sl-quote-form">Save draft</button>',true);\n setTimeout(slRefreshRate,0);\n}
+ showModal('New estimate · '+h(l.client_name),body,'<button class="btn-soft" data-sl="calculate">'+icon('refresh')+' Calculate</button><button class="btn-primary" type="submit" form="sl-quote-form">Save draft</button>',true);
+ setTimeout(slRefreshRate,0);
+}
 newQuote=slQuoteBuilder;
 
 function slQuoteData(){
