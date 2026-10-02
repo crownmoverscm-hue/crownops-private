@@ -412,6 +412,40 @@ def register_sales_final(app, path, auth, public_url):
         from .providers import process_mail
         return process_mail(path, mid)
 
+    @app.post("/api/ux/quotes/{qid}/prepare-deposit-reminder")
+    def prepare_deposit_reminder(qid: str, u=Depends(auth)):
+        require_role(u, SALES)
+        with transaction(path) as db:
+            q = one(db, "SELECT * FROM quotes WHERE id=?", (qid,))
+            if not q or q["status"] != "Accepted":
+                raise HTTPException(409, "The estimate must be accepted before a deposit reminder is prepared.")
+            lead = one(db, "SELECT * FROM leads WHERE id=?", (q["lead_id"],))
+            from .deposits import deposit_state
+            state = deposit_state(db, lead["id"], q)
+            if state["due_cents"] <= 0:
+                raise HTTPException(409, "The required deposit is already verified.")
+            raw = secrets.token_urlsafe(32)
+            expires = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(timespec="seconds")
+            insert(db, "portal_invites", dict(token_hash=stamp_hash(raw), lead_id=lead["id"], email=lead["email"],
+                expires_at=expires, created_by=u["id"], created_at=now()))
+            link = public_url + "/portal#access=" + raw
+            qi = json.loads(q["inputs_json"])
+            fr = str(qi.get("template_language") or lead.get("language") or "").lower().startswith("fr")
+            amount = state["due_cents"] / 100
+            if fr:
+                subject = "Rappel amical pour votre dépôt | Crown Movers"
+                body = (f"Bonjour {lead[\'client_name\']},\\n\\nPetit rappel amical : le solde de dépôt requis pour votre réservation est de {amount:.2f} $ CA. "
+                        "Vous pouvez ouvrir votre dossier privé ci-dessous pour consulter les options de paiement.\\n\\n" + link +
+                        "\\n\\nSi le paiement a déjà été envoyé, vous pouvez simplement ignorer ce rappel ou nous répondre afin que nous puissions vérifier le dossier.\\n\\nMerci,\\nCrown Movers")
+            else:
+                subject = "Friendly deposit reminder | Crown Movers"
+                body = (f"Hi {lead[\'client_name\']},\\n\\nJust a friendly reminder that the remaining required deposit for your booking is CA${amount:.2f}. "
+                        "Open your private file below to review the available payment options.\\n\\n" + link +
+                        "\\n\\nIf you already sent the payment, simply ignore this reminder or reply so we can verify the file.\\n\\nThank you,\\nCrown Movers")
+            mail = queue_message(db, lead["id"], subject, body, "Follow-up", u["id"], "deposit-reminder:" + qid + ":" + uid("D"))
+            audit(db, u["id"], "Deposit reminder prepared", "quotes", qid, {"mail_id": mail["id"], "due_cents": state["due_cents"]})
+        return {"mail_id": mail["id"], "subject": subject, "body": body, "sent": False}
+
     @app.post("/api/ux/quotes/{qid}/booking-exception")
     def booking_exception(qid: str, data: dict, u=Depends(auth)):
         require_role(u, SALES)
