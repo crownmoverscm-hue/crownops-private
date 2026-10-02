@@ -37,7 +37,7 @@ LEAD_FIELDS={'client_name','email','phone','move_date','pickup','dropoff','home_
     'lead_type','stage','assigned_to','priority','notes'}
 OPERATORS={'owner','sales','dispatch'}
 READERS=OPERATORS|{'accounting'}
-QUOTERS={'owner','sales'}  # owner is displayed as Manager in this pilot
+QUOTERS={'owner','sales','dispatch'}  # office managers can prepare/finalize estimates
 COOKIE='crownops_session'
 SETUP_TOKEN_HASH='a2f107444f141c2a3d61af99ec02063038c77b60c0f639ef6bf7f5304fa21bb1'
 from .pricing import calculate_with_overrides
@@ -624,14 +624,14 @@ def create_app(database_path=None):
 
     @app.post('/api/quotes/{qid}/approve')
     def approve_quote(qid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,QUOTERS)
         with transaction(path) as db:
             q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
             if not q:raise HTTPException(404,'Quote not found.')
             if q['status']!='Draft':raise HTTPException(409,'Only a draft can be approved.')
             lead=get_lead(db,q['lead_id'])
             p=one(db,'SELECT * FROM pricing_versions WHERE id=?',(q['pricing_id'],))
-            if not p['approved']:raise HTTPException(422,'Owner approval of this pricing snapshot is required first.')
+            if not p:raise HTTPException(422,'The pricing source used by this estimate is unavailable.')
             if q['lead_version']!=lead['version']:
                 raise HTTPException(409,'Client details changed after this quote. Create a new revision.')
             if missing_fields(lead):
@@ -1243,5 +1243,8 @@ def create_app(database_path=None):
     register_ux_features(app,path,auth)
     from .final_features import register_final_features
     register_final_features(app,path,auth)
+    from .sales_final import register_sales_final, seed_sales_final_defaults
+    seed_sales_final_defaults(path)
+    register_sales_final(app,path,auth,public_url)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app
