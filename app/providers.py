@@ -162,7 +162,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         env=quickbooks_environment()
         mappings={k:qbo_mapping(path,k) for k in ('service_item_id','tax_code_id','discount_account_id','deposit_account_id')}
         with closing(connect(path)) as db:reviewed=settings(db,'quickbooks_mappings_reviewed_'+env,{}) or {}
-        reviewed_matches=bool(reviewed and all(str(reviewed.get(k,'')).strip()==str(mappings.get(k,'')).strip() for k in ('service_item_id','tax_code_id','deposit_account_id')))
+        reviewed_matches=bool(reviewed and reviewed.get('policy')=='quebec-normal-move-v1' and all(str(reviewed.get(k,'')).strip()==str(mappings.get(k,'')).strip() for k in ('service_item_id','tax_code_id','deposit_account_id')))
         mappings_complete=bool(reviewed_matches and mappings['service_item_id'] and mappings['tax_code_id'] and mappings['deposit_account_id'])
         return {'external_actions_enabled':live_enabled(),'gmail':{'authorized_at':connected.get('gmail'),'configured':bool(os.getenv('GOOGLE_CLIENT_ID'))},
           'quickbooks':{'authorized_at':connected.get('quickbooks'),'configured':bool(os.getenv('QBO_CLIENT_ID')),'environment':env,'writes_enabled':quickbooks_write_enabled(),'mappings_complete':mappings_complete},
@@ -242,7 +242,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         if mapped['discount_account_id'] and mapped['discount_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a discount account from the connected '+label+' company.')
         setting_key='quickbooks_mappings_'+env
         reviewed_key='quickbooks_mappings_reviewed_'+env
-        reviewed={'service_item_id':mapped['service_item_id'],'tax_code_id':mapped['tax_code_id'],'deposit_account_id':mapped['deposit_account_id'],'reviewed_at':now(),'reviewed_by':u['id']}
+        reviewed={'policy':'quebec-normal-move-v1','service_item_id':mapped['service_item_id'],'tax_code_id':mapped['tax_code_id'],'deposit_account_id':mapped['deposit_account_id'],'reviewed_at':now(),'reviewed_by':u['id']}
         with transaction(path) as db:
             put_setting(db,setting_key,mapped);put_setting(db,reviewed_key,reviewed);audit(db,u['id'],'QuickBooks '+env+' mappings saved','settings',setting_key,mapped)
         return {'ok':True,'environment':env,'mappings':mapped,'writes_enabled':quickbooks_write_enabled(),'reviewed':True}
