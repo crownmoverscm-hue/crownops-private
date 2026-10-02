@@ -1,7 +1,23 @@
 /* CrownOps v5.7 launch sales workflow: client-first CRM + simple estimates. */
 'use strict';
 
-const SF={clients:[],clientAction:'quote',templates:null,defaults:{},materials:[],delivery:null,reviewMail:null};
+const SF={clients:[],clientAction:'quote',templates:null,defaults:{},materials:[],delivery:null,reviewMail:null,installPrompt:null};
+
+window.addEventListener('beforeinstallprompt',e=>{
+ e.preventDefault();SF.installPrompt=e;
+ const b=document.getElementById('sf-install-app');if(b)b.hidden=false;
+});
+const sfOriginalLoginScreen=loginScreen;
+loginScreen=function(){
+ sfOriginalLoginScreen();
+ const host=document.querySelector('.login-form');if(!host)return;
+ const isApple=/iPhone|iPad|iPod/i.test(navigator.userAgent);
+ const note=document.createElement('div');note.className='callout';note.style.marginTop='18px';
+ note.innerHTML=isApple
+  ?'<strong>Put CrownOps on your Home Screen</strong>On iPhone/iPad: open this page in Safari, tap Share, then Add to Home Screen. It opens like an app with its own CrownOps icon.'
+  :'<strong>Install CrownOps on this device</strong><button id="sf-install-app" data-sf="install-app" class="btn-soft" style="margin-top:8px" '+(SF.installPrompt?'':'hidden')+'>Install CrownOps</button><div class="tiny muted" style="margin-top:7px">On Samsung/Android you can also use the browser menu → Add to Home screen / Install app.</div>';
+ host.appendChild(note);
+};
 
 function sfMoneyNumber(v){const n=Number(v||0);return Number.isFinite(n)?n:0;}
 function sfSuggestion(size){
@@ -268,6 +284,10 @@ document.addEventListener('click',async e=>{
  const el=e.target.closest('[data-sf]');if(!el)return;e.preventDefault();
  const a=el.dataset.sf,id=el.dataset.id;
  try{
+  if(a==='install-app'){
+   if(SF.installPrompt){SF.installPrompt.prompt();await SF.installPrompt.userChoice;SF.installPrompt=null;el.hidden=true;}
+   return;
+  }
   if(a==='select-client'){modal.close();const service=el.dataset.service||id;return el.dataset.next==='ai'?aiCompose(service):newQuote(service);}
   if(a==='new-service'){
    const r=await api('/ux/clients/'+encodeURIComponent(id)+'/new-service',{method:'POST',data:{}});
