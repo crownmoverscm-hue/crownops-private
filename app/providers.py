@@ -470,4 +470,14 @@ def register_providers(app,path,auth,public_url,new_lead=None):
                 result={'applied':False,'reason':'Refund/dispute requires finance reconciliation'}
                 add_task(db,None,'URGENT: Square refund/dispute needs finance reconciliation',key=eid)
             insert(db,'bridge_events',dict(event_id=eid,body_hash=hashlib.sha256(body).hexdigest(),kind='Square payment',result_json=dumps(result),created_at=now()))
+        confirmation_mail_id=result.get('confirmation_mail_id') if isinstance(result,dict) else None
+        if confirmation_mail_id:
+            try:
+                sent=process_mail(path,confirmation_mail_id)
+                result['confirmation_sent']=bool(sent.get('sent'))
+            except Exception:
+                result['confirmation_sent']=False
+                with transaction(path) as db:
+                    mail=one(db,'SELECT lead_id FROM outbound_messages WHERE id=?',(confirmation_mail_id,))
+                    if mail:add_task(db,mail['lead_id'],'Send booking confirmation email',key='booking-confirmation-send:'+confirmation_mail_id)
         return {'ok':True,**result}
