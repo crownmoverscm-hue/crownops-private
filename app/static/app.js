@@ -162,6 +162,8 @@ document.addEventListener('click',async e=>{
   if(a==='complete-task'){await api('/tasks/'+id+'/complete',{method:'POST'});return navigate('followups');}
   if(a==='new-payment')return newPayment();
   if(a==='verify-payment'){if(!confirm('Have you verified that the funds were received?'))return;await api('/payments/'+id+'/verify',{method:'POST'});toast('Receipt verified.');return navigate('payments');}
+  if(a==='qbo-payment'){if(!confirm('Post this fully allocated verified receipt to the connected QuickBooks sandbox? This does not charge a card.'))return;const out=await api('/payments/'+id+'/quickbooks',{method:'POST',data:{confirm:true}});toast('QuickBooks sandbox payment posted'+(out.duplicate?' (already matched).':'.'));return navigate('payments');}
+
   if(a==='reverse-payment')return noteAction('Reverse a payment entry','reverse-payment',id,'This creates an offsetting ledger entry. It does not issue a refund or delete the original payment.');
   if(a==='invite')return inviteForm();
   if(a==='disable-user'){if(!confirm('Revoke this user\'s access and active sessions?'))return;await api('/users/'+id+'/disable',{method:'POST'});return navigate('settings');}
