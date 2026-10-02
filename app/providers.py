@@ -7,7 +7,7 @@ from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
 from urllib.parse import urlencode, quote
-import base64, hashlib, hmac, json, os, secrets, time
+import base64, hashlib, hmac, html, json, os, re, secrets, time
 import requests
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -107,6 +107,19 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
 
 def send_gmail(path,message):
     t=provider_token(path,'gmail');m=EmailMessage();m['To']=message['recipient'];m['Subject']=message['subject'];m['Message-ID']='<'+message['id'].lower()+'@crownops.local>';m.set_content(message['body'])
+    # Client-facing operational mail gets a simple Crown-branded HTML alternative.
+    # The plain-text body remains authoritative and accessible.
+    if message.get('category') in ('Estimate','Booking confirmation','Deposit reminder','Review request','Preparation','Follow-up'):
+        safe=html.escape(message.get('body',''))
+        match=re.search(r'https://[^\\s<]+',message.get('body',''))
+        cta=''
+        if match:
+            url=html.escape(match.group(0),quote=True)
+            label={'Estimate':'VIEW ESTIMATE','Deposit reminder':'VIEW DEPOSIT OPTIONS','Review request':'SHARE FEEDBACK'}.get(message.get('category'),'OPEN CROWN MOVERS')
+            cta=f'<p style="margin:28px 0"><a href="{url}" style="display:inline-block;background:#22395f;color:#fff;text-decoration:none;padding:14px 22px;border-radius:6px;font-weight:700;letter-spacing:.04em">{label}</a></p>'
+            safe=safe.replace(html.escape(match.group(0)),'')
+        body_html='<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#22304a"><div style="font-size:24px;font-weight:800;color:#22395f;margin:18px 0">Crown Movers</div><div style="line-height:1.7;white-space:pre-line">'+safe+'</div>'+cta+'<div style="border-top:1px solid #e4e8ef;margin-top:30px;padding-top:16px;color:#78869a;font-size:12px">Crown Movers · Montreal · 514-606-4030</div></div>'
+        m.add_alternative(body_html,subtype='html')
     if message['category']=='Invoice':
         marker=message['event_key'].split(':')
         if marker[0] in ('invoice-delivery','invoice-mail') and len(marker)==3:
