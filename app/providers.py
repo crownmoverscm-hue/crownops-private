@@ -231,11 +231,13 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             raise HTTPException(409,'Disable production QuickBooks writes before changing accounting mappings.')
         current=quickbooks_setup(u)
         valid_items={x['id'] for x in current['items']};valid_taxes={x['id'] for x in current['tax_codes']};valid_accounts={x['id'] for x in current['accounts']}
+        valid_quebec_taxes={x['id'] for x in current.get('quebec_tax_codes',[])}
         mapped={'service_item_id':str(data.get('service_item_id','')).strip(),'tax_code_id':str(data.get('tax_code_id','')).strip(),
           'discount_account_id':str(data.get('discount_account_id','')).strip(),'deposit_account_id':str(data.get('deposit_account_id','')).strip()}
         label='QuickBooks '+env
         if mapped['service_item_id'] not in valid_items:raise HTTPException(422,'Choose a service item from the connected '+label+' company.')
         if mapped['tax_code_id'] not in valid_taxes:raise HTTPException(422,'Choose a tax code from the connected '+label+' company.')
+        if mapped['tax_code_id'] not in valid_quebec_taxes:raise HTTPException(422,'For a normal Quebec move, choose the combined GST/QST Quebec tax code. Set up Quebec sales tax in QuickBooks first if it is missing.')
         if mapped['deposit_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a deposit account from the connected '+label+' company.')
         if mapped['discount_account_id'] and mapped['discount_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a discount account from the connected '+label+' company.')
         setting_key='quickbooks_mappings_'+env
