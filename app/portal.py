@@ -86,7 +86,7 @@ def register_portal(app,path,auth,public_url,secure):
                 r=json.loads(q['result_json']);snap=json.loads(q['lead_snapshot_json'])
                 quotes.append({'id':q['id'],'revision':q['revision'],'status':q['status'],'stale':q['lead_version']!=l['version'],
                     'created_at':q['created_at'],'move_date':snap.get('move_date'),'pickup':snap.get('pickup'),'dropoff':snap.get('dropoff'),
-                    'result':{k:r.get(k) for k in ('hourly_rate_cents','service_low','service_high','minimum_hours','transport_hours','transport_cents','fuel_cents','materials_cents','other_cents','discount_cents','low_cents','high_cents','movers','trucks','tax_note')},'deposit_required':json.loads(q['inputs_json']).get('deposit_required',300)})
+                    'result':{k:r.get(k) for k in ('hourly_rate_cents','standard_hourly_rate_cents','service_low','service_high','minimum_hours','transport_hours','transport_mode','transport_cents','fuel_cents','distance_km','km_rate_cents','materials_cents','other_cents','discount_cents','low_cents','high_cents','movers','trucks','tax_note','liability_note','service_kind','template_key','line_items')},'deposit_required':json.loads(q['inputs_json']).get('deposit_required',300)})
             jobs=rows(db,"SELECT id,title,phase,start_at,end_at,status FROM jobs WHERE lead_id=? AND status!='Tentative' ORDER BY start_at",(c['lead_id'],))
             invs=[]
             for inv in rows(db,"SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND i.status='Issued'",(c['lead_id'],)):
