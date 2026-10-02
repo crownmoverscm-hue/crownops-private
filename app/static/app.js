@@ -137,6 +137,7 @@ document.addEventListener('click',async e=>{
   if(a==='new-quote')return newQuote(id);
   if(a==='open-quote')return openQuote(id);
   if(a==='calculate-quote'){const d=quoteData();if(!d)return;const r=await api('/quotes/calculate',{method:'POST',data:d});S.modalContext.lastResult=r;document.getElementById('quote-result').innerHTML=quoteSummary(r);return;}
+  if(a==='qbo-quote-low'||a==='qbo-quote-high'){const basis=a.endsWith('low')?'low':'high';if(!confirm('Create the '+basis.toUpperCase()+' estimate endpoint in the connected QuickBooks sandbox?'))return;const out=await api('/quotes/'+id+'/quickbooks',{method:'POST',data:{confirm:true,basis}});toast('QuickBooks sandbox estimate created'+(out.duplicate?' (already existed).':'.'));return openQuote(id);}
   if(a==='quote-text'){const t=await api('/quotes/'+id+'/draft-text');S.modalContext={...S.modalContext,draft:t};return showModal('Email draft',`<div class="callout orange">Not sent. Review the text and booking status before delivery.</div><div class="spacer"></div>${field('draft_subject','Subject',t.subject)}${textArea('draft_body','Message',t.body,15)}`,btn('copy-draft','Copy email text','btn-primary'));}
   if(a==='copy-draft')return copyText(document.getElementById('f-draft_body').value);
   if(a==='ai-compose')return aiCompose(id);
