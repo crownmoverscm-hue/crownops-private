@@ -44,21 +44,44 @@ def provider_token(path,provider,require_external=True):
         new.setdefault('refresh_token',body.get('refresh_token'));new['realm_id']=body.get('realm_id');token_save(db,provider,new)
         return new
 
-def qbo_call(path,method,resource,payload=None,key=None):
-    t=provider_token(path,'quickbooks');realm=t.get('realm_id')
+def _qbo_connection(path):
+    t=provider_token(path,'quickbooks',require_external=False);realm=t.get('realm_id')
     if not realm or not str(realm).isdigit():raise HTTPException(503,'QuickBooks company connection is incomplete.')
-    host='https://sandbox-quickbooks.api.intuit.com' if os.getenv('QBO_ENV','sandbox')=='sandbox' else 'https://quickbooks.api.intuit.com'
+    host='https://sandbox-quickbooks.api.intuit.com' if quickbooks_environment()=='sandbox' else 'https://quickbooks.api.intuit.com'
+    return t,str(realm),host
+
+def qbo_call(path,method,resource,payload=None,key=None):
+    quickbooks_gate()
+    t,realm,host=_qbo_connection(path)
     params={'minorversion':os.getenv('QBO_MINOR_VERSION','75')}
     if key:params['requestid']=hashlib.sha256(key.encode()).hexdigest()[:40]
-    r=requests.request(method,host+'/v3/company/'+str(realm)+'/'+resource,json=payload,params=params,headers={'Authorization':'Bearer '+t['access_token'],'Accept':'application/json'},timeout=30)
+    r=requests.request(method,host+'/v3/company/'+realm+'/'+resource,json=payload,params=params,headers={'Authorization':'Bearer '+t['access_token'],'Accept':'application/json'},timeout=30)
     if not r.ok:raise RuntimeError('QuickBooks rejected this request. Review the account, item/tax mapping and provider logs. HTTP '+str(r.status_code))
     return r.json()
+
+def qbo_read(path,resource,params=None):
+    t,realm,host=_qbo_connection(path)
+    q={'minorversion':os.getenv('QBO_MINOR_VERSION','75')}
+    if params:q.update(params)
+    r=requests.get(host+'/v3/company/'+realm+'/'+resource,params=q,headers={'Authorization':'Bearer '+t['access_token'],'Accept':'application/json'},timeout=30)
+    if not r.ok:raise RuntimeError('QuickBooks read failed. Review the sandbox connection. HTTP '+str(r.status_code))
+    return r.json()
+
+def qbo_query(path,statement):
+    return qbo_read(path,'query',{'query':statement}).get('QueryResponse',{})
+
+def qbo_mapping(path,key):
+    env_key={'service_item_id':'QBO_SERVICE_ITEM_ID','tax_code_id':'QBO_TAX_CODE_ID','discount_account_id':'QBO_DISCOUNT_ACCOUNT_ID','deposit_account_id':'QBO_DEPOSIT_ACCOUNT_ID'}[key]
+    with closing(connect(path)) as db:saved=settings(db,'quickbooks_mappings',{}) or {}
+    return str(saved.get(key) or os.getenv(env_key,'')).strip()
 
 def qbo_customer(path,l):
     with closing(connect(path)) as db:old=one(db,"SELECT external_id FROM external_records WHERE provider='quickbooks' AND kind='Customer' AND object_id=? AND revision=0",(l['id'],))
     if old:return old['external_id']
     name=(l['client_name'][:65]+' | '+l['id'][-12:])
-    body={'DisplayName':name,'PrimaryEmailAddr':{'Address':l['email']},'PrimaryPhone':{'FreeFormNumber':l['phone']}}
+    body={'DisplayName':name}
+    if (l.get('email') or '').strip():body['PrimaryEmailAddr']={'Address':l['email'].strip()}
+    if (l.get('phone') or '').strip():body['PrimaryPhone']={'FreeFormNumber':l['phone'].strip()}
     r=qbo_call(path,'POST','customer',body,'customer:'+l['id'])['Customer']
     with transaction(path) as db:
         db.execute('INSERT OR IGNORE INTO external_records(provider,kind,object_id,external_id,updated_at) VALUES(?,?,?,?,?)',('quickbooks','Customer',l['id'],r['Id'],now()))
@@ -135,12 +158,61 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         with closing(connect(path)) as db:
             connected={r['provider']:r['updated_at'] for r in rows(db,'SELECT provider,updated_at FROM oauth_credentials')}
             operations=rows(db,'SELECT id,provider,object_id,kind,status,error,created_at,updated_at FROM provider_operations ORDER BY created_at DESC LIMIT 60')
+        mappings={k:qbo_mapping(path,k) for k in ('service_item_id','tax_code_id','discount_account_id','deposit_account_id')}
         return {'external_actions_enabled':live_enabled(),'gmail':{'authorized_at':connected.get('gmail'),'configured':bool(os.getenv('GOOGLE_CLIENT_ID'))},
-          'quickbooks':{'authorized_at':connected.get('quickbooks'),'configured':bool(os.getenv('QBO_CLIENT_ID')),'environment':os.getenv('QBO_ENV','sandbox')},
+          'quickbooks':{'authorized_at':connected.get('quickbooks'),'configured':bool(os.getenv('QBO_CLIENT_ID')),'environment':quickbooks_environment(),'writes_enabled':quickbooks_write_enabled(),'mappings_complete':bool(mappings['service_item_id'] and mappings['tax_code_id'] and mappings['deposit_account_id'])},
           'square':{'configured':bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID')),'environment':os.getenv('SQUARE_ENV','sandbox')},
           'ai':{'configured':bool(os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_MODEL'))},
           'intake':{'configured':len(os.getenv('CROWNOPS_WEBHOOK_SECRET',''))>=32},'scanner':{'configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND'))},
           'operations':operations,'note':'Configuration/authorization does not certify a successful end-to-end live test.'}
+
+    @app.get('/api/quickbooks/setup')
+    def quickbooks_setup(u=Depends(auth)):
+        require_role(u,MANAGERS)
+        _,realm,_=_qbo_connection(path)
+        errors=[]
+        try:items=qbo_query(path,"select * from Item where Active = true maxresults 100").get('Item',[])
+        except Exception:items=[];errors.append('items')
+        try:taxes=qbo_query(path,"select * from TaxCode maxresults 100").get('TaxCode',[])
+        except Exception:taxes=[];errors.append('tax_codes')
+        try:accounts=qbo_query(path,"select * from Account where Active = true maxresults 100").get('Account',[])
+        except Exception:accounts=[];errors.append('accounts')
+        try:company=qbo_read(path,'companyinfo/'+realm).get('CompanyInfo',{})
+        except Exception:company={};errors.append('company')
+        with closing(connect(path)) as db:saved=settings(db,'quickbooks_mappings',{}) or {}
+        current={
+          'service_item_id':str(saved.get('service_item_id') or os.getenv('QBO_SERVICE_ITEM_ID','')),
+          'tax_code_id':str(saved.get('tax_code_id') or os.getenv('QBO_TAX_CODE_ID','')),
+          'discount_account_id':str(saved.get('discount_account_id') or os.getenv('QBO_DISCOUNT_ACCOUNT_ID','')),
+          'deposit_account_id':str(saved.get('deposit_account_id') or os.getenv('QBO_DEPOSIT_ACCOUNT_ID',''))
+        }
+        return {'environment':quickbooks_environment(),'realm_id':realm,'company_name':company.get('CompanyName') or company.get('LegalName') or '',
+          'writes_enabled':quickbooks_write_enabled(),'mappings':current,'errors':errors,
+          'items':[{'id':str(x.get('Id','')),'name':x.get('FullyQualifiedName') or x.get('Name',''),'type':x.get('Type','')} for x in items if x.get('Id')],
+          'tax_codes':[{'id':str(x.get('Id','')),'name':x.get('Name',''),'description':x.get('Description','')} for x in taxes if x.get('Id')],
+          'accounts':[{'id':str(x.get('Id','')),'name':x.get('FullyQualifiedName') or x.get('Name',''),'type':x.get('AccountType',''),'subtype':x.get('AccountSubType','')} for x in accounts if x.get('Id')]}
+
+    @app.patch('/api/quickbooks/setup')
+    def quickbooks_save_setup(data:dict,u=Depends(auth)):
+        require_role(u,MANAGERS)
+        if quickbooks_environment()!='sandbox':raise HTTPException(409,'Edit QuickBooks mappings in sandbox first.')
+        current=quickbooks_setup(u)
+        valid_items={x['id'] for x in current['items']};valid_taxes={x['id'] for x in current['tax_codes']};valid_accounts={x['id'] for x in current['accounts']}
+        mapped={'service_item_id':str(data.get('service_item_id','')).strip(),'tax_code_id':str(data.get('tax_code_id','')).strip(),
+          'discount_account_id':str(data.get('discount_account_id','')).strip(),'deposit_account_id':str(data.get('deposit_account_id','')).strip()}
+        if mapped['service_item_id'] not in valid_items:raise HTTPException(422,'Choose a service item from the connected QuickBooks sandbox.')
+        if mapped['tax_code_id'] not in valid_taxes:raise HTTPException(422,'Choose a tax code from the connected QuickBooks sandbox.')
+        if mapped['deposit_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a deposit account from the connected QuickBooks sandbox.')
+        if mapped['discount_account_id'] and mapped['discount_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a discount account from the connected QuickBooks sandbox.')
+        with transaction(path) as db:
+            put_setting(db,'quickbooks_mappings',mapped);audit(db,u['id'],'QuickBooks sandbox mappings saved','settings','quickbooks_mappings',mapped)
+        return {'ok':True,'environment':'sandbox','mappings':mapped,'writes_enabled':quickbooks_write_enabled()}
+
+    @app.get('/api/quickbooks/test-connection')
+    def quickbooks_test_connection(u=Depends(auth)):
+        require_role(u,MANAGERS);_,realm,_=_qbo_connection(path)
+        info=qbo_read(path,'companyinfo/'+realm).get('CompanyInfo',{})
+        return {'ok':True,'environment':quickbooks_environment(),'realm_id':realm,'company_name':info.get('CompanyName') or info.get('LegalName') or '','writes_enabled':quickbooks_write_enabled()}
 
     @app.get('/api/gmail/review')
     def gmail_review(u=Depends(auth)):
@@ -240,7 +312,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
 
     @app.post('/api/invoices/{iid}/quickbooks')
     def sync_invoice(iid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'});external_gate()
+        require_role(u,{'owner','accounting'});quickbooks_gate()
         if data.get('confirmed',data.get('confirm')) is not True:raise HTTPException(422,'Confirm the accounting write after reviewing mappings and totals.')
         with transaction(path) as db:
             inv,calc=invoice_current(db,iid)
@@ -254,7 +326,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             if op and op['status'] in ('Running','Unknown','Mismatch'):raise HTTPException(409,'This export needs reconciliation before retrying. No second invoice was created.')
             db.execute('DELETE FROM provider_operations WHERE id=?',(key,));insert(db,'provider_operations',dict(id=key,provider='quickbooks',object_id=iid,kind='Invoice',status='Running',created_at=now(),updated_at=now()))
         try:
-            cust=qbo_customer(path,l);payload=qbo_invoice_payload(doc,cust,os.getenv('QBO_SERVICE_ITEM_ID',''),os.getenv('QBO_TAX_CODE_ID',''),os.getenv('QBO_DISCOUNT_ACCOUNT_ID',''))
+            cust=qbo_customer(path,l);payload=qbo_invoice_payload(doc,cust,qbo_mapping(path,'service_item_id'),qbo_mapping(path,'tax_code_id'),qbo_mapping(path,'discount_account_id'))
             if old:
                 existing=qbo_call(path,'GET','invoice/'+quote(old['external_id']))['Invoice']
                 if existing['SyncToken']!=old['sync_token']:raise ValueError('QuickBooks was edited externally. Reconcile before overwriting.')

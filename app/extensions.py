@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException, Request
 from .store import *
 from .platform_common import *
 from .pricing import number, cents
-from .providers import qbo_call,qbo_customer,provider_token,process_mail,token_save
+from .providers import qbo_call,qbo_customer,qbo_mapping,provider_token,process_mail,token_save
 
 
 def qbo_work(path,kind,obj,rev,actor,action):
@@ -35,7 +35,7 @@ def qbo_work(path,kind,obj,rev,actor,action):
 def register_extensions(app,path,auth,public_url):
     @app.post('/api/quotes/{qid}/quickbooks')
     def export_estimate(qid:str,data:dict,u=Depends(auth)):
-        require_role(u,SALES);external_gate()
+        require_role(u,SALES);quickbooks_gate()
         if data.get('confirm') is not True:raise HTTPException(422,'Confirm draft-only export.')
         with closing(connect(path)) as db:
             q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
@@ -45,7 +45,7 @@ def register_extensions(app,path,auth,public_url):
             r=json.loads(q['result_json'])
         # Range is not a fixed quote: staff must choose which endpoint QBO displays.
         if data.get('basis') not in ('low','high'):raise HTTPException(422,'Choose the reviewed low or high range endpoint for the QuickBooks draft.')
-        item=os.getenv('QBO_SERVICE_ITEM_ID');tax=os.getenv('QBO_TAX_CODE_ID')
+        item=qbo_mapping(path,'service_item_id');tax=qbo_mapping(path,'tax_code_id')
         if not item or not tax:raise HTTPException(503,'Configure reviewed service item and tax code IDs.')
         amt=r[data['basis']+'_cents']
         def go(key):
@@ -61,7 +61,7 @@ def register_extensions(app,path,auth,public_url):
 
     @app.post('/api/payments/{pid}/quickbooks')
     def export_payment(pid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'});external_gate()
+        require_role(u,{'owner','accounting'});quickbooks_gate()
         if data.get('confirm') is not True:raise HTTPException(422,'Confirm this accounting payment posting; it does not charge a card.')
         with closing(connect(path)) as db:
             p=one(db,'SELECT * FROM payments WHERE id=?',(pid,))
@@ -77,7 +77,7 @@ def register_extensions(app,path,auth,public_url):
                 links.append({'Amount':a['amount_cents']/100,'LinkedTxn':[{'TxnId':ext['external_id'],'TxnType':'Invoice'}]})
         def go(key):
             body={'CustomerRef':{'value':qbo_customer(path,l)},'TotalAmt':p['amount_cents']/100,'CurrencyRef':{'value':'CAD'},'TxnDate':p['created_at'][:10],'PaymentRefNum':p['reference'][:21],'PrivateNote':'CrownOps receipt '+pid,'Line':links}
-            dep=os.getenv('QBO_DEPOSIT_ACCOUNT_ID')
+            dep=qbo_mapping(path,'deposit_account_id')
             if dep:body['DepositToAccountRef']={'value':dep}
             remote=qbo_call(path,'POST','payment',body,key)['Payment']
             with transaction(path) as db:insert(db,'external_records',dict(provider='quickbooks',kind='Payment',object_id=pid,revision=1,external_id=remote['Id'],sync_token=remote.get('SyncToken','0'),amount_cents=p['amount_cents'],updated_at=now()))
