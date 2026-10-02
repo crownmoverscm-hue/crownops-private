@@ -147,8 +147,11 @@ def calculate(db,l,d):
  inputs=dict(d);inputs.update({"service_kind":kind,"move_date":date,"language":language,"template_key":key,"movers":movers,"trucks":trucks,"start_time":str(d.get("start_time") or "09:00")[:5],"pricing_id":p["id"],"deposit_required":deposit})
  return inputs,result,{"hours_low":float(slo),"hours_high":float(shi),"standard_rate_cents":cents(standard),"rate_label":label}
 
-def essential_missing(l):
- return [label for k,label in {"client_name":"client name","email":"email","phone":"phone","move_date":"move date","pickup":"pickup address","dropoff":"destination address","home_size":"move size"}.items() if not str(l[k] or "").strip()]
+def essential_missing(l,kind="Moving - Local"):
+ required={"client_name":"client name","email":"email","phone":"phone","move_date":"move date","pickup":"service / pickup address"}
+ if kind.startswith("Moving"):required.update({"dropoff":"destination address","home_size":"move size"})
+ elif kind=="Packing":required.update({"home_size":"move size"})
+ return [label for k,label in required.items() if not str(l.get(k) or "").strip()]
 
 def portal_link(db,l,actor,public_url):
  db.execute("UPDATE portal_invites SET revoked=1 WHERE lead_id=? AND used_at IS NULL",(l["id"],))
@@ -184,7 +187,12 @@ def queue_booking(db,q,l,actor):
 def confirm_booking_after_deposit(db,qid,actor="system",exception_reason=""):
  q=one(db,"SELECT * FROM quotes WHERE id=?",(qid,))
  if not q or q["status"]!="Accepted":return None
- l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],));j=ensure_tentative_job(db,qid,actor)
+ l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],))
+ if not exception_reason:
+  required=money(json.loads(q["inputs_json"]).get("deposit_required",300))
+  verified=db.execute("SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE lead_id=? AND purpose='Deposit' AND verified=1",(l["id"],)).fetchone()[0]
+  if verified<required:return None
+ j=ensure_tentative_job(db,qid,actor)
  if not j:return None
  if exception_reason:db.execute("UPDATE jobs SET status='Confirmed',exception_reason=?,version=version+1 WHERE id=?",(exception_reason,j["id"]))
  else:db.execute("UPDATE jobs SET status='Confirmed',version=version+1 WHERE id=?",(j["id"],))
@@ -314,14 +322,16 @@ def register_sales_launch(app,path,auth,new_lead,public_url):
   with transaction(path) as db:
    q=one(db,"SELECT * FROM quotes WHERE id=?",(qid,))
    if not q or q["status"] not in ("Draft","Approved"):raise HTTPException(409,"This estimate cannot be finalized.")
-   l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],));missing=essential_missing(l)
+   l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],));qi=json.loads(q["inputs_json"]);missing=essential_missing(l,qi.get("service_kind") or "Moving - Local")
    if missing:raise HTTPException(422,"Complete these client details before sending: "+", ".join(missing))
    if l["version"]!=q["lead_version"]:raise HTTPException(409,"Client details changed. Save a new revision.")
    if q["status"]=="Draft":db.execute("UPDATE quotes SET status='Approved',approved_by=?,approved_at=? WHERE id=?",(u["id"],now(),qid));q["status"]="Approved"
    db.execute("UPDATE leads SET notifications_suppressed=0,stage='Quote Sent',updated_at=? WHERE id=?",(now(),l["id"]))
-   url=portal_link(db,l,u["id"],public_url);subject,body=estimate_mail(l,q,url);key="estimate-ready:"+qid
-   old=one(db,"SELECT id,status FROM outbound_messages WHERE event_key=?",(key,))
-   mid=old["id"] if old and old["status"] in ("Draft","Approved") else queue_message(db,l["id"],subject,body,"Estimate",u["id"],key)["id"]
+   url=portal_link(db,l,u["id"],public_url);subject,body=estimate_mail(l,q,url)
+   db.execute("UPDATE outbound_messages SET status='Cancelled',error='Replaced by refreshed estimate access link' WHERE lead_id=? AND category='Estimate' AND status IN ('Draft','Approved') AND event_key LIKE ?",(l["id"],"estimate-ready:"+qid+"%"))
+   key="estimate-ready:"+qid+":"+uid("R");mid=queue_message(db,l["id"],subject,body,"Estimate",u["id"],key)["id"]
+   if not one(db,"SELECT id FROM integration_events WHERE event_key=?",("quote-finalized:"+qid,)):
+    insert(db,"integration_events",{"id":uid("EVENT"),"event_key":"quote-finalized:"+qid,"event_type":"quickbooks.draft.requested","object_id":qid,"payload_json":dumps({"quote_id":qid,"instructions":"Create a reviewed QuickBooks draft estimate only; do not email from QuickBooks."}),"created_at":now()})
    audit(db,u["id"],"Estimate finalized for client delivery","quotes",qid,{"outbound_message":mid})
   return {"ok":True,"status":"Approved","message_id":mid,"portal_url":url,"sent":False}
 
@@ -340,5 +350,8 @@ def register_sales_launch(app,path,auth,new_lead,public_url):
     amount=money(d.get("amount") or json.loads(q["inputs_json"]).get("deposit_required",300));ref=str(d.get("reference") or "").strip()
     if amount<=0 or not ref:raise HTTPException(422,"Enter the received amount and transfer reference.")
     if one(db,"SELECT id FROM payments WHERE lead_id=? AND reference=?",(l["id"],ref)):raise HTTPException(409,"That payment reference is already recorded.")
-    pid=uid("PAY");insert(db,"payments",{"id":pid,"lead_id":l["id"],"amount_cents":amount,"method":"Interac","purpose":"Deposit","reference":ref,"verified":1,"recorded_by":u["id"],"created_at":now()});j=confirm_booking_after_deposit(db,qid,u["id"]);return {"payment_id":pid,"job_id":j["id"],"status":"Confirmed"}
+    pid=uid("PAY");insert(db,"payments",{"id":pid,"lead_id":l["id"],"amount_cents":amount,"method":"Interac","purpose":"Deposit","reference":ref,"verified":1,"recorded_by":u["id"],"created_at":now()})
+    required=money(json.loads(q["inputs_json"]).get("deposit_required",300));verified=db.execute("SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE lead_id=? AND purpose='Deposit' AND verified=1",(l["id"],)).fetchone()[0]
+    j=confirm_booking_after_deposit(db,qid,u["id"])
+    return {"payment_id":pid,"job_id":j["id"] if j else None,"status":"Confirmed" if j else "Deposit due","verified_cents":verified,"required_cents":required,"due_cents":max(0,required-verified)}
    raise HTTPException(422,"Choose a supported deposit action.")
