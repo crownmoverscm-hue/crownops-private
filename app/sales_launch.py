@@ -200,6 +200,17 @@ def register_sales_launch(app,path,auth,new_lead,public_url):
   with closing(connect(path)) as db:plastic=material_default(db,"plastic") or material_default(db,"mattress");bubble=material_default(db,"bubble")
   return {"templates":TEMPLATES,"junk_pricing":{k:{"name":v[0],"price_cents":money(v[1])} for k,v in JUNK.items()},"defaults":{"local_gas_per_truck_cents":3500,"extra_truck_transport_cents":2500,"long_distance_per_km_cents":94,"tv_protection_cents":3500,"fragile_protection_cents":3500,"plastic_unit_cents":money(plastic),"bubble_unit_cents":money(bubble),"liability":"Free limited liability coverage: $0.60/lb per article."}}
 
+ @app.get("/api/launch/rate")
+ def quote_rate(move_date:str,movers:int,u=Depends(auth)):
+  req(u)
+  if not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}",move_date):raise HTTPException(422,"Choose a valid service date.")
+  if movers<2 or movers>6:raise HTTPException(422,"Choose 2 to 6 movers.")
+  with closing(connect(path)) as db:
+   p=one(db,"SELECT * FROM pricing_versions ORDER BY created_at DESC LIMIT 1")
+   if not p:raise HTTPException(422,"Load the rate calendar before quoting.")
+   rate,label=rate_for(db,p,move_date,movers)
+  return {"hourly_rate_cents":cents(rate),"label":label}
+
  @app.get("/api/launch/clients")
  def clients(q:str="",limit:int=60,u=Depends(auth)):
   req(u);limit=min(max(limit,1),100)
