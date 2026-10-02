@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import json,re,secrets
 from fastapi import Depends,HTTPException
 from .store import connect,transaction,rows,one,insert,audit,now,uid,dumps
-from .platform_common import queue_message,stamp_hash
+from .platform_common import queue_message,stamp_hash,settings,put_setting
 from .pricing import seasonal_rate,cents
 
 SALES={"owner","sales"}
@@ -192,6 +192,19 @@ def confirm_booking_after_deposit(db,qid,actor="system",exception_reason=""):
  if not one(db,"SELECT id FROM tasks WHERE lead_id=? AND title='Assign crew and truck' AND status!='Done'",(l["id"],)):
   insert(db,"tasks",{"id":uid("TASK"),"lead_id":l["id"],"title":"Assign crew and truck","due_date":l["move_date"] or now()[:10],"owner":"","status":"Open","historical":0,"raw_json":"{}","created_at":now()})
  queue_booking(db,q,l,actor);audit(db,actor,"Booking confirmed","jobs",j["id"],{"quote_id":qid,"payment_exception":bool(exception_reason)});return j
+
+def seed_sales_launch_defaults(path):
+ with transaction(path) as db:
+  if settings(db,"client_terms") is None:
+   put_setting(db,"client_terms",{
+    "approved":True,
+    "version":"Crown booking terms 2026-10",
+    "text":"CROWN MOVERS BOOKING TERMS / CONDITIONS DE RESERVATION\n\nENGLISH\nYour estimate is based on the service details currently provided. The service is confirmed after the estimate is accepted and the required deposit is verified, unless a Crown Movers manager approves another payment arrangement. Free limited liability coverage is $0.60/lb per article. TVs, large mirrors, glass tables, mantels and other fragile items require appropriate protection/boxing; any higher-value coverage is subject to separate accepted insurance terms. If an emergency requires a date change, please provide at least 10 days notice. A change inside 10 days may result in loss of the deposit. Replacement dates are subject to availability and rates may change based on the new date. Crown Movers will make reasonable efforts to find the best available alternative.\n\nFRANCAIS\nVotre estimation est basee sur les renseignements actuellement fournis. Le service est confirme apres l'acceptation du devis et la verification du depot requis, sauf si un gestionnaire de Crown Movers approuve une autre entente de paiement. La responsabilite limitee incluse est de 0,60 $/lb par article. Les televiseurs, grands miroirs, tables en verre, manteaux de foyer et autres articles fragiles exigent une protection/boite appropriee; toute protection de valeur superieure est assujettie a des conditions d'assurance acceptees separement. Si une urgence exige un changement de date, veuillez donner au moins 10 jours de preavis. Un changement a moins de 10 jours peut entrainer la perte du depot. Les nouvelles dates sont selon les disponibilites et les tarifs peuvent changer selon la nouvelle date. Crown Movers fera des efforts raisonnables pour trouver la meilleure option disponible.",
+    "review_note":"Operational terms supplied by Crown Movers for v5.7 launch review."
+   })
+  if settings(db,"automation_policy") is None:
+   put_setting(db,"automation_policy",{"enabled":True,"preparation":True,"review_request":True,"invoice_followup":True,"fleet_tasks":False,"review_url":"","review_note":"Review requests are neutral and sent to all eligible completed jobs once a public review URL is configured."})
+
 
 def register_sales_launch(app,path,auth,new_lead,public_url):
  @app.get("/api/launch/templates")
