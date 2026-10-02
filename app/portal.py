@@ -97,6 +97,7 @@ def register_portal(app,path,auth,public_url,secure):
                 qr['deposit']=deposit_state(db,c['lead_id'],source_q)
             cfg=settings(db,'media_program',{})
             terms=settings(db,'client_terms',{})
+            deposit_policy=settings(db,'deposit_policy',{}) or {}
             return {'csrf':c['csrf'],'client':public_client(l),'quotes':quotes,'jobs':jobs,'invoices':invs,
                 'changes':rows(db,'SELECT id,payload_json,status,created_at,review_note FROM client_changes WHERE lead_id=? ORDER BY created_at DESC',(c['lead_id'],)),
                 'attachments':[safe_attachment(r) for r in rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(c['lead_id'],))],
@@ -104,6 +105,7 @@ def register_portal(app,path,auth,public_url,secure):
                 'payment_links':rows(db,"SELECT p.invoice_id,p.url,p.amount_cents FROM payment_links p JOIN job_invoices i ON i.id=p.invoice_id JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND p.status='Active' AND p.revision=i.revision AND i.status='Issued'",(c['lead_id'],)),
                 'media_program':{'approved':cfg.get('approved',False),'release_version':cfg.get('version',''),'release_text':cfg.get('release_text',''),'channels':cfg.get('channels',[]),'amount_cents':5000},
                 'terms':{k:terms.get(k) for k in ('approved','version','text')} if terms.get('approved') else {'approved':False},
+                'deposit_policy':{k:deposit_policy.get(k) for k in ('etransfer_email','autodeposit','card_enabled','cash_cheque_exception')},
                 'releases':rows(db,'SELECT id,status,signed_at,withdrawn_at FROM media_releases WHERE lead_id=?',(c['lead_id'],))}
 
     @app.post('/api/portal/quotes/{qid}/deposit-checkout')
