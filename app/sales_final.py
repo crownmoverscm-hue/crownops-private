@@ -434,12 +434,12 @@ def register_sales_final(app, path, auth, public_url):
             amount = state["due_cents"] / 100
             if fr:
                 subject = "Rappel amical pour votre dépôt | Crown Movers"
-                body = (f"Bonjour {lead[\'client_name\']},\\n\\nPetit rappel amical : le solde de dépôt requis pour votre réservation est de {amount:.2f} $ CA. "
+                body = (f"Bonjour {lead['client_name']},\\n\\nPetit rappel amical : le solde de dépôt requis pour votre réservation est de {amount:.2f} $ CA. "
                         "Vous pouvez ouvrir votre dossier privé ci-dessous pour consulter les options de paiement.\\n\\n" + link +
                         "\\n\\nSi le paiement a déjà été envoyé, vous pouvez simplement ignorer ce rappel ou nous répondre afin que nous puissions vérifier le dossier.\\n\\nMerci,\\nCrown Movers")
             else:
                 subject = "Friendly deposit reminder | Crown Movers"
-                body = (f"Hi {lead[\'client_name\']},\\n\\nJust a friendly reminder that the remaining required deposit for your booking is CA${amount:.2f}. "
+                body = (f"Hi {lead['client_name']},\\n\\nJust a friendly reminder that the remaining required deposit for your booking is CA${amount:.2f}. "
                         "Open your private file below to review the available payment options.\\n\\n" + link +
                         "\\n\\nIf you already sent the payment, simply ignore this reminder or reply so we can verify the file.\\n\\nThank you,\\nCrown Movers")
             mail = queue_message(db, lead["id"], subject, body, "Follow-up", u["id"], "deposit-reminder:" + qid + ":" + uid("D"))
