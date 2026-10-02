@@ -428,8 +428,6 @@ def register_sales_final(app, path, auth, public_url):
             lead = one(db, "SELECT * FROM leads WHERE id=?", (job["lead_id"],))
             if not lead or not lead.get("email"):
                 raise HTTPException(422, "Client email is required.")
-            if one(db, "SELECT id FROM cases WHERE lead_id=? AND status!='Resolved' LIMIT 1", (lead["id"],)):
-                raise HTTPException(409, "Resolve the open client concern before sending a routine review request.")
             cfg = settings(db, "review_request_v1", {})
             automation = settings(db, "automation_policy", {}) or {}
             url = str(cfg.get("google_review_url") or automation.get("review_url") or "").strip()
