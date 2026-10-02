@@ -159,9 +159,13 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         with closing(connect(path)) as db:
             connected={r['provider']:r['updated_at'] for r in rows(db,'SELECT provider,updated_at FROM oauth_credentials')}
             operations=rows(db,'SELECT id,provider,object_id,kind,status,error,created_at,updated_at FROM provider_operations ORDER BY created_at DESC LIMIT 60')
+        env=quickbooks_environment()
         mappings={k:qbo_mapping(path,k) for k in ('service_item_id','tax_code_id','discount_account_id','deposit_account_id')}
+        with closing(connect(path)) as db:reviewed=settings(db,'quickbooks_mappings_reviewed_'+env,{}) or {}
+        reviewed_matches=bool(reviewed and all(str(reviewed.get(k,'')).strip()==str(mappings.get(k,'')).strip() for k in ('service_item_id','tax_code_id','deposit_account_id')))
+        mappings_complete=bool(reviewed_matches and mappings['service_item_id'] and mappings['tax_code_id'] and mappings['deposit_account_id'])
         return {'external_actions_enabled':live_enabled(),'gmail':{'authorized_at':connected.get('gmail'),'configured':bool(os.getenv('GOOGLE_CLIENT_ID'))},
-          'quickbooks':{'authorized_at':connected.get('quickbooks'),'configured':bool(os.getenv('QBO_CLIENT_ID')),'environment':quickbooks_environment(),'writes_enabled':quickbooks_write_enabled(),'mappings_complete':bool(mappings['service_item_id'] and mappings['tax_code_id'] and mappings['deposit_account_id'])},
+          'quickbooks':{'authorized_at':connected.get('quickbooks'),'configured':bool(os.getenv('QBO_CLIENT_ID')),'environment':env,'writes_enabled':quickbooks_write_enabled(),'mappings_complete':mappings_complete},
           'square':{'configured':bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID')),'environment':os.getenv('SQUARE_ENV','sandbox')},
           'ai':{'configured':bool(os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_MODEL'))},
           'intake':{'configured':len(os.getenv('CROWNOPS_WEBHOOK_SECRET',''))>=32},'scanner':{'configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND'))},
@@ -227,17 +231,21 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             raise HTTPException(409,'Disable production QuickBooks writes before changing accounting mappings.')
         current=quickbooks_setup(u)
         valid_items={x['id'] for x in current['items']};valid_taxes={x['id'] for x in current['tax_codes']};valid_accounts={x['id'] for x in current['accounts']}
+        valid_quebec_taxes={x['id'] for x in current.get('quebec_tax_codes',[])}
         mapped={'service_item_id':str(data.get('service_item_id','')).strip(),'tax_code_id':str(data.get('tax_code_id','')).strip(),
           'discount_account_id':str(data.get('discount_account_id','')).strip(),'deposit_account_id':str(data.get('deposit_account_id','')).strip()}
         label='QuickBooks '+env
         if mapped['service_item_id'] not in valid_items:raise HTTPException(422,'Choose a service item from the connected '+label+' company.')
         if mapped['tax_code_id'] not in valid_taxes:raise HTTPException(422,'Choose a tax code from the connected '+label+' company.')
+        if mapped['tax_code_id'] not in valid_quebec_taxes:raise HTTPException(422,'For a normal Quebec move, choose the combined GST/QST Quebec tax code. Set up Quebec sales tax in QuickBooks first if it is missing.')
         if mapped['deposit_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a deposit account from the connected '+label+' company.')
         if mapped['discount_account_id'] and mapped['discount_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a discount account from the connected '+label+' company.')
         setting_key='quickbooks_mappings_'+env
+        reviewed_key='quickbooks_mappings_reviewed_'+env
+        reviewed={'service_item_id':mapped['service_item_id'],'tax_code_id':mapped['tax_code_id'],'deposit_account_id':mapped['deposit_account_id'],'reviewed_at':now(),'reviewed_by':u['id']}
         with transaction(path) as db:
-            put_setting(db,setting_key,mapped);audit(db,u['id'],'QuickBooks '+env+' mappings saved','settings',setting_key,mapped)
-        return {'ok':True,'environment':env,'mappings':mapped,'writes_enabled':quickbooks_write_enabled()}
+            put_setting(db,setting_key,mapped);put_setting(db,reviewed_key,reviewed);audit(db,u['id'],'QuickBooks '+env+' mappings saved','settings',setting_key,mapped)
+        return {'ok':True,'environment':env,'mappings':mapped,'writes_enabled':quickbooks_write_enabled(),'reviewed':True}
 
     @app.get('/api/quickbooks/test-connection')
     def quickbooks_test_connection(u=Depends(auth)):
