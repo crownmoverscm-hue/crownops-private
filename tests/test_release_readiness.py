@@ -85,6 +85,8 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
 
     def test_invoice_payload_uses_reviewed_item_tax_and_discount_refs(self):
         doc = {
+            "id": "INV-TEST-1",
+            "revision": 1,
             "service_date": "2026-10-02",
             "terms": {
                 "testimonial_credit_mode": "before_tax",
