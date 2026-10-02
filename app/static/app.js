@@ -119,7 +119,7 @@ document.addEventListener('click',async e=>{
  const el=e.target.closest('[data-action]');if(!el)return;
  e.preventDefault();const a=el.dataset.action,id=el.dataset.id;
  try{
-  if(['open-invoice','job-invoice','issue-invoice','correct-invoice','download-invoice','invoice-deposit'].includes(a))return await invoiceClick(a,id);
+  if(['open-invoice','job-invoice','issue-invoice','correct-invoice','download-invoice','invoice-deposit','qbo-invoice'].includes(a))return await invoiceClick(a,id);
   if(a==='close')return modal.close();
   if(a==='menu')return document.getElementById('sidebar').classList.toggle('open');
   if(a==='refresh')return navigate(S.page);
@@ -224,6 +224,7 @@ async function invoiceClick(a,id){
  if(a==='download-invoice'){
   let text;if(demo())text=await api('/invoices/'+id+'/document');else{const response=await fetch('/api/invoices/'+id+'/document');if(!response.ok)throw Error('Invoice document could not be downloaded.');text=await response.text();}
   const url=URL.createObjectURL(new Blob([text],{type:'text/html'})),link=document.createElement('a');link.href=url;link.download=(i?.number||id)+'-r'+i.revision+'.html';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return toast('Invoice document downloaded. No email sent.');}
+ if(a==='qbo-invoice'){if(!confirm('Sync this issued invoice to the connected QuickBooks sandbox?'))return;const out=await api('/invoices/'+id+'/quickbooks',{method:'POST',data:{confirmed:true}});toast('QuickBooks sandbox invoice synchronized'+(out.duplicate?' (already matched).':'.'));return openInvoice(id);}
  if(a==='invoice-deposit'){const jobs=await api('/jobs'),j=jobs.find(x=>x.id===i.job_id);const p=(await api('/payments')).filter(x=>x.lead_id===j.lead_id&&x.verified&&x.amount_cents>0&&!x.reverses_id);return showModal('Apply an existing verified payment',`<form id="invoice-payment-form" data-form="invoice-payment"><input type="hidden" name="id" value="${h(id)}">${select('payment_id','Verified payment',p.map(x=>[x.id,x.reference+' | '+money(x.amount_cents)]))}${field('amount','Amount to apply','','number','min="0.01" step="0.01" required')}<p class="small muted">Payments cannot be reused across multiple invoices beyond their remaining unallocated amount.</p></form>`,formFooter('invoice-payment-form','Apply payment'));}
 }
 async function invoiceSubmit(type,d,form){
