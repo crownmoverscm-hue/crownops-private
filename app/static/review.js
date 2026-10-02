@@ -13,7 +13,7 @@ nav.sort((a,b)=>order.indexOf(a[0])-order.indexOf(b[0]));
 allowedPages=function(){
  if(S.user.role==='owner'||S.user.role==='sales')return nav.map(x=>x[0]);
  if(S.user.role==='crew')return ['schedule','timeoff','invoices','team','documents','account'];
- if(S.user.role==='dispatch')return ['schedule','invoices','team','timeoff','inventory','documents','fleet','care','portalhub','account'];
+ if(S.user.role==='dispatch')return ['dashboard','sales','quotes','followups','communications','schedule','invoices','payments','team','timeoff','inventory','documents','fleet','care','portalhub','connections','account'];
  return ['schedule','invoices','payments','team','timeoff','inventory','documents','portalhub','fleet','payroll','care','connections','policies','account'];
 };
 
