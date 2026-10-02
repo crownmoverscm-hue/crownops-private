@@ -196,18 +196,22 @@ def register_providers(app,path,auth,public_url,new_lead=None):
     @app.patch('/api/quickbooks/setup')
     def quickbooks_save_setup(data:dict,u=Depends(auth)):
         require_role(u,MANAGERS)
-        if quickbooks_environment()!='sandbox':raise HTTPException(409,'Edit QuickBooks mappings in sandbox first.')
+        env=quickbooks_environment()
+        if env=='production' and quickbooks_write_enabled():
+            raise HTTPException(409,'Disable production QuickBooks writes before changing accounting mappings.')
         current=quickbooks_setup(u)
         valid_items={x['id'] for x in current['items']};valid_taxes={x['id'] for x in current['tax_codes']};valid_accounts={x['id'] for x in current['accounts']}
         mapped={'service_item_id':str(data.get('service_item_id','')).strip(),'tax_code_id':str(data.get('tax_code_id','')).strip(),
           'discount_account_id':str(data.get('discount_account_id','')).strip(),'deposit_account_id':str(data.get('deposit_account_id','')).strip()}
-        if mapped['service_item_id'] not in valid_items:raise HTTPException(422,'Choose a service item from the connected QuickBooks sandbox.')
-        if mapped['tax_code_id'] not in valid_taxes:raise HTTPException(422,'Choose a tax code from the connected QuickBooks sandbox.')
-        if mapped['deposit_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a deposit account from the connected QuickBooks sandbox.')
-        if mapped['discount_account_id'] and mapped['discount_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a discount account from the connected QuickBooks sandbox.')
+        label='QuickBooks '+env
+        if mapped['service_item_id'] not in valid_items:raise HTTPException(422,'Choose a service item from the connected '+label+' company.')
+        if mapped['tax_code_id'] not in valid_taxes:raise HTTPException(422,'Choose a tax code from the connected '+label+' company.')
+        if mapped['deposit_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a deposit account from the connected '+label+' company.')
+        if mapped['discount_account_id'] and mapped['discount_account_id'] not in valid_accounts:raise HTTPException(422,'Choose a discount account from the connected '+label+' company.')
+        setting_key='quickbooks_mappings_'+env
         with transaction(path) as db:
-            put_setting(db,'quickbooks_mappings_sandbox',mapped);audit(db,u['id'],'QuickBooks sandbox mappings saved','settings','quickbooks_mappings_sandbox',mapped)
-        return {'ok':True,'environment':'sandbox','mappings':mapped,'writes_enabled':quickbooks_write_enabled()}
+            put_setting(db,setting_key,mapped);audit(db,u['id'],'QuickBooks '+env+' mappings saved','settings',setting_key,mapped)
+        return {'ok':True,'environment':env,'mappings':mapped,'writes_enabled':quickbooks_write_enabled()}
 
     @app.get('/api/quickbooks/test-connection')
     def quickbooks_test_connection(u=Depends(auth)):
