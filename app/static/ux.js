@@ -323,6 +323,14 @@ document.addEventListener('click',async e=>{
   if(a==='gmail-sync'){const rr=await api('/gmail/sync-readonly',{method:'POST',data:{days:14,max_per_feed:30}});toast(`Gmail sync: ${rr.new_leads} new lead(s), ${rr.new_events} new item(s).`);return navigate('connections');}
   if(a==='gmail-v8-test'){const rr=await api('/gmail/sync-v8-test',{method:'POST',data:{days:2,max_per_feed:20}});toast(`V8 test: ${rr.new_leads} new lead(s), ${rr.new_events} processed.`);return navigate('communications');}
   if(a==='gmail-reviewed'){await api('/gmail/review/'+encodeURIComponent(id)+'/reviewed',{method:'POST'});toast('Marked reviewed.');return navigate('connections');}
+  if(a==='qbo-test'){const q=await api('/quickbooks/test-connection');toast('QuickBooks sandbox connected: '+(q.company_name||q.realm_id));return navigate('connections');}
+  if(a==='qbo-setup'){
+    const q=await api('/quickbooks/setup');UX.qboSetup=q;
+    const items=[['','Choose service item'],...q.items.map(x=>[x.id,x.name+' ('+x.type+')'])];
+    const taxes=[['','Choose tax code'],...q.tax_codes.map(x=>[x.id,x.name])];
+    const accounts=[['','Choose account'],...q.accounts.map(x=>[x.id,x.name+(x.subtype?' - '+x.subtype:'')])];
+    return showModal('QuickBooks sandbox setup',`<form id="ux-qbo-setup" data-ux-form="qbo-setup"><div class="callout"><strong>${h(q.company_name||'QuickBooks sandbox')}</strong><div class="tiny muted">Environment: ${h(q.environment)}. This screen only reads the connected company and saves mappings in CrownOps.</div></div><div class="spacer"></div><div class="grid2">${select('service_item_id','Moving service item',items,q.mappings.service_item_id,'required')}${select('tax_code_id','Sales tax code',taxes,q.mappings.tax_code_id,'required')}${select('discount_account_id','Discount account',accounts,q.mappings.discount_account_id)}${select('deposit_account_id','Deposit account',accounts,q.mappings.deposit_account_id,'required')}</div>${q.errors?.length?`<div class="spacer"></div><div class="callout orange">QuickBooks could not load: ${h(q.errors.join(', '))}. Reconnect or retry before saving.</div>`:''}</form>`,`${btn('close','Cancel')}<button type="submit" form="ux-qbo-setup" class="btn-primary">Save sandbox mapping</button>`);
+  }
   if(a==='company-email-edit'){const c=UX.companyComms||{};return showModal('Company email rules',`<form id="ux-email-rules" data-ux-form="company-email"><div class="grid2">${field('connected_mailbox','Connected Gmail / storage',c.connected_mailbox||'crownmovers.cm@gmail.com','email','required')}${field('send_as','Client sees From',c.send_as||'info@crownmovers.ca','email','required')}${field('reply_to','Reply-To',c.reply_to||'info@crownmovers.ca','email','required')}${checkedField('approved','Approved for production after connection testing',Boolean(c.approved))}${textArea('note','Internal note',c.note||'',3)}</div></form>`,`${btn('close','Cancel')}<button type="submit" form="ux-email-rules" class="btn-primary">Save rules</button>`);}
   if(a==='setup-go'){const target=el.dataset.pageTarget;if(target==='settings-legacy'){const html=await uxOldSettings();document.getElementById('content').innerHTML=html;return;}return navigate(target);}
  }catch(ex){modal.open?modalError(ex):toast(ex.message);}
@@ -354,6 +362,7 @@ document.addEventListener('submit',async e=>{
     await api('/ux/jobs/'+encodeURIComponent(d.job_id)+'/crew-hours',{method:'POST',data:{employee_ids,team_hours:Number(d.team_hours),exceptions,note:d.note}});toast('Team hours saved.');modal.close();return navigate('team');
   }
   if(kind==='followup'){await api('/tasks',{method:'POST',data:{lead_id:d.lead_id,title:d.title,due_date:d.due_date}});modal.close();toast('Follow-up added.');return navigate('followups');}
+  if(kind==='qbo-setup'){await api('/quickbooks/setup',{method:'PATCH',data:d});modal.close();toast('QuickBooks sandbox mapping saved.');return navigate('connections');}
   if(kind==='company-email'){const r=await api('/ux/company-communications',{method:'PATCH',data:{...d,approved:f.approved.checked}});UX.companyComms=r;modal.close();toast('Company email rules saved.');return navigate('connections');}
  }catch(ex){modalError(ex);}
 });
