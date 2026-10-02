@@ -324,7 +324,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             if op and op['status'] in ('Running','Unknown','Mismatch'):raise HTTPException(409,'This export needs reconciliation before retrying. No second invoice was created.')
             db.execute('DELETE FROM provider_operations WHERE id=?',(key,));insert(db,'provider_operations',dict(id=key,provider='quickbooks',object_id=iid,kind='Invoice',status='Running',created_at=now(),updated_at=now()))
         try:
-            cust=qbo_customer(path,l);payload=qbo_invoice_payload(doc,cust,os.getenv('QBO_SERVICE_ITEM_ID',''),os.getenv('QBO_TAX_CODE_ID',''),os.getenv('QBO_DISCOUNT_ACCOUNT_ID',''))
+            cust=qbo_customer(path,l);payload=qbo_invoice_payload(doc,cust,qbo_mapping(path,'service_item_id'),qbo_mapping(path,'tax_code_id'),qbo_mapping(path,'discount_account_id'))
             if old:
                 existing=qbo_call(path,'GET','invoice/'+quote(old['external_id']))['Invoice']
                 if existing['SyncToken']!=old['sync_token']:raise ValueError('QuickBooks was edited externally. Reconcile before overwriting.')
