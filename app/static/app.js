@@ -1,6 +1,6 @@
 /* CrownOps private pilot. No live schedule, Gmail or QuickBooks connection is implied. */
 'use strict';
-const S={user:null,csrf:'',page:'dashboard',search:'',leadScope:'all',leadKind:'',leadStage:'',offset:0,taskScope:'active',scheduleView:'week',week:null,seq:0,modalContext:null};
+const S={user:null,csrf:'',mode:'test',page:'dashboard',search:'',leadScope:'all',leadKind:'',leadStage:'',offset:0,taskScope:'active',scheduleView:'week',week:null,seq:0,modalContext:null};
 const root=document.getElementById('root'), modal=document.getElementById('modal');
 const h=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=c=>'CA$'+(Number(c||0)/100).toLocaleString('en-CA',{minimumFractionDigits:2,maximumFractionDigits:2});
