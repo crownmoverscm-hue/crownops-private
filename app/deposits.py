@@ -55,8 +55,10 @@ def record_deposit_callback(db,p,event_id):
     if old:return {'applied':False,'already_recorded':True}
     pid=uid('PAY');insert(db,'payments',dict(id=pid,lead_id=link['lead_id'],amount_cents=money['amount'],method='Credit card',purpose='Deposit',reference='Square:'+p['id'],verified=1,recorded_by='square-webhook',created_at=now()))
     db.execute("UPDATE deposit_links SET status='Paid' WHERE id=?",(link['id'],))
-    from .sales_final import mark_booking_locked
+    from .sales_final import mark_booking_locked,queue_booking_confirmation
     mark_booking_locked(db,link['lead_id'],'square-webhook','Verified card deposit received')
+    confirmation_mail_id=queue_booking_confirmation(db,link['lead_id'],link['quote_id'],'square-webhook','Verified card deposit received')
     add_task(db,link['lead_id'],'Deposit verified: assign/confirm crew and truck',key='deposit:'+pid)
     audit(db,'square-webhook','Deposit verified; booking locked pending dispatch assignment','payments',pid,{'amount_cents':money['amount']})
-    return {'applied':True,'payment_id':pid,'purpose':'Deposit','booking_confirmed':True,'dispatch_assignment_pending':True}
+    return {'applied':True,'payment_id':pid,'purpose':'Deposit','booking_confirmed':True,'dispatch_assignment_pending':True,
+            'confirmation_mail_id':confirmation_mail_id}
