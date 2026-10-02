@@ -156,8 +156,9 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         with closing(connect(path)) as db:
             connected={r['provider']:r['updated_at'] for r in rows(db,'SELECT provider,updated_at FROM oauth_credentials')}
             operations=rows(db,'SELECT id,provider,object_id,kind,status,error,created_at,updated_at FROM provider_operations ORDER BY created_at DESC LIMIT 60')
+        mappings={k:qbo_mapping(path,k) for k in ('service_item_id','tax_code_id','discount_account_id','deposit_account_id')}
         return {'external_actions_enabled':live_enabled(),'gmail':{'authorized_at':connected.get('gmail'),'configured':bool(os.getenv('GOOGLE_CLIENT_ID'))},
-          'quickbooks':{'authorized_at':connected.get('quickbooks'),'configured':bool(os.getenv('QBO_CLIENT_ID')),'environment':os.getenv('QBO_ENV','sandbox')},
+          'quickbooks':{'authorized_at':connected.get('quickbooks'),'configured':bool(os.getenv('QBO_CLIENT_ID')),'environment':quickbooks_environment(),'writes_enabled':quickbooks_write_enabled(),'mappings_complete':bool(mappings['service_item_id'] and mappings['tax_code_id'] and mappings['deposit_account_id'])},
           'square':{'configured':bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID')),'environment':os.getenv('SQUARE_ENV','sandbox')},
           'ai':{'configured':bool(os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_MODEL'))},
           'intake':{'configured':len(os.getenv('CROWNOPS_WEBHOOK_SECRET',''))>=32},'scanner':{'configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND'))},
