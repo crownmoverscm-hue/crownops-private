@@ -24,6 +24,7 @@ class EnvMixin:
         "QBO_SERVICE_ITEM_ID",
         "CROWNOPS_SECRET_KEY",
         "CROWNOPS_SCAN_COMMAND",
+        "CROWNOPS_UPLOADS_ENABLED",
     )
 
     def setUp(self):
@@ -153,12 +154,15 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 self.assertEqual(settings(db, "round_trip_probe"), {"ok": True})
             self.assertEqual((restored.parent / "uploads" / "proof.txt").read_text(encoding="utf-8"), "backup-ok")
 
-    def test_production_deployment_guard_requires_https_and_scanner(self):
+    def test_production_deployment_guard_requires_https_and_scanner_for_uploads(self):
         os.environ["CROWNOPS_ENV"] = "production"
         with self.assertRaises(RuntimeError):
             validate_deployment("http://example.invalid", False)
         os.environ["CROWNOPS_SECRET_KEY"] = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
         os.environ.pop("CROWNOPS_SCAN_COMMAND", None)
+        os.environ["CROWNOPS_UPLOADS_ENABLED"] = "0"
+        validate_deployment("https://example.invalid", True)
+        os.environ["CROWNOPS_UPLOADS_ENABLED"] = "1"
         with self.assertRaises(RuntimeError) as ctx:
             validate_deployment("https://example.invalid", True)
         self.assertIn("malware scanning", str(ctx.exception))
