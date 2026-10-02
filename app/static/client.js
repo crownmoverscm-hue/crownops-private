@@ -16,7 +16,7 @@ function depositNotice(q){if(q.status!=='Accepted'||q.stale)return '';const d=q.
 function estimates(){
  const terms=P.data.terms;
  const cards=P.data.quotes.map(function(q){
-  const r=q.result||{},lines=(r.line_items||[]).map(function(x){return '<div class="quote-line"><span>'+esc(x.name)+(Number(x.qty)!==1?' · '+esc(x.qty):'')+'</span><strong>'+cash(x.total_cents)+'</strong></div>';}).join('');
+  const r=q.result||{},lines=(r.line_items||[]).map(function(x){const range=x.total_high_cents&&x.total_high_cents!==x.total_cents?cash(x.total_cents)+' - '+cash(x.total_high_cents):cash(x.total_cents);const qty=x.qty_high&&x.qty_high!==x.qty?esc(x.qty)+'-'+esc(x.qty_high):esc(x.qty);return '<div class="quote-line"><span>'+esc(x.name)+(Number(x.qty)!==1||x.qty_high?' · '+qty+' h':'')+'</span><strong>'+range+'</strong></div>';}).join('');
   const headline=r.low_cents===r.high_cents?cash(r.low_cents):cash(r.low_cents)+' - '+cash(r.high_cents);
   const summary=lines||('<p>'+r.movers+' '+t('movers','déménageurs')+' / '+r.trucks+' '+t('truck(s)','camion(s)')+'<br>'+cash(r.hourly_rate_cents)+' / h<br>'+t('Estimated service','Service estime')+': '+r.service_low+' - '+r.service_high+' h<br>'+t('Transportation','Transport')+': '+cash(r.transport_cents)+'<br>'+t('Fuel','Carburant')+': '+cash(r.fuel_cents)+'</p>');
   let action='';
