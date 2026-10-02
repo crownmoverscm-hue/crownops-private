@@ -56,7 +56,7 @@ function slTemplateFor(kind,language){
 }
 function slResult(r){
  if(!r)return '<div class="quote-summary"><div class="eyebrow">ESTIMATE PREVIEW</div><div class="quote-price">Choose the service details</div><p class="small muted">CrownOps will calculate from the saved date/crew rate. Every important amount remains editable.</p></div>';
- let lines=(r.line_items||[]).map(function(x){return '<div class="quote-line"><span>'+h(x.name)+(Number(x.qty)!==1?' · '+h(x.qty):'')+'</span><b>'+slCash(x.total_cents)+'</b></div>';}).join('');
+ let lines=(r.line_items||[]).map(function(x){const range=x.total_high_cents&&x.total_high_cents!==x.total_cents?slCash(x.total_cents)+' – '+slCash(x.total_high_cents):slCash(x.total_cents);const qty=x.qty_high&&x.qty_high!==x.qty?h(x.qty)+'–'+h(x.qty_high):h(x.qty);return '<div class="quote-line"><span>'+h(x.name)+(Number(x.qty)!==1||x.qty_high?' · '+qty+' h':'')+'</span><b>'+range+'</b></div>';}).join('');
  return '<div class="quote-summary"><div class="eyebrow">'+h(r.service_kind||'ESTIMATE')+' · CAD</div><div class="quote-price">'+slCash(r.low_cents)+(r.high_cents!==r.low_cents?' – '+slCash(r.high_cents):'')+'</div><div class="tiny muted">Before applicable taxes</div><div class="spacer"></div>'+lines+
  '<div class="spacer"></div><div class="tiny muted">'+(r.hourly_rate_cents?String(r.movers)+' movers at '+slCash(r.hourly_rate_cents)+'/h<br>':'')+h(r.liability_note||'')+'</div></div>';
 }
@@ -168,9 +168,10 @@ function slQuoteStatusActions(q){
  return '';
 }
 openQuote=async function(qid){
- const qs=await api('/quotes');const q=qs.find(function(x){return x.id===qid;});if(!q)return slOldOpenQuote(qid);
- SL.quote=q;
- showModal('Estimate revision '+q.revision,'<div class="row"><h3>'+h(q.client_name)+'</h3><div class="grow"></div>'+pill(q.status)+'</div><div class="spacer"></div><div class="quote-layout"><div>'+slResult(q.result)+'</div><div class="stack"><div class="callout"><strong>Saved version</strong>This revision keeps the exact rates and amounts you offered. New edits create a new revision.</div><div class="info-grid"><div><div class="info-label">Date</div>'+dateLabel(q.inputs.move_date)+'</div><div><div class="info-label">Deposit</div>'+slCash(Number(q.inputs.deposit_required||300)*100)+'</div><div><div class="info-label">Template</div>'+h(q.inputs.template_key||'Local')+'</div><div><div class="info-label">Service</div>'+h(q.inputs.service_kind||'Moving')+'</div></div>'+slQuoteStatusActions(q)+'</div></div>',btn('close','Close'),true);
+ const data=await Promise.all([api('/quotes'),qboState()]);const qs=data[0],conn=data[1];const q=qs.find(function(x){return x.id===qid;});if(!q)return slOldOpenQuote(qid);
+ SL.quote=q;S.modalContext={quote:q,qbo:conn};
+ const qbo=qboReady(conn)&&['Approved','Accepted'].includes(q.status)?btn('qbo-estimate','Create QuickBooks draft','btn-soft','data-id="'+h(qid)+'"'):'';
+ showModal('Estimate revision '+q.revision,'<div class="row"><h3>'+h(q.client_name)+'</h3><div class="grow"></div>'+pill(q.status)+'</div><div class="spacer"></div><div class="quote-layout"><div>'+slResult(q.result)+'</div><div class="stack"><div class="callout"><strong>Saved version</strong>This revision keeps the exact rates and amounts you offered. New edits create a new revision.</div><div class="info-grid"><div><div class="info-label">Date</div>'+dateLabel(q.inputs.move_date)+'</div><div><div class="info-label">Deposit</div>'+slCash(Number(q.inputs.deposit_required||300)*100)+'</div><div><div class="info-label">Template</div>'+h(q.inputs.template_key||'Local')+'</div><div><div class="info-label">Service</div>'+h(q.inputs.service_kind||'Moving')+'</div></div>'+slQuoteStatusActions(q)+qbo+'</div></div>',btn('close','Close'),true);
 };
 
 document.addEventListener('click',async function(e){
@@ -217,6 +218,6 @@ document.addEventListener('submit',async function(e){
   if(kind==='client'){const c=await api('/launch/clients',{method:'POST',data:d});const list=await api('/launch/clients?q='+encodeURIComponent(d.email||d.phone||d.client_name));SL.clients=list;return slNewService(c.id);}
   if(kind==='service'){const cid=d.client_id;delete d.client_id;const r=await api('/launch/clients/'+encodeURIComponent(cid)+'/services',{method:'POST',data:d});modal.close();return slQuoteBuilder(r.lead_id);}
   if(kind==='quote'){const data=slQuoteData();if(!data)return;const q=await api('/launch/quotes',{method:'POST',data:data});toast('Draft estimate saved.');modal.close();await navigate('quotes');return openQuote(q.id);}
-  if(kind==='deposit'){const qid=d.quote_id;delete d.quote_id;await api('/launch/quotes/'+encodeURIComponent(qid)+'/deposit-action',{method:'POST',data:{action:'etransfer_received',amount:Number(d.amount),reference:d.reference}});toast('Deposit recorded and booking confirmed.');return openQuote(qid);}
+  if(kind==='deposit'){const qid=d.quote_id;delete d.quote_id;const r=await api('/launch/quotes/'+encodeURIComponent(qid)+'/deposit-action',{method:'POST',data:{action:'etransfer_received',amount:Number(d.amount),reference:d.reference}});toast(r.status==='Confirmed'?'Deposit verified and booking confirmed.':'Payment recorded. Remaining deposit: '+slCash(r.due_cents));return openQuote(qid);}
  }catch(ex){modalError(ex);}
 });
