@@ -44,15 +44,36 @@ def provider_token(path,provider,require_external=True):
         new.setdefault('refresh_token',body.get('refresh_token'));new['realm_id']=body.get('realm_id');token_save(db,provider,new)
         return new
 
-def qbo_call(path,method,resource,payload=None,key=None):
-    t=provider_token(path,'quickbooks');realm=t.get('realm_id')
+def _qbo_connection(path):
+    t=provider_token(path,'quickbooks',require_external=False);realm=t.get('realm_id')
     if not realm or not str(realm).isdigit():raise HTTPException(503,'QuickBooks company connection is incomplete.')
-    host='https://sandbox-quickbooks.api.intuit.com' if os.getenv('QBO_ENV','sandbox')=='sandbox' else 'https://quickbooks.api.intuit.com'
+    host='https://sandbox-quickbooks.api.intuit.com' if quickbooks_environment()=='sandbox' else 'https://quickbooks.api.intuit.com'
+    return t,str(realm),host
+
+def qbo_call(path,method,resource,payload=None,key=None):
+    quickbooks_gate()
+    t,realm,host=_qbo_connection(path)
     params={'minorversion':os.getenv('QBO_MINOR_VERSION','75')}
     if key:params['requestid']=hashlib.sha256(key.encode()).hexdigest()[:40]
-    r=requests.request(method,host+'/v3/company/'+str(realm)+'/'+resource,json=payload,params=params,headers={'Authorization':'Bearer '+t['access_token'],'Accept':'application/json'},timeout=30)
+    r=requests.request(method,host+'/v3/company/'+realm+'/'+resource,json=payload,params=params,headers={'Authorization':'Bearer '+t['access_token'],'Accept':'application/json'},timeout=30)
     if not r.ok:raise RuntimeError('QuickBooks rejected this request. Review the account, item/tax mapping and provider logs. HTTP '+str(r.status_code))
     return r.json()
+
+def qbo_read(path,resource,params=None):
+    t,realm,host=_qbo_connection(path)
+    q={'minorversion':os.getenv('QBO_MINOR_VERSION','75')}
+    if params:q.update(params)
+    r=requests.get(host+'/v3/company/'+realm+'/'+resource,params=q,headers={'Authorization':'Bearer '+t['access_token'],'Accept':'application/json'},timeout=30)
+    if not r.ok:raise RuntimeError('QuickBooks read failed. Review the sandbox connection. HTTP '+str(r.status_code))
+    return r.json()
+
+def qbo_query(path,statement):
+    return qbo_read(path,'query',{'query':statement}).get('QueryResponse',{})
+
+def qbo_mapping(path,key):
+    env_key={'service_item_id':'QBO_SERVICE_ITEM_ID','tax_code_id':'QBO_TAX_CODE_ID','discount_account_id':'QBO_DISCOUNT_ACCOUNT_ID','deposit_account_id':'QBO_DEPOSIT_ACCOUNT_ID'}[key]
+    with closing(connect(path)) as db:saved=settings(db,'quickbooks_mappings',{}) or {}
+    return str(saved.get(key) or os.getenv(env_key,'')).strip()
 
 def qbo_customer(path,l):
     with closing(connect(path)) as db:old=one(db,"SELECT external_id FROM external_records WHERE provider='quickbooks' AND kind='Customer' AND object_id=? AND revision=0",(l['id'],))
