@@ -234,6 +234,25 @@ def register_sales_crm_v6(app,path,auth,public_url):
               language=data.get("language") or "English",created_at=now(),updated_at=now()));audit(db,u["id"],"Client account created","client_accounts",cid)
             return one(db,"SELECT * FROM client_accounts WHERE id=?",(cid,))
 
+    @app.patch("/api/crm/clients/{cid}")
+    def update_client(cid:str,data:dict,u=Depends(auth)):
+        require_role(u,SALES)
+        name=str(data.get("client_name","")).strip();email=norm_email(data.get("email"));phone=str(data.get("phone","")).strip()
+        if not name:raise HTTPException(422,"Enter the client name.")
+        if email and ("@" not in email or "." not in email.rsplit("@",1)[-1]):raise HTTPException(422,"Enter a valid client email.")
+        if not email and not norm_phone(phone):raise HTTPException(422,"Enter an email or phone number.")
+        language="French" if str(data.get("language","English")).lower().startswith("fr") else "English"
+        new_key="e:"+email if email else "p:"+norm_phone(phone)
+        with transaction(path) as db:
+            a=one(db,"SELECT * FROM client_accounts WHERE id=?",(cid,))
+            if not a:raise HTTPException(404,"Client not found.")
+            conflict=one(db,"SELECT id FROM client_accounts WHERE identity_key=? AND id!=?",(new_key,cid))
+            if conflict:raise HTTPException(409,"Another client already uses that primary email or phone. Open that client instead of creating a duplicate.")
+            db.execute("UPDATE client_accounts SET identity_key=?,client_name=?,email=?,phone=?,language=?,updated_at=? WHERE id=?",
+                       (new_key,name,email,phone,language,now(),cid))
+            audit(db,u["id"],"Client contact profile updated","client_accounts",cid)
+        return {"ok":True,"id":cid}
+
     @app.post("/api/crm/clients/{cid}/services")
     def new_service(cid:str,data:dict,u=Depends(auth)):
         require_role(u,SALES)
