@@ -111,7 +111,16 @@ async function crmOpenClient(cid){
    '<div><div class="info-label">Service history</div><div>'+services.length+' record(s)</div></div></div></section>'+
    '<div class="spacer"></div><div class="panel"><div class="panel-head"><h3>Services</h3><button class="btn-primary btn-small" data-crm="service-new" data-id="'+h(c.id)+'">'+icon('plus')+'New service</button></div>'+
    '<div class="panel-body flush">'+(services.length?xtable(['Service','Date','Route','Stage',''],services):empty('No services yet','Add the first service for this client.'))+'</div></div>',
-   btn('close','Close'),true);
+   '<button class="btn-soft" data-crm="client-edit" data-id="'+h(c.id)+'">Edit client</button>'+btn('close','Close'),true);
+}
+async function crmEditClient(cid){
+ const c=CRM.currentClient?.id===cid?CRM.currentClient:await api('/crm/clients/'+encodeURIComponent(cid));CRM.currentClient=c;
+ showModal('Edit client · '+h(c.client_name),
+   '<form id="crm-edit-client" data-crm-form="client-edit"><input type="hidden" name="client_id" value="'+h(cid)+'"><div class="grid2">'+
+   field('client_name','Client name',c.client_name||'','text','required')+field('email','Email',c.email||'','email')+
+   field('phone','Phone',c.phone||'')+select('language','Preferred language',[['English','English'],['French','Français']],c.language||'English')+
+   '</div><p class="small muted">This is the client contact profile used for new services. Older service records keep their historical details.</p></form>',
+   btn('close','Cancel')+'<button type="submit" form="crm-edit-client" class="btn-primary">Save client</button>');
 }
 async function crmNewService(cid){
  const c=CRM.currentClient?.id===cid?CRM.currentClient:await api('/crm/clients/'+encodeURIComponent(cid));CRM.currentClient=c;
@@ -258,6 +267,7 @@ document.addEventListener('click',async e=>{
   if(a==='quote-new')return crmChooseClient();
   if(a==='client-new')return crmNewClient();
   if(a==='client-open'){if(modal.open)modal.close();return crmOpenClient(id);}
+  if(a==='client-edit')return crmEditClient(id);
   if(a==='service-new')return crmNewService(id);
   if(a==='quote-from-service')return crmQuoteBuilder(id);
   if(a==='quote-open')return crmOpenQuote(id);
@@ -296,6 +306,7 @@ document.addEventListener('submit',async e=>{
  const f=e.target.closest('form[data-crm-form]');if(!f)return;e.preventDefault();const kind=f.dataset.crmForm,d=Object.fromEntries(new FormData(f));
  try{
    if(kind==='client'){const c=await api('/crm/clients',{method:'POST',data:d});modal.close();CRM.currentClient=c;return crmNewService(c.id);}
+   if(kind==='client-edit'){const cid=d.client_id;delete d.client_id;await api('/crm/clients/'+encodeURIComponent(cid),{method:'PATCH',data:d});toast('Client contact saved.');modal.close();return crmOpenClient(cid);}
    if(kind==='service'){const cid=d.client_id;delete d.client_id;const r=await api('/crm/clients/'+encodeURIComponent(cid)+'/services',{method:'POST',data:d});modal.close();return crmQuoteBuilder(r.lead_id);}
    if(kind==='quote'){const qd=crmQuoteData();if(!qd)return;await api('/crm/quotes/calculate',{method:'POST',data:qd});const q=await api('/crm/quotes',{method:'POST',data:qd});toast('Draft estimate saved.');modal.close();return crmOpenQuote(q.id);}
    if(kind==='deposit'){const qid=d.quote_id;delete d.quote_id;d.amount=Number(d.amount||0);const r=await api('/crm/quotes/'+encodeURIComponent(qid)+'/manual-deposit',{method:'POST',data:d});toast(r.confirmed?'Booking confirmed. Confirmation email is prepared.':'Partial deposit saved.');modal.close();return crmOpenQuote(qid);}
