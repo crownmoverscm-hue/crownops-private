@@ -1243,5 +1243,7 @@ def create_app(database_path=None):
     register_ux_features(app,path,auth)
     from .final_features import register_final_features
     register_final_features(app,path,auth)
+    from .sales_crm_v6 import register_sales_crm_v6
+    register_sales_crm_v6(app,path,auth,public_url)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app
