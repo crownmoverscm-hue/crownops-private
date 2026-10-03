@@ -336,7 +336,33 @@ def register_sales_crm_v6(app,path,auth,public_url):
                 from .providers import process_mail
                 sent=bool(process_mail(path,mid).get("sent"))
             except Exception as ex:err=str(getattr(ex,"detail",ex))[:250]
-        return {"ok":True,"quote_status":"Approved","mail_id":mid,"sent":sent,"send_error":err,"portal_url":invite_url}
+        qbo_result=None;qbo_error=""
+        if data.get("sync_quickbooks") is True:
+            try:
+                from .extensions import qbo_work
+                from .providers import qbo_mapping,qbo_customer,qbo_call
+                with closing(connect(path)) as db:
+                    qnow=one(db,"SELECT * FROM quotes WHERE id=?",(qid,))
+                    lnow=one(db,"SELECT * FROM leads WHERE id=?",(qnow["lead_id"],))
+                    rr=json.loads(qnow["result_json"])
+                item=qbo_mapping(path,"service_item_id");tax=qbo_mapping(path,"tax_code_id")
+                if not item or not tax:raise HTTPException(503,"QuickBooks moving-service/tax mapping is incomplete.")
+                amount=rr["low_cents"]
+                def send_qbo(key):
+                    customer=qbo_customer(path,lnow)
+                    body={"CustomerRef":{"value":customer},"CurrencyRef":{"value":"CAD"},"GlobalTaxCalculation":"TaxExcluded",
+                      "TxnDate":now()[:10],"Line":[{"DetailType":"SalesItemLineDetail","Amount":amount/100,
+                      "Description":f"Crown Movers estimate range CAD {rr['low_cents']/100:.2f} - CAD {rr['high_cents']/100:.2f}. {rr.get('movers',0)} movers / {rr.get('trucks',0)} truck(s).",
+                      "SalesItemLineDetail":{"ItemRef":{"value":item},"TaxCodeRef":{"value":tax},"Qty":1,"UnitPrice":amount/100}}],
+                      "PrivateNote":"CrownOps "+qid+" client estimate; client delivery controlled by CrownOps."}
+                    remote=qbo_call(path,"POST","estimate",body,key)["Estimate"]
+                    with transaction(path) as db:
+                        insert(db,"external_records",dict(provider="quickbooks",kind="Estimate",object_id=qid,revision=qnow["revision"],external_id=remote["Id"],sync_token=remote.get("SyncToken","0"),amount_cents=amount,updated_at=now()))
+                    return {"external_id":remote["Id"],"range_endpoint":"low","sent":False}
+                qbo_result=qbo_work(path,"Estimate",qid,qnow["revision"],u["id"],send_qbo)
+            except Exception as ex:qbo_error=str(getattr(ex,"detail",ex))[:250]
+        return {"ok":True,"quote_status":"Approved","mail_id":mid,"sent":sent,"send_error":err,"portal_url":invite_url,
+                "quickbooks":qbo_result,"quickbooks_error":qbo_error}
 
     @app.post("/api/crm/quotes/{qid}/manual-deposit")
     def manual_deposit(qid:str,data:dict,u=Depends(auth)):
