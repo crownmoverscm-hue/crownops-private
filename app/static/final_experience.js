@@ -146,5 +146,5 @@
 
   // Upgrade banner/version when the shell is drawn.
   const oldShellFinal=shell;
-  shell=function(){oldShellFinal();const strip=document.getElementById('pilot-strip');if(strip)strip.innerHTML=`${icon('shield')}<span>Private final-review build v5.4. Core workflow is simplified; live Gmail, QuickBooks, payments and production schedule connections remain off.</span>`;};
+  shell=function(){oldShellFinal();const strip=document.getElementById('pilot-strip');if(strip)strip.innerHTML=`${icon('shield')}<span>CrownOps v6 launch candidate. Client email, QuickBooks and payments stay protected by their connection and production safety gates.</span>`;};
 })();
