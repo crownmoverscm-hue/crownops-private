@@ -177,6 +177,7 @@ function crmQuoteData(){
  const d=Object.fromEntries(new FormData(f));d.materials=[];
  document.querySelectorAll('.crm-mat-check:checked').forEach(ch=>{const qty=document.querySelector('.crm-mat-qty[data-code="'+CSS.escape(ch.dataset.code)+'"]');d.materials.push({code:ch.dataset.code,name:ch.dataset.name,qty:Number(qty?.value||1),unit_price:Number(ch.dataset.price||0)/100});});
  for(const k of ['movers','trucks','hourly_rate','hours_low','hours_high','minimum_hours','deposit_required','transport_hours','fixed_transport','distance_km','distance_rate','junk_extra_half_hours','other_amount','discount_amount']){
+   if(d[k]===undefined)continue;
    if(d[k]==='')d[k]=null;else d[k]=Number(d[k]);
  }
  return d;
@@ -193,9 +194,10 @@ function crmRenderCalc(r){
 }
 function crmToggleServiceFields(){
  const f=document.getElementById('crm-quote-form');if(!f)return;const type=f.elements.service_type.value;
- document.getElementById('crm-junk-fields').style.display=type==='Junk Removal'?'block':'none';
- document.getElementById('crm-moving-fields').style.display=type==='Junk Removal'?'none':'block';
- document.getElementById('crm-transport-fields').style.display=type==='Junk Removal'?'none':'block';
+ const toggle=(id,disabled)=>{const el=document.getElementById(id);if(!el)return;el.style.display=disabled?'none':'block';el.querySelectorAll('input,select,textarea').forEach(x=>x.disabled=disabled);};
+ toggle('crm-junk-fields',type!=='Junk Removal');
+ toggle('crm-moving-fields',type==='Junk Removal');
+ toggle('crm-transport-fields',type==='Junk Removal');
 }
 async function crmRefreshRate(){
  const f=document.getElementById('crm-quote-form');if(!f||!f.elements.move_date.value)return;
