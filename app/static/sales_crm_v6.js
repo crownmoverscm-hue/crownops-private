@@ -226,9 +226,13 @@ async function crmOpenQuote(qid){
 }
 async function crmFinalize(qid){
  if(!confirm('Finalize this estimate and send the client their private View Estimate link through the connected Gmail account?'))return;
- const r=await api('/crm/quotes/'+encodeURIComponent(qid)+'/finalize',{method:'POST',data:{send_now:true}});
- if(r.sent){toast('Estimate finalized and sent.');modal.close();return navigate('quotes');}
- showModal('Estimate finalized','<div class="callout orange"><strong>The estimate is ready, but Gmail did not confirm delivery.</strong>'+h(r.send_error||'Open Communications to review and send the prepared message.')+'</div><div class="spacer"></div>'+
+ const r=await api('/crm/quotes/'+encodeURIComponent(qid)+'/finalize',{method:'POST',data:{send_now:true,sync_quickbooks:true}});
+ if(r.sent&&!r.quickbooks_error){toast('Estimate finalized, sent and synchronized to QuickBooks.');modal.close();return navigate('quotes');}
+ const emailState=r.sent?'<div class="callout teal"><strong>Client email sent.</strong>The private View Estimate link was delivered.</div>':
+   '<div class="callout orange"><strong>The estimate is ready, but Gmail did not confirm delivery.</strong>'+h(r.send_error||'Open Communications to review and send the prepared message.')+'</div>';
+ const qboState=r.quickbooks?'<div class="callout teal"><strong>QuickBooks draft created.</strong>Accounting received the estimate draft; CrownOps remains the client acceptance system.</div>':
+   '<div class="callout orange"><strong>QuickBooks draft was not confirmed.</strong>'+h(r.quickbooks_error||'QuickBooks writes may still be locked in this environment. You can retry from the estimate after reviewing Connections.')+'</div>';
+ showModal('Estimate finalized',emailState+'<div class="spacer"></div>'+qboState+'<div class="spacer"></div>'+
    '<p class="small muted">The private client link was created. Do not post it publicly.</p>'+textArea('link','Private View Estimate link',r.portal_url,3),
    '<button data-page="communications" class="btn-primary">Open Communications</button>'+btn('close','Close'));
 }
