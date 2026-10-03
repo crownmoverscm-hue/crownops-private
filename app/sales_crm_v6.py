@@ -36,6 +36,34 @@ def identity(lead):
     e=norm_email(lead.get("email"));p=norm_phone(lead.get("phone"))
     return "e:"+e if e else ("p:"+p if p else "l:"+lead["id"])
 
+def sync_unlinked_clients(db):
+    """Attach newly arrived form/Gmail/manual leads to the persistent client directory."""
+    for l in rows(db,"""SELECT l.* FROM leads l LEFT JOIN client_account_leads x ON x.lead_id=l.id
+                        WHERE x.lead_id IS NULL ORDER BY l.created_at"""):
+        email=norm_email(l.get("email"));phone=norm_phone(l.get("phone"));acct=None
+        # Prefer an exact email match. If email is unavailable, reuse a normalized phone match.
+        if email:acct=one(db,"SELECT * FROM client_accounts WHERE email=? COLLATE NOCASE",(email,))
+        if not acct and phone:
+            for candidate in rows(db,"SELECT * FROM client_accounts WHERE phone!=''"):
+                if norm_phone(candidate.get("phone"))==phone:
+                    acct=candidate;break
+        if not acct:
+            key=identity(l);base=key;n=2
+            while one(db,"SELECT id FROM client_accounts WHERE identity_key=?",(key,)):
+                key=base+":"+str(n);n+=1
+            cid=uid("CLIENT")
+            insert(db,"client_accounts",dict(id=cid,identity_key=key,client_name=l["client_name"] or "Client",
+                email=email,phone=l["phone"] or "",language=l["language"] or "English",
+                created_at=l["created_at"],updated_at=now()))
+        else:
+            cid=acct["id"]
+            db.execute("""UPDATE client_accounts SET
+              client_name=CASE WHEN client_name='' OR client_name='Website inquiry' THEN ? ELSE client_name END,
+              email=CASE WHEN email='' THEN ? ELSE email END,
+              phone=CASE WHEN phone='' THEN ? ELSE phone END,
+              updated_at=? WHERE id=?""",(l["client_name"],email,l["phone"],now(),cid))
+        insert(db,"client_account_leads",dict(client_id=cid,lead_id=l["id"],created_at=now()))
+
 def schema(path):
     with transaction(path) as db:
         db.executescript("""
@@ -53,16 +81,7 @@ def schema(path):
           language TEXT NOT NULL, name TEXT NOT NULL, body_json TEXT NOT NULL,
           active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL);
         """)
-        for l in rows(db,"SELECT * FROM leads ORDER BY created_at"):
-            if one(db,"SELECT lead_id FROM client_account_leads WHERE lead_id=?",(l["id"],)): continue
-            key=identity(l);a=one(db,"SELECT * FROM client_accounts WHERE identity_key=?",(key,))
-            if not a:
-                cid=uid("CLIENT")
-                insert(db,"client_accounts",dict(id=cid,identity_key=key,client_name=l["client_name"] or "Client",
-                    email=norm_email(l["email"]),phone=l["phone"] or "",language=l["language"] or "English",
-                    created_at=l["created_at"],updated_at=now()))
-            else: cid=a["id"]
-            insert(db,"client_account_leads",dict(client_id=cid,lead_id=l["id"],created_at=now()))
+        sync_unlinked_clients(db)
         defaults=[
           ("moving-en","Moving","English","Local Moving - English",{"title":"Moving Service","liability":"Free limited liability coverage: $0.60/lb per article.","fragile":"TVs, large mirrors, glass, marble and other fragile items require appropriate protective packing or boxing. Added protection does not increase carrier liability unless separate replacement-value coverage is purchased and its conditions are met."}),
           ("moving-fr","Moving","French","Déménagement local - Français",{"title":"Service de déménagement","liability":"Responsabilité limitée gratuite : 0,60 $/lb par article.","fragile":"Les téléviseurs, grands miroirs, articles en verre, marbre et autres objets fragiles exigent un emballage ou une boîte de protection appropriée. La protection additionnelle n'augmente pas la responsabilité du transporteur à moins qu'une couverture de valeur de remplacement distincte soit achetée et que ses conditions soient respectées."}),
@@ -202,7 +221,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
     @app.get("/api/crm/clients")
     def clients(q:str="",u=Depends(auth)):
         require_role(u,OFFICE);needle=(q or "").strip().lower();like="%"+needle+"%"
-        with closing(connect(path)) as db:
+        with transaction(path) as db:
+            sync_unlinked_clients(db)
             accts=rows(db,"SELECT * FROM client_accounts WHERE lower(client_name||' '||email||' '||phone) LIKE ? ORDER BY updated_at DESC LIMIT 40",(like,)) if needle else rows(db,"SELECT * FROM client_accounts ORDER BY updated_at DESC LIMIT 40")
             for a in accts:
                 a["services"]=rows(db,"""SELECT l.id,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.created_at,
