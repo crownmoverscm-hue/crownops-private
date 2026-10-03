@@ -159,20 +159,20 @@ async function crmQuoteBuilder(leadId){
    field('hours_low','Estimated hours - low',3,'number','step="0.25" min="0.25" required')+
    field('hours_high','Estimated hours - high',4,'number','step="0.25" min="0.25" required')+
    field('minimum_hours','Minimum service hours',3,'number','step="0.25" min="0" required')+
-   field('deposit_required','Deposit required',300,'number','step="0.01" min="0")+
+   field('deposit_required','Deposit required',300,'number','step="0.01" min="0"')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted">Local default: 1 × hourly rate. Extra trucks add $35 fuel each and $25 transportation each. Long distance defaults to $0.94/km per truck. Every amount can be reviewed.</p><div class="grid2">'+
-   field('transport_hours','Transportation hours used internally',1,'number','step="0.25" min="0")+
-   field('fixed_transport','OR fixed transportation fee','','number','step="0.01" min="0")+
-   field('distance_km','Long-distance km',0,'number','step="1" min="0")+
-   field('distance_rate','Long-distance rate / km',0.94,'number','step="0.01" min="0")+
+   field('transport_hours','Transportation hours used internally',1,'number','step="0.25" min="0"')+
+   field('fixed_transport','OR fixed transportation fee','','number','step="0.01" min="0"')+
+   field('distance_km','Long-distance km',0,'number','step="1" min="0"')+
+   field('distance_rate','Long-distance rate / km',0.94,'number','step="0.01" min="0"')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-junk-fields" style="display:none"><div class="eyebrow">JUNK REMOVAL</div><div class="grid2">'+
    select('junk_tier','Truck space',[['single','$175 · Single item'],['quarter','$400 · 1/4 truck · approx. 5 ft'],['half','$800 · 1/2 truck · approx. 10 ft'],['three_quarter','$1,200 · 3/4 truck · approx. 15 ft'],['full','$1,600 · Full 20 ft truck']],'quarter')+
    field('junk_extra_half_hours','Extra labour · $80 per 30 min / 2 crew',0,'number','step="1" min="0")+'</div></div>'+
    '<div class="panel panel-body"><div class="eyebrow">4 · MATERIALS / PROTECTION</div><p class="small muted">Select only what applies. TV protection is preset at $35. Other prices come from Materials and can be maintained there.</p>'+
    '<div class="crm-material-list">'+materialRows+'</div><div class="grid2" style="margin-top:14px">'+
-   field('other_amount','Other agreed charges',0,'number','step="0.01" min="0")+field('discount_amount','Approved discount',0,'number','step="0.01" min="0")+
+   field('other_amount','Other agreed charges',0,'number','step="0.01" min="0"')+field('discount_amount','Approved discount',0,'number','step="0.01" min="0"')+
    '</div></div>'+
    '<div class="callout teal"><strong>Protection & liability</strong>Free limited liability coverage is $0.60/lb per article. TVs, large mirrors, glass, marble and other fragile items require suitable protection/boxing. Added packing protection does not by itself increase liability coverage.</div>'+
    '</div><div class="stack"><div id="crm-quote-result" class="quote-summary"><div class="eyebrow">ESTIMATE PREVIEW</div><div class="quote-price">Choose the service details</div><p class="muted">Rates remain editable before saving.</p></div>'+
