@@ -224,6 +224,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
     def new_client(data:dict,u=Depends(auth)):
         require_role(u,SALES);name=str(data.get("client_name","")).strip();email=norm_email(data.get("email"));phone=str(data.get("phone","")).strip()
         if not name:raise HTTPException(422,"Enter the client name.")
+        if email and ("@" not in email or "." not in email.rsplit("@",1)[-1]):raise HTTPException(422,"Enter a valid client email.")
         if not email and not norm_phone(phone):raise HTTPException(422,"Enter an email or phone number.")
         key="e:"+email if email else "p:"+norm_phone(phone)
         with transaction(path) as db:
@@ -315,6 +316,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
             l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],))
             if l["version"]!=q["lead_version"]:raise HTTPException(409,"Client/service details changed. Save a new estimate revision first.")
             missing=[label for key,label in [("client_name","client name"),("email","email"),("phone","phone"),("move_date","service date")] if not str(l.get(key,"")).strip()]
+            if l.get("email") and ("@" not in l["email"] or "." not in l["email"].rsplit("@",1)[-1]):missing.append("valid email")
             service=json.loads(q["inputs_json"]).get("service_type","Moving")
             if service in ("Moving","Long Distance") and (not l["pickup"] or not l["dropoff"]):missing.append("pickup and destination")
             if missing:raise HTTPException(422,"Complete before sending: "+", ".join(missing)+".")
@@ -382,6 +384,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
                 if total<required:return {"ok":True,"confirmed":False,"remaining_cents":required-total}
                 j=confirm_job(db,q,l,u["id"],method+" deposit verified");audit(db,u["id"],"Deposit verified and booking confirmed","payments",pid,{"job_id":j["id"]});return {"ok":True,"confirmed":True,"job_id":j["id"]}
             if mode!="due_on_service":raise HTTPException(422,"Choose received or due on service day.")
+            if method not in ("Cash","Cheque"):raise HTTPException(422,"Only cash or cheque can be approved as due on the service day. Record an e-transfer only after it is actually received.")
             j=confirm_job(db,q,l,u["id"],"Manager-approved deposit exception: "+method+" due on service day");audit(db,u["id"],"Booking confirmed with deposit exception","jobs",j["id"],{"method":method})
             return {"ok":True,"confirmed":True,"job_id":j["id"],"exception":True}
 
