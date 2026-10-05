@@ -58,12 +58,12 @@ def record_deposit_callback(db,p,event_id):
     q=one(db,"SELECT * FROM quotes WHERE id=? AND lead_id=? AND status='Accepted'",(link['quote_id'],link['lead_id']))
     lead=one(db,'SELECT * FROM leads WHERE id=?',(link['lead_id'],))
     state=deposit_state(db,link['lead_id'],q) if q else {'due_cents':1}
-    confirmed=False;job_id=None
+    confirmed=False;job_id=None;confirmation_message_id=None
     if q and lead and state['due_cents']<=0:
         from .sales_crm_v6 import confirm_job
         job=confirm_job(db,q,lead,'square-webhook','Verified card deposit')
-        confirmed=True;job_id=job['id']
+        confirmed=True;job_id=job['id'];confirmation_message_id=job.get('confirmation_message_id')
     else:
         add_task(db,link['lead_id'],'Deposit received: verify remaining balance / booking status',key='deposit:'+pid)
     audit(db,'square-webhook','Verified deposit recorded','payments',pid,{'amount_cents':money['amount'],'booking_confirmed':confirmed,'job_id':job_id})
-    return {'applied':True,'payment_id':pid,'purpose':'Deposit','booking_confirmed':confirmed,'job_id':job_id}
+    return {'applied':True,'payment_id':pid,'purpose':'Deposit','booking_confirmed':confirmed,'job_id':job_id,'confirmation_message_id':confirmation_message_id}
