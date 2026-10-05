@@ -85,6 +85,23 @@ X.pageRenderers.quotes=async()=>{
    filters+'<div class="panel-body flush">'+(rows.length?xtable(['Client','Service date','Crew','Estimate','Status',''],rows):empty('No estimates in this view','Create a new estimate or change the filters.'))+'</div></div>';
 };
 
+const crmBaseAccount=X.pageRenderers.account;
+X.pageRenderers.account=async()=>{
+ const base=await crmBaseAccount(),pay=await api('/crm/payment-settings');
+ const installed=window.matchMedia?.('(display-mode: standalone)').matches||window.navigator.standalone===true;
+ const installBox=installed?
+   '<div class="callout teal"><strong>CrownOps is installed.</strong>You can open it from your phone home screen like an app.</div>':
+   '<div class="callout"><strong>Add the CrownOps icon to your phone.</strong><p class="small muted">Samsung / Android: tap Install CrownOps. iPhone / iPad: open CrownOps in Safari, tap Share, then Add to Home Screen.</p><button class="btn-primary" data-crm="install-app">Install CrownOps</button></div>';
+ const payBox=S.user.role==='owner'?
+   '<form data-crm-form="payment-settings"><div class="grid2">'+
+     field('etransfer_email','Interac e-Transfer recipient email',pay.etransfer_email||'','email','placeholder="payments@yourdomain.ca"')+
+     textArea('etransfer_note','Optional client instructions',pay.etransfer_note||'',3)+
+   '</div><p class="small muted">This appears in the private client portal after an estimate is accepted. Card deposits show separately when Square is configured.</p><button class="btn-primary" type="submit">Save deposit instructions</button></form>':
+   '<p class="small muted">An owner controls the Interac e-Transfer instructions shown to clients.</p>';
+ return base+'<div class="spacer"></div>'+panel('Install CrownOps on iPhone or Samsung',installBox)+
+   '<div class="spacer"></div>'+panel('Client deposit instructions',payBox);
+};
+
 async function crmChooseClient(){
  const clients=await crmSearchClients('');
  showModal('Choose a client for a quote',
@@ -304,6 +321,10 @@ document.addEventListener('click',async e=>{
  const b=e.target.closest('[data-crm]');if(!b)return;e.preventDefault();const a=b.dataset.crm,id=b.dataset.id;
  try{
   if(a==='quote-new')return crmChooseClient();
+  if(a==='install-app'){
+    if(CRM.installPrompt){CRM.installPrompt.prompt();const choice=await CRM.installPrompt.userChoice;CRM.installPrompt=null;toast(choice.outcome==='accepted'?'CrownOps installation started.':'Installation cancelled.');return;}
+    return showModal('Install CrownOps','<div class="stack"><div class="callout"><strong>iPhone / iPad</strong>Open CrownOps in Safari → tap the Share button → <strong>Add to Home Screen</strong> → Add.</div><div class="callout"><strong>Samsung / Android</strong>Open the browser menu → <strong>Install app</strong> or <strong>Add to Home screen</strong>. Chrome may also show an Install option in the address bar.</div></div>',btn('close','Close'));
+  }
   if(a==='client-new')return crmNewClient();
   if(a==='client-open'){if(modal.open)modal.close();return crmOpenClient(id);}
   if(a==='client-edit')return crmEditClient(id);
@@ -359,5 +380,6 @@ document.addEventListener('submit',async e=>{
    if(kind==='service'){const cid=d.client_id;delete d.client_id;const r=await api('/crm/clients/'+encodeURIComponent(cid)+'/services',{method:'POST',data:d});modal.close();return crmQuoteBuilder(r.lead_id);}
    if(kind==='quote'){const qd=crmQuoteData();if(!qd)return;const qid=qd.quote_id;delete qd.quote_id;await api('/crm/quotes/calculate',{method:'POST',data:qd});const q=qid?await api('/crm/quotes/'+encodeURIComponent(qid),{method:'PATCH',data:qd}):await api('/crm/quotes',{method:'POST',data:qd});toast(qid?'Draft estimate updated.':'Draft estimate saved.');modal.close();return crmOpenQuote(q.id);}
    if(kind==='deposit'){const qid=d.quote_id;delete d.quote_id;d.amount=Number(d.amount||0);const r=await api('/crm/quotes/'+encodeURIComponent(qid)+'/manual-deposit',{method:'POST',data:d});toast(r.confirmed?'Booking confirmed. Confirmation email is prepared.':'Partial deposit saved.');modal.close();return crmOpenQuote(qid);}
+   if(kind==='payment-settings'){await api('/crm/payment-settings',{method:'POST',data:d});toast('Client deposit instructions saved.');return navigate('account');}
  }catch(ex){modalError(ex);}
 });
