@@ -193,6 +193,26 @@ def materials(db,requested):
         out.append({"code":code,"name":name,"qty":float(qty),"unit_cents":unit,"total_cents":line});total+=line
     return out,total
 
+def suggested_hours(lead):
+    """Conservative planning suggestion only; staff can always edit before sending."""
+    text=(" ".join(str(lead.get(k) or "") for k in ("home_size","inventory","heavy_items","pickup_access","dropoff_access"))).lower()
+    size=str(lead.get("home_size") or "").lower()
+    low,high=Decimal("3.0"),Decimal("4.5")
+    if any(x in size for x in ("studio","bachelor","1 1/2","2 1/2")):low,high=Decimal("2.5"),Decimal("4.0")
+    elif any(x in size for x in ("1 bedroom","one bedroom","3 1/2","3½")):low,high=Decimal("3.0"),Decimal("4.5")
+    elif any(x in size for x in ("2 bedroom","two bedroom","4 1/2","4½")):low,high=Decimal("4.0"),Decimal("6.0")
+    elif any(x in size for x in ("3 bedroom","three bedroom","5 1/2","5½")):low,high=Decimal("5.0"),Decimal("7.5")
+    elif any(x in size for x in ("4 bedroom","four bedroom","5 bedroom","house","home")):low,high=Decimal("6.0"),Decimal("9.0")
+    boxes=0
+    m=re.search(r"\d+",str(lead.get("boxes") or ""))
+    if m:boxes=int(m.group())
+    if boxes>=60:low+=Decimal("1.0");high+=Decimal("1.5")
+    elif boxes>=40:low+=Decimal("0.5");high+=Decimal("1.0")
+    elif boxes>=20:high+=Decimal("0.5")
+    if any(x in text for x in ("stairs","stair","flight","walk-up","walkup")):high+=Decimal("0.75")
+    if any(x in text for x in ("piano","treadmill","gym","safe","marble","oversized","heavy")):high+=Decimal("0.75")
+    return {"low":float(low),"high":float(high),"basis":"Planning suggestion from saved move size, boxes and access. Review before sending."}
+
 def calculate(db,data):
     service=str(data.get("service_type") or "Moving")
     language="French" if str(data.get("language","English")).lower().startswith("fr") else "English"
@@ -390,7 +410,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
             mats=rows(db,"SELECT code,name,category,sell_cents FROM material_catalog WHERE active=1 ORDER BY category,name")
             a=account_for_lead(db,lead_id)
         return {"client":a,"lead":l,"suggested_hourly_rate":float(rate) if rate is not None else None,"rate_source":source or "",
-          "materials":mats,"defaults":{"local_fuel_per_truck":35.0,"extra_truck_transport":25.0,"long_distance_per_km":0.94,"deposit":300.0,"limited_liability":"$0.60/lb per article"}}
+          "suggested_hours":suggested_hours(l),"materials":mats,
+          "defaults":{"local_fuel_per_truck":35.0,"extra_truck_transport":25.0,"long_distance_per_km":0.94,"deposit":300.0,"limited_liability":"$0.60/lb per article"}}
 
     @app.post("/api/crm/quotes/calculate")
     def calc(data:dict,u=Depends(auth)):
@@ -548,6 +569,24 @@ def register_sales_crm_v6(app,path,auth,public_url):
               f"Hi {l['client_name']},\n\nA friendly reminder that the CAD {amount:.2f} deposit for your booking is still pending. If you already sent it, please disregard this message. Otherwise, reply if you need the payment instructions.\n\nThank you,\nCrown Movers")
             m=queue_message(db,l["id"],subject,body,"Follow-up",u["id"],"deposit-reminder:"+qid+":"+now()[:10])
         return {"id":m["id"],"status":m["status"]}
+
+    @app.get("/api/crm/payment-settings")
+    def get_payment_settings(u=Depends(auth)):
+        require_role(u,OFFICE)
+        import os
+        with closing(connect(path)) as db:cfg=settings(db,"crm_payment_settings",{}) or {}
+        return {"etransfer_email":str(cfg.get("etransfer_email") or ""),"etransfer_note":str(cfg.get("etransfer_note") or ""),
+                "card_configured":bool(os.getenv("SQUARE_TOKEN") and os.getenv("SQUARE_LOCATION_ID"))}
+
+    @app.post("/api/crm/payment-settings")
+    def set_payment_settings(data:dict,u=Depends(auth)):
+        require_role(u,{"owner"})
+        email=norm_email(data.get("etransfer_email"));note=str(data.get("etransfer_note") or "").strip()[:500]
+        if email and ("@" not in email or "." not in email.rsplit("@",1)[-1]):raise HTTPException(422,"Enter a valid Interac e-Transfer recipient email.")
+        with transaction(path) as db:
+            put_setting(db,"crm_payment_settings",{"etransfer_email":email,"etransfer_note":note})
+            audit(db,u["id"],"Client deposit instructions updated","settings","crm_payment_settings",{"has_etransfer_email":bool(email)})
+        return {"ok":True}
 
     @app.get("/api/crm/review-settings")
     def get_review_settings(u=Depends(auth)):
