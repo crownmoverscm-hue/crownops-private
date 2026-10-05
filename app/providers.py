@@ -108,8 +108,8 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
 def branded_email_html(message):
     body=str(message.get('body') or '')
     escaped=html.escape(body)
-    urls=re.findall(r'https://[^\\s<]+',body)
-    escaped=escaped.replace('\\n','<br>')
+    urls=re.findall(r'https://[^\s<]+',body)
+    escaped=escaped.replace('\n','<br>')
     cta=''
     if urls:
         url=html.escape(urls[0],quote=True)
