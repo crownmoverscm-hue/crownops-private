@@ -150,6 +150,7 @@ async function crmQuoteBuilder(leadId){
    select('service_type','Service type',[['Moving','Moving'],['Packing','Packing'],['Junk Removal','Junk removal'],['Long Distance','Long distance']],type,'required')+
    select('language','Quote language',[['English','English'],['French','Français']],lang,'required')+
    field('move_date','Service date',lead.move_date||'','date','required')+
+   select('service_start','Planned start',[['09:00','Morning · 9:00 AM'],['13:00','Afternoon · 1:00 PM'],['TBD','Time to confirm']],'09:00','required')+
    select('template_key','Template',templates.filter(t=>t.service_type===type&&t.language===lang).map(t=>[t.template_key,t.name]),template?.template_key||'')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-moving-fields"><div class="eyebrow">2 · CREW & RATE</div><div class="grid2">'+
