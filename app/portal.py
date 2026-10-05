@@ -165,24 +165,10 @@ def register_portal(app,path,auth,public_url,secure):
             ref=dumps({'name':data['signed_name'],'portal_email':c['email'],'terms_version':terms['version'],'terms_text':terms['text'],'accepted_at':now()})
             db.execute("UPDATE quotes SET status='Accepted',acceptance_ref=?,accepted_at=? WHERE id=?",(ref,now(),qid))
             db.execute("UPDATE leads SET stage='Accepted' WHERE id=?",(c['lead_id'],))
-            # Put an accepted estimate on the working schedule immediately as a tentative hold.
-            # This is not a confirmed booking until the deposit or a manager-approved exception is recorded.
-            job=one(db,"SELECT * FROM jobs WHERE quote_id=? ORDER BY created_at DESC LIMIT 1",(qid,))
-            if not job:
-                from zoneinfo import ZoneInfo
-                inp=json.loads(q['inputs_json'])
-                move_day=inp.get('move_date') or l.get('move_date')
-                if move_day:
-                    local_start=datetime.fromisoformat(move_day+'T09:00:00').replace(tzinfo=ZoneInfo('America/Toronto'))
-                    utc_start=local_start.astimezone(timezone.utc);utc_end=utc_start+timedelta(hours=8)
-                    jid=uid('JOB')
-                    insert(db,'jobs',dict(id=jid,lead_id=l['id'],quote_id=qid,title=l['client_name'],
-                        phase=inp.get('service_type') or 'Moving',start_at=utc_start.isoformat(timespec='seconds'),
-                        end_at=utc_end.isoformat(timespec='seconds'),status='Tentative',
-                        stops_json=dumps([x for x in (l.get('pickup'),l.get('dropoff')) if x]),
-                        notes='Accepted estimate - awaiting deposit / booking confirmation.',capacity_reviewed=0,
-                        exception_reason='',created_by='client:'+c['email'],created_at=now()))
-                    job=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
+            # Put the accepted estimate on the working schedule immediately as a tentative hold.
+            # The shared CRM helper keeps the same start-time and duration rules used by staff.
+            from .sales_crm_v6 import stage_tentative_job
+            job=stage_tentative_job(db,q,l,'client:'+c['email'])
             add_task(db,c['lead_id'],'Verify deposit and assign crew/truck after acceptance',l['assigned_to'],'accepted:'+qid)
             audit(db,'client:'+c['email'],'Quote accepted in portal','quotes',qid,{'terms_version':terms['version'],'tentative_job_id':job['id'] if job else None})
         return {'ok':True,'booking_confirmed':False,'tentative_job_id':job['id'] if job else None,'message':'Estimate accepted. Your requested date is now held as tentative while Crown verifies the deposit and final booking details.'}
