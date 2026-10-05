@@ -7,7 +7,7 @@ from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
 from urllib.parse import urlencode, quote
-import base64, hashlib, hmac, json, os, secrets, time
+import base64, hashlib, hmac, html, json, os, re, secrets, time
 import requests
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -105,8 +105,31 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
        'BillEmail':{'Address':t['customer'].get('email','')},'TxnDate':doc['service_date'],'PrivateNote':'CrownOps '+doc['id']+' revision '+str(doc['revision']),
        'CustomerMemo':{'value':t.get('approval_reference','')[:1000]},'ApplyTaxAfterDiscount':True}
 
+def _estimate_email_html(message):
+    body=str(message.get('body') or '')
+    match=re.search(r'https://[^\s<>]+/portal#access=[A-Za-z0-9_\-]+',body)
+    link=match.group(0) if match else ''
+    greeting=body.split('\n',1)[0].strip() or 'Hello,'
+    fr=message.get('subject','').lower().startswith('votre ')
+    title='Votre devis est prêt' if fr else 'Your estimate is ready'
+    intro='Consultez votre devis Crown Movers, puis acceptez-le en ligne lorsque vous êtes prêt.' if fr else 'Review your Crown Movers estimate and accept it online when you are ready.'
+    button='VOIR LE DEVIS' if fr else 'VIEW ESTIMATE'
+    fallback=('Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :' if fr else 'If the button does not work, copy this link into your browser:')
+    safe_link=html.escape(link,quote=True)
+    return f'''<!doctype html><html><body style="margin:0;background:#f5f7fb;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#24344f">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:28px 12px"><tr><td align="center">
+    <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="max-width:620px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e3e8f1">
+      <tr><td style="background:#22395f;padding:30px 36px;color:white"><div style="font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:#f6a84c;font-weight:700">CROWN MOVERS</div><div style="font-size:28px;font-weight:750;margin-top:8px">{html.escape(title)}</div></td></tr>
+      <tr><td style="padding:34px 36px"><p style="font-size:17px;margin:0 0 14px">{html.escape(greeting)}</p><p style="font-size:16px;line-height:1.6;color:#53647d;margin:0 0 26px">{html.escape(intro)}</p>
+      {f'<p style="text-align:center;margin:30px 0"><a href="{safe_link}" style="display:inline-block;background:#111111;color:#ffffff;text-decoration:none;font-weight:750;letter-spacing:1.4px;padding:15px 26px;border-radius:6px">{html.escape(button)}</a></p>' if link else ''}
+      <p style="font-size:14px;line-height:1.6;color:#53647d;margin:26px 0 0">{html.escape('Merci de votre confiance. — Crown Movers' if fr else 'Thank you for choosing Crown Movers. — Crown Movers')}</p>
+      {f'<div style="margin-top:26px;padding-top:20px;border-top:1px solid #edf0f5;font-size:11px;line-height:1.5;color:#8a96a8">{html.escape(fallback)}<br><span style="word-break:break-all">{safe_link}</span></div>' if link else ''}
+      </td></tr>
+    </table></td></tr></table></body></html>'''
+
 def send_gmail(path,message):
     t=provider_token(path,'gmail');m=EmailMessage();m['To']=message['recipient'];m['Subject']=message['subject'];m['Message-ID']='<'+message['id'].lower()+'@crownops.local>';m.set_content(message['body'])
+    if message.get('category')=='Estimate':m.add_alternative(_estimate_email_html(message),subtype='html')
     if message['category']=='Invoice':
         marker=message['event_key'].split(':')
         if marker[0] in ('invoice-delivery','invoice-mail') and len(marker)==3:
