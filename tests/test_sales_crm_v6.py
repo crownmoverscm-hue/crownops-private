@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.store import initialize, transaction, one
-from app.sales_crm_v6 import schema, calculate
+from app.sales_crm_v6 import schema, calculate, suggested_hours
 
 
 class SalesCrmV6Tests(unittest.TestCase):
@@ -68,6 +68,29 @@ class SalesCrmV6Tests(unittest.TestCase):
             self.assertEqual(r["low_cents"],56000)
             self.assertEqual(r["high_cents"],56000)
             self.assertEqual(len(r["line_items"]),2)
+        finally:
+            td.cleanup()
+
+    def test_planning_hours_are_suggested_but_not_locked(self):
+        lead={"home_size":"2 bedroom apartment","boxes":"45 boxes","inventory":"sofa, beds and dressers",
+              "heavy_items":"treadmill","pickup_access":"1 flight of stairs","dropoff_access":"elevator"}
+        r=suggested_hours(lead)
+        self.assertGreaterEqual(r["low"],4.0)
+        self.assertGreater(r["high"],r["low"])
+        self.assertIn("Review before sending",r["basis"])
+
+    def test_launch_templates_include_booking_and_date_change_language(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                en=one(db,"SELECT body_json FROM crm_quote_templates WHERE template_key='moving-en'")
+                fr=one(db,"SELECT body_json FROM crm_quote_templates WHERE template_key='moving-fr'")
+            import json
+            enb=json.loads(en["body_json"]);frb=json.loads(fr["body_json"])
+            self.assertIn("deposit",enb["deposit_terms"].lower())
+            self.assertIn("10 days",enb["date_change_terms"].lower())
+            self.assertIn("dépôt",frb["deposit_terms"].lower())
+            self.assertIn("10 jours",frb["date_change_terms"].lower())
         finally:
             td.cleanup()
 
