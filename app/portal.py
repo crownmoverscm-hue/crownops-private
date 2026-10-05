@@ -86,7 +86,9 @@ def register_portal(app,path,auth,public_url,secure):
                 r=json.loads(q['result_json']);snap=json.loads(q['lead_snapshot_json'])
                 quotes.append({'id':q['id'],'revision':q['revision'],'status':q['status'],'stale':q['lead_version']!=l['version'],
                     'created_at':q['created_at'],'move_date':snap.get('move_date'),'pickup':snap.get('pickup'),'dropoff':snap.get('dropoff'),
-                    'result':{k:r.get(k) for k in ('hourly_rate_cents','service_low','service_high','minimum_hours','transport_hours','transport_cents','fuel_cents','materials_cents','other_cents','discount_cents','low_cents','high_cents','movers','trucks','tax_note','service_type','language','line_items','distance_km','distance_rate_cents')},'inputs':{k:json.loads(q['inputs_json']).get(k) for k in ('service_type','language','template_key','limited_liability')},'deposit_required':json.loads(q['inputs_json']).get('deposit_required',300)})
+                    'result':{k:r.get(k) for k in ('hourly_rate_cents','service_low','service_high','minimum_hours','transport_hours','transport_cents','fuel_cents','materials_cents','other_cents','discount_cents','low_cents','high_cents','movers','trucks','tax_note','service_type','language','line_items','distance_km','distance_rate_cents')},
+                    'inputs':{k:json.loads(q['inputs_json']).get(k) for k in ('service_type','language','template_key','template_name','template_body','limited_liability')},
+                    'deposit_required':json.loads(q['inputs_json']).get('deposit_required',300)})
             jobs=rows(db,"SELECT id,title,phase,start_at,end_at,status FROM jobs WHERE lead_id=? AND status!='Tentative' ORDER BY start_at",(c['lead_id'],))
             invs=[]
             for inv in rows(db,"SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND i.status='Issued'",(c['lead_id'],)):
@@ -97,7 +99,9 @@ def register_portal(app,path,auth,public_url,secure):
                 qr['deposit']=deposit_state(db,c['lead_id'],source_q)
             cfg=settings(db,'media_program',{})
             terms=settings(db,'client_terms',{})
+            pay=settings(db,'crm_payment_settings',{}) or {}
             return {'csrf':c['csrf'],'client':public_client(l),'quotes':quotes,'jobs':jobs,'invoices':invs,
+                'deposit_options':{'etransfer_email':str(pay.get('etransfer_email') or ''),'etransfer_note':str(pay.get('etransfer_note') or '')},
                 'changes':rows(db,'SELECT id,payload_json,status,created_at,review_note FROM client_changes WHERE lead_id=? ORDER BY created_at DESC',(c['lead_id'],)),
                 'attachments':[safe_attachment(r) for r in rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(c['lead_id'],))],
                 'messages':rows(db,"SELECT id,subject,body,created_at FROM outbound_messages WHERE lead_id=? AND status='Sent' ORDER BY created_at DESC LIMIT 30",(c['lead_id'],)),
