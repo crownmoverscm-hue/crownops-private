@@ -157,20 +157,23 @@ async function crmQuoteBuilder(leadId){
    field('move_date','Service date',lead.move_date||'','date','required')+
    select('template_key','Template',templates.filter(t=>t.service_type===type&&t.language===lang).map(t=>[t.template_key,t.name]),template?.template_key||'')+
    '</div></div>'+
-   '<div class="panel panel-body" id="crm-moving-fields"><div class="eyebrow">2 · CREW & RATE</div><div class="grid2">'+
-   select('movers','Movers',[2,3,4,5,6],2,'required')+select('trucks','Truck(s)',[1,2,3],1,'required')+
-   field('hourly_rate','Hourly rate',firstSetup.suggested_hourly_rate??'','number','step="0.01" min="1" required')+
-   '<div class="form-field"><label>Rate source</label><input id="crm-rate-source" value="'+h(firstSetup.rate_source||'Select date')+'" disabled></div>'+
-   field('hours_low','Estimated hours - low',3,'number','step="0.25" min="0.25" required')+
-   field('hours_high','Estimated hours - high',4,'number','step="0.25" min="0.25" required')+
+   '<div class="panel panel-body" id="crm-moving-fields"><div class="eyebrow">2 · CREW, HOURS & RATE</div><div class="grid2">'+
+   select('movers','Crew package',[[2,'2 Movers + 20 ft Truck'],[3,'3 Movers + 20 ft Truck'],[4,'4 Movers + 2 Trucks'],[5,'5 Movers + 2 Trucks'],[6,'6 Movers + 2 Trucks']],2,'required')+
+   select('trucks','Truck count (editable)',[[1,'1 truck'],[2,'2 trucks'],[3,'3 trucks']],1,'required')+
+   field('hourly_rate','Hourly rate (editable)',firstSetup.suggested_hourly_rate??'','number','step="0.01" min="1" required')+
+   '<div class="form-field"><label>Rate loaded from calendar</label><div id="crm-rate-source" class="callout" style="margin:0">'+h(firstSetup.rate_source||'Choose a date to load the rate')+'</div></div>'+
+   field('hours_low','Estimated service hours · low',firstSetup.suggested_hours?.low??3,'number','step="0.25" min="0.25" required')+
+   field('hours_high','Estimated service hours · high',firstSetup.suggested_hours?.high??4,'number','step="0.25" min="0.25" required')+
    field('minimum_hours','Minimum service hours',3,'number','step="0.25" min="0" required')+
-   field('deposit_required','Deposit required',300,'number','step="0.01" min="0"')+
-   '</div></div>'+
-   '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted">Local default: 1 × hourly rate. Extra trucks add $35 fuel each and $25 transportation each. Long distance defaults to $0.94/km per truck. Every amount can be reviewed.</p><div class="grid2">'+
-   field('transport_hours','Transportation hours used internally',1,'number','step="0.25" min="0"')+
-   field('fixed_transport','OR fixed transportation fee','','number','step="0.01" min="0"')+
-   field('distance_km','Long-distance km',0,'number','step="1" min="0"')+
-   field('distance_rate','Long-distance rate / km',0.94,'number','step="0.01" min="0"')+
+   field('deposit_required','Required deposit',300,'number','step="0.01" min="0"')+
+   '</div><div class="spacer"></div><div class="callout teal"><strong>Planning suggestion</strong>'+
+   h((firstSetup.suggested_hours?.low??3)+'–'+(firstSetup.suggested_hours?.high??4)+' hours')+' · '+h(firstSetup.suggested_hours?.basis||'Review before sending.')+
+   ' <button type="button" class="btn-small" data-crm="quote-use-hours" data-low="'+h(firstSetup.suggested_hours?.low??3)+'" data-high="'+h(firstSetup.suggested_hours?.high??4)+'">Use suggestion</button></div></div>'+
+   '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted"><strong>Local:</strong> defaults to 1 × hourly rate + $35 gas per truck. An extra truck also adds $25 to transportation. <strong>Long distance:</strong> defaults to $0.94/km per truck. You can instead enter any reviewed fixed transportation amount; the client sees only the final fee, never the internal hour multiplication.</p><div class="grid2">'+
+   field('transport_hours','Internal transportation hours',1,'number','step="0.25" min="0"')+
+   field('fixed_transport','Client-facing fixed transportation fee (optional)','','number','step="0.01" min="0"')+
+   field('distance_km','Long-distance route km',0,'number','step="1" min="0"')+
+   field('distance_rate','Long-distance fuel rate / km',0.94,'number','step="0.01" min="0"')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-junk-fields" style="display:none"><div class="eyebrow">JUNK REMOVAL</div><div class="grid2">'+
    select('junk_tier','Truck space',[['single','$175 · Single item'],['quarter','$400 · 1/4 truck · approx. 5 ft'],['half','$800 · 1/2 truck · approx. 10 ft'],['three_quarter','$1,200 · 3/4 truck · approx. 15 ft'],['full','$1,600 · Full 20 ft truck']],'quarter')+
@@ -216,7 +219,7 @@ function crmToggleServiceFields(){
 async function crmRefreshRate(){
  const f=document.getElementById('crm-quote-form');if(!f||!f.elements.move_date.value)return;
  const r=await api('/crm/quote-setup?lead_id='+encodeURIComponent(f.elements.lead_id.value)+'&move_date='+encodeURIComponent(f.elements.move_date.value)+'&movers='+encodeURIComponent(f.elements.movers.value));
- f.elements.hourly_rate.value=r.suggested_hourly_rate??'';document.getElementById('crm-rate-source').value=r.rate_source||'';
+ f.elements.hourly_rate.value=r.suggested_hourly_rate??'';const src=document.getElementById('crm-rate-source');if(src)src.textContent=r.rate_source||'Calendar rate';
 }
 async function crmOpenQuote(qid){
  const d=await api('/crm/quotes/'+encodeURIComponent(qid));CRM.currentQuote=d;const q=d.quote,r=q.result,l=d.lead;
