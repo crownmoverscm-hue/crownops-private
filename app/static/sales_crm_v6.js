@@ -102,8 +102,11 @@ async function crmOpenClient(cid){
    '<strong>'+h(crmServiceLabel(s.lead_type))+'</strong><div class="tiny muted">'+h(s.home_size||'Size not entered')+'</div>',
    h(s.move_date||'Date needed'),
    h(s.pickup||'Pickup needed')+'<div class="tiny muted">'+h(s.dropoff||'Destination needed')+'</div>',
-   pill(s.stage),
-   '<button class="btn-small" data-crm="quote-from-service" data-id="'+h(s.id)+'">Quote</button>'
+   '<div class="row wrap">'+pill(s.stage)+(s.quote_status?pill(s.quote_status):'')+(s.job_status?pill(s.job_status):'')+'</div>'+
+     (Number(s.verified_deposit_cents||0)>0?'<div class="tiny muted" style="margin-top:4px">Verified deposit '+crmCash(s.verified_deposit_cents)+'</div>':''),
+   '<div class="row wrap">'+
+     (s.quote_id?'<button class="btn-small" data-crm="quote-open" data-id="'+h(s.quote_id)+'">Open quote</button>':'')+
+     '<button class="btn-small" data-crm="quote-from-service" data-id="'+h(s.id)+'">'+(s.quote_id?'New revision':'Quote')+'</button></div>'
  ]);
  showModal(h(c.client_name),
    '<section class="job-section"><div class="eyebrow">CLIENT INFORMATION</div><div class="spacer"></div><div class="info-grid">'+
@@ -112,7 +115,7 @@ async function crmOpenClient(cid){
    '<div><div class="info-label">Language</div><div>'+h(c.language||'English')+'</div></div>'+
    '<div><div class="info-label">Service history</div><div>'+services.length+' record(s)</div></div></div></section>'+
    '<div class="spacer"></div><div class="panel"><div class="panel-head"><h3>Services</h3><button class="btn-primary btn-small" data-crm="service-new" data-id="'+h(c.id)+'">'+icon('plus')+'New service</button></div>'+
-   '<div class="panel-body flush">'+(services.length?xtable(['Service','Date','Route','Stage',''],services):empty('No services yet','Add the first service for this client.'))+'</div></div>',
+   '<div class="panel-body flush">'+(services.length?xtable(['Service','Date','Route','Status',''],services):empty('No services yet','Add the first service for this client.'))+'</div></div>',
    '<button class="btn-soft" data-crm="client-edit" data-id="'+h(c.id)+'">Edit client</button>'+btn('close','Close'),true);
 }
 async function crmEditClient(cid){
