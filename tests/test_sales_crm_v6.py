@@ -109,6 +109,8 @@ class SalesCrmV6Tests(unittest.TestCase):
     def test_branded_email_has_safe_html_and_quote_cta(self):
         html=branded_email_html({"subject":"Your Crown Movers estimate is ready","body":"Hi <Client>\nhttps://example.com/estimate"})
         self.assertIn("VIEW ESTIMATE",html)
+        self.assertIn('href="https://example.com/estimate"',html)
+        self.assertIn("Hi &lt;Client&gt;<br>https://example.com/estimate",html)
         self.assertIn("&lt;Client&gt;",html)
         self.assertNotIn("<Client>",html)
 
