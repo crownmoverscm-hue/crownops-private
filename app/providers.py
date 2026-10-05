@@ -467,4 +467,12 @@ def register_providers(app,path,auth,public_url,new_lead=None):
                 result={'applied':False,'reason':'Refund/dispute requires finance reconciliation'}
                 add_task(db,None,'URGENT: Square refund/dispute needs finance reconciliation',key=eid)
             insert(db,'bridge_events',dict(event_id=eid,body_hash=hashlib.sha256(body).hexdigest(),kind='Square payment',result_json=dumps(result),created_at=now()))
+        mid=result.get('confirmation_message_id') if isinstance(result,dict) else None
+        if mid:
+            result['confirmation_sent']=False
+            try:
+                with transaction(path) as db:db.execute("UPDATE outbound_messages SET status='Approved',approved_by='square-webhook' WHERE id=? AND status='Draft'",(mid,))
+                result['confirmation_sent']=bool(process_mail(path,mid).get('sent'))
+            except Exception as ex:
+                result['confirmation_email_error']=str(getattr(ex,'detail',ex))[:250]
         return {'ok':True,**result}
