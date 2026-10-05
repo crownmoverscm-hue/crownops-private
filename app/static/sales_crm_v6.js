@@ -39,7 +39,7 @@ async function crmClientBrowser(){
    '<button class="btn-primary" data-crm="client-new">'+icon('plus')+'New client</button>'+
    '<button class="btn-soft" data-action="new-lead">'+icon('plus')+'New inquiry</button>')+
    '<div class="filterbar"><div class="searchbox" style="min-width:360px">'+icon('search')+
-   '<input id="crm-client-search" value="'+h(CRM.clientSearch)+'" placeholder="Search name, email or phone..." aria-label="Search clients"></div>'+
+   '<input id="crm-client-search" value="'+h(CRM.clientSearch)+'" placeholder="Search name, email, phone or address..." aria-label="Search clients"></div>'+
    '<span class="tiny muted">'+clients.length+' client matches</span></div>'+
    '<div class="panel"><div class="panel-head"><h2>Client database</h2><span class="tiny muted">Newest service shown first</span></div>'+
    '<div class="panel-body flush">'+(rows.length?xtable(['Client','Latest service','Stage','History',''],rows):empty('No clients found','Search another email, phone or name, or create a new client.'))+'</div></div>';
@@ -84,7 +84,7 @@ async function crmChooseClient(){
  showModal('Choose a client for a quote',
    '<div class="callout teal"><strong>Find the client once.</strong>Search name, email or phone. You can use an existing service, add a new service, or create a brand-new client.</div>'+
    '<div class="spacer"></div><div class="searchbox" style="width:100%">'+icon('search')+
-   '<input id="crm-quote-client-search" placeholder="Search name, email or phone..." autocomplete="off"></div>'+
+   '<input id="crm-quote-client-search" placeholder="Search name, email, phone or address..." autocomplete="off"></div>'+
    '<div id="crm-client-results" style="margin-top:14px">'+clients.map(crmClientCard).join('')+'</div>',
    '<button data-crm="client-new" class="btn-soft">'+icon('plus')+'New client</button>'+btn('close','Cancel'),true);
 }
