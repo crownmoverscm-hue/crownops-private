@@ -498,7 +498,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
             subject="Votre devis Crown Movers est prêt" if fr else "Your Crown Movers estimate is ready"
             body=(f"Bonjour {l['client_name']},\n\nVotre devis Crown Movers est prêt. Estimation avant taxes : {r['low_cents']/100:.2f} $ à {r['high_cents']/100:.2f} $ CA.\n\nConsultez et acceptez votre devis ici :\n{invite_url}\n\nAprès l'acceptation, vous verrez les options de dépôt applicables.\n\nMerci,\nCrown Movers" if fr else
               f"Hi {l['client_name']},\n\nYour Crown Movers estimate is ready. Estimated range before tax: CAD {r['low_cents']/100:.2f} to CAD {r['high_cents']/100:.2f}.\n\nView and accept your estimate here:\n{invite_url}\n\nAfter acceptance, the available deposit options will appear.\n\nThank you,\nCrown Movers")
-            msg=queue_message(db,l["id"],subject,body,"Reply",u["id"],"quote-delivery:"+qid+":"+str(q["revision"]));mid=msg["id"]
+            msg=queue_message(db,l["id"],subject,body,"Estimate",u["id"],"quote-delivery:"+qid+":"+str(q["revision"]));mid=msg["id"]
             db.execute("UPDATE leads SET stage='Quote Sent',notifications_suppressed=0,updated_at=? WHERE id=?",(now(),l["id"]));audit(db,u["id"],"Estimate finalized for client delivery","quotes",qid,{"mail_id":mid})
         sent=False;err=""
         if data.get("send_now") is True:
