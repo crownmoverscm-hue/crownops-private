@@ -23,6 +23,7 @@ JUNK={
  "full":("Full Truck - 20 ft container",Decimal("1600.00")),
 }
 JUNK_LABOUR=Decimal("80.00")
+QUOTE_ROLES={"owner","sales","dispatch"}
 
 def money(v):
     return int((Decimal(str(v))*100).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
@@ -196,18 +197,32 @@ def confirmation(lead):
         return f"Bonjour {lead['client_name']},\n\nVotre service avec Crown Movers est maintenant réservé et confirmé. Si une urgence vous oblige à demander un changement de date, nous ferons notre possible pour vous accommoder. Un préavis d'au moins 10 jours est requis selon les conditions de réservation. Un changement demandé à moins de 10 jours peut entraîner la perte du dépôt. Une nouvelle date dépend des disponibilités et le tarif peut changer selon la date choisie.\n\nMerci,\nCrown Movers"
     return f"Hi {lead['client_name']},\n\nYour Crown Movers service is booked and confirmed. If an emergency means you need to request a date change, we will do our best to accommodate you. At least 10 days' notice is required under the booking terms. A change requested inside 10 days may result in loss of the deposit. A replacement date is subject to availability and rates may change for the new date.\n\nThank you,\nCrown Movers"
 
-def confirm_job(db,q,lead,actor,reason):
+def stage_tentative_job(db,q,lead,actor):
+    """Put an accepted estimate on the operating schedule before the deposit is settled."""
     j=one(db,"SELECT * FROM jobs WHERE quote_id=? ORDER BY created_at DESC LIMIT 1",(q["id"],))
-    if not j:
-        inp=json.loads(q["inputs_json"]);day=inp.get("move_date") or lead.get("move_date")
-        if not day:raise HTTPException(409,"Add the service date before confirming the booking.")
-        start=datetime.fromisoformat(day+"T09:00:00").replace(tzinfo=MONTREAL).astimezone(timezone.utc);end=start+timedelta(hours=8)
-        jid=uid("JOB");insert(db,"jobs",dict(id=jid,lead_id=lead["id"],quote_id=q["id"],title=lead["client_name"],
-          phase=inp.get("service_type") or "Moving",start_at=start.isoformat(timespec="seconds"),end_at=end.isoformat(timespec="seconds"),
-          status="Confirmed",stops_json=dumps([x for x in [lead.get("pickup"),lead.get("dropoff")] if x]),notes="",
-          capacity_reviewed=0,exception_reason=reason,created_by=actor,created_at=now()));j=one(db,"SELECT * FROM jobs WHERE id=?",(jid,))
-    else:
-        db.execute("UPDATE jobs SET status='Confirmed',exception_reason=?,version=version+1 WHERE id=?",(reason,j["id"]))
+    if j:return j
+    inp=json.loads(q["inputs_json"]);result=json.loads(q["result_json"]);day=inp.get("move_date") or lead.get("move_date")
+    if not day:raise HTTPException(409,"Add the service date before scheduling the accepted estimate.")
+    raw_start=str(inp.get("service_start") or "09:00")
+    start_clock="13:00" if raw_start=="afternoon" else ("09:00" if raw_start in ("morning","TBD","tbd","") else raw_start)
+    if not re.fullmatch(r"\\d{2}:\\d{2}",start_clock):start_clock="09:00"
+    start=datetime.fromisoformat(day+"T"+start_clock+":00").replace(tzinfo=MONTREAL).astimezone(timezone.utc)
+    planned=max(3.0,min(12.0,float(result.get("service_high") or 6)+float(result.get("transport_hours") or 0)))
+    end=start+timedelta(hours=planned)
+    note="Accepted estimate - awaiting deposit / final booking confirmation."
+    if raw_start.lower()=="tbd":note+=" Start time still to be confirmed."
+    jid=uid("JOB");insert(db,"jobs",dict(id=jid,lead_id=lead["id"],quote_id=q["id"],title=lead["client_name"],
+      phase=inp.get("service_type") or "Moving",start_at=start.isoformat(timespec="seconds"),end_at=end.isoformat(timespec="seconds"),
+      status="Tentative",stops_json=dumps([x for x in [lead.get("pickup"),lead.get("dropoff")] if x]),notes=note,
+      capacity_reviewed=0,exception_reason="Accepted estimate; awaiting deposit confirmation",created_by=actor,created_at=now()))
+    j=one(db,"SELECT * FROM jobs WHERE id=?",(jid,))
+    add_task(db,lead["id"],"Assign crew and truck for accepted service",lead.get("assigned_to",""),"assign:"+j["id"])
+    return j
+
+def confirm_job(db,q,lead,actor,reason):
+    j=stage_tentative_job(db,q,lead,actor)
+    db.execute("UPDATE jobs SET status='Confirmed',exception_reason=?,version=version+1 WHERE id=?",(reason,j["id"]))
+    j=one(db,"SELECT * FROM jobs WHERE id=?",(j["id"],))
     add_task(db,lead["id"],"Assign crew and truck for confirmed service",lead.get("assigned_to",""),"assign:"+j["id"])
     key="booking-confirmed:"+q["id"]
     if lead.get("email") and not one(db,"SELECT id FROM outbound_messages WHERE event_key=?",(key,)):
@@ -223,7 +238,13 @@ def register_sales_crm_v6(app,path,auth,public_url):
         require_role(u,OFFICE);needle=(q or "").strip().lower();like="%"+needle+"%"
         with transaction(path) as db:
             sync_unlinked_clients(db)
-            accts=rows(db,"SELECT * FROM client_accounts WHERE lower(client_name||' '||email||' '||phone) LIKE ? ORDER BY updated_at DESC LIMIT 40",(like,)) if needle else rows(db,"SELECT * FROM client_accounts ORDER BY updated_at DESC LIMIT 40")
+            accts=rows(db,"""SELECT a.* FROM client_accounts a
+              WHERE lower(a.client_name||' '||a.email||' '||a.phone) LIKE ?
+                 OR EXISTS(
+                    SELECT 1 FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
+                    WHERE x.client_id=a.id AND lower(l.client_name||' '||l.email||' '||l.phone||' '||l.pickup||' '||l.dropoff) LIKE ?
+                 )
+              ORDER BY a.updated_at DESC LIMIT 40""",(like,like)) if needle else rows(db,"SELECT * FROM client_accounts ORDER BY updated_at DESC LIMIT 40")
             for a in accts:
                 a["services"]=rows(db,"""SELECT l.id,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.created_at,
                   (SELECT status FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_status
@@ -242,7 +263,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.post("/api/crm/clients")
     def new_client(data:dict,u=Depends(auth)):
-        require_role(u,SALES);name=str(data.get("client_name","")).strip();email=norm_email(data.get("email"));phone=str(data.get("phone","")).strip()
+        require_role(u,QUOTE_ROLES);name=str(data.get("client_name","")).strip();email=norm_email(data.get("email"));phone=str(data.get("phone","")).strip()
         if not name:raise HTTPException(422,"Enter the client name.")
         if email and ("@" not in email or "." not in email.rsplit("@",1)[-1]):raise HTTPException(422,"Enter a valid client email.")
         if not email and not norm_phone(phone):raise HTTPException(422,"Enter an email or phone number.")
@@ -256,7 +277,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.patch("/api/crm/clients/{cid}")
     def update_client(cid:str,data:dict,u=Depends(auth)):
-        require_role(u,SALES)
+        require_role(u,QUOTE_ROLES)
         name=str(data.get("client_name","")).strip();email=norm_email(data.get("email"));phone=str(data.get("phone","")).strip()
         if not name:raise HTTPException(422,"Enter the client name.")
         if email and ("@" not in email or "." not in email.rsplit("@",1)[-1]):raise HTTPException(422,"Enter a valid client email.")
@@ -275,7 +296,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.post("/api/crm/clients/{cid}/services")
     def new_service(cid:str,data:dict,u=Depends(auth)):
-        require_role(u,SALES)
+        require_role(u,QUOTE_ROLES)
         with transaction(path) as db:
             a=one(db,"SELECT * FROM client_accounts WHERE id=?",(cid,))
             if not a:raise HTTPException(404,"Client not found.")
@@ -300,7 +321,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.get("/api/crm/quote-setup")
     def setup(lead_id:str,move_date:str="",movers:int=2,u=Depends(auth)):
-        require_role(u,SALES)
+        require_role(u,QUOTE_ROLES)
         with closing(connect(path)) as db:
             l=one(db,"SELECT * FROM leads WHERE id=?",(lead_id,))
             if not l:raise HTTPException(404,"Service record not found.")
@@ -313,12 +334,12 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.post("/api/crm/quotes/calculate")
     def calc(data:dict,u=Depends(auth)):
-        require_role(u,SALES)
+        require_role(u,QUOTE_ROLES)
         with closing(connect(path)) as db:return calculate(db,data)
 
     @app.post("/api/crm/quotes")
     def create_quote(data:dict,u=Depends(auth)):
-        require_role(u,SALES);lid=str(data.get("lead_id") or "")
+        require_role(u,QUOTE_ROLES);lid=str(data.get("lead_id") or "")
         with transaction(path) as db:
             l=one(db,"SELECT * FROM leads WHERE id=?",(lid,))
             if not l:raise HTTPException(404,"Service record not found.")
@@ -348,7 +369,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.post("/api/crm/quotes/{qid}/finalize")
     def finalize(qid:str,data:dict,u=Depends(auth)):
-        require_role(u,SALES);invite_url="";mid=None
+        require_role(u,QUOTE_ROLES);invite_url="";mid=None
         with transaction(path) as db:
             q=one(db,"SELECT * FROM quotes WHERE id=?",(qid,))
             if not q or q["status"] not in ("Draft","Approved"):raise HTTPException(409,"Only a draft or approved estimate can be finalized.")
@@ -407,9 +428,9 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.post("/api/crm/quotes/{qid}/manual-deposit")
     def manual_deposit(qid:str,data:dict,u=Depends(auth)):
-        require_role(u,SALES);method=str(data.get("method") or "")
+        require_role(u,QUOTE_ROLES);method=str(data.get("method") or "")
         if method not in ("Interac e-Transfer","Cash","Cheque"):raise HTTPException(422,"Choose e-transfer, cash or cheque.")
-        mode=str(data.get("mode") or "received")
+        mode=str(data.get("mode") or "received");out=None;mail_id=None
         with transaction(path) as db:
             q=one(db,"SELECT * FROM quotes WHERE id=? AND status='Accepted'",(qid,))
             if not q:raise HTTPException(409,"The client must accept the estimate first.")
@@ -420,16 +441,31 @@ def register_sales_crm_v6(app,path,auth,public_url):
                 if one(db,"SELECT id FROM payments WHERE lead_id=? AND reference=?",(l["id"],ref)):raise HTTPException(409,"That payment reference is already recorded.")
                 pid=uid("PAY");insert(db,"payments",dict(id=pid,lead_id=l["id"],amount_cents=amount,method=method,purpose="Deposit",reference=ref,verified=1,recorded_by=u["id"],created_at=now()))
                 total=db.execute("SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE lead_id=? AND purpose='Deposit' AND verified=1",(l["id"],)).fetchone()[0]
-                if total<required:return {"ok":True,"confirmed":False,"remaining_cents":required-total}
-                j=confirm_job(db,q,l,u["id"],method+" deposit verified");audit(db,u["id"],"Deposit verified and booking confirmed","payments",pid,{"job_id":j["id"]});return {"ok":True,"confirmed":True,"job_id":j["id"]}
-            if mode!="due_on_service":raise HTTPException(422,"Choose received or due on service day.")
-            if method not in ("Cash","Cheque"):raise HTTPException(422,"Only cash or cheque can be approved as due on the service day. Record an e-transfer only after it is actually received.")
-            j=confirm_job(db,q,l,u["id"],"Manager-approved deposit exception: "+method+" due on service day");audit(db,u["id"],"Booking confirmed with deposit exception","jobs",j["id"],{"method":method})
-            return {"ok":True,"confirmed":True,"job_id":j["id"],"exception":True}
+                if total<required:
+                    out={"ok":True,"confirmed":False,"remaining_cents":required-total}
+                else:
+                    j=confirm_job(db,q,l,u["id"],method+" deposit verified");audit(db,u["id"],"Deposit verified and booking confirmed","payments",pid,{"job_id":j["id"]})
+                    out={"ok":True,"confirmed":True,"job_id":j["id"]}
+            else:
+                if mode!="due_on_service":raise HTTPException(422,"Choose received or due on service day.")
+                if method not in ("Cash","Cheque"):raise HTTPException(422,"Only cash or cheque can be approved as due on the service day. Record an e-transfer only after it is actually received.")
+                j=confirm_job(db,q,l,u["id"],"Manager-approved deposit exception: "+method+" due on service day");audit(db,u["id"],"Booking confirmed with deposit exception","jobs",j["id"],{"method":method})
+                out={"ok":True,"confirmed":True,"job_id":j["id"],"exception":True}
+            if out.get("confirmed"):
+                msg=one(db,"SELECT * FROM outbound_messages WHERE event_key=?",("booking-confirmed:"+qid,))
+                if msg and msg["status"]=="Draft":
+                    db.execute("UPDATE outbound_messages SET status='Approved',approved_by=? WHERE id=?",(u["id"],msg["id"]));mail_id=msg["id"]
+        if mail_id:
+            try:
+                from .providers import process_mail
+                out["confirmation_sent"]=bool(process_mail(path,mail_id).get("sent"))
+            except Exception as ex:
+                out["confirmation_sent"]=False;out["confirmation_error"]=str(getattr(ex,"detail",ex))[:200]
+        return out
 
     @app.post("/api/crm/quotes/{qid}/deposit-reminder")
     def reminder(qid:str,u=Depends(auth)):
-        require_role(u,SALES)
+        require_role(u,QUOTE_ROLES)
         with transaction(path) as db:
             q=one(db,"SELECT * FROM quotes WHERE id=? AND status='Accepted'",(qid,))
             if not q:raise HTTPException(409,"Only an accepted estimate can receive a deposit reminder.")
@@ -455,7 +491,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.post("/api/crm/jobs/{jid}/review-request")
     def review_request(jid:str,u=Depends(auth)):
-        require_role(u,SALES)
+        require_role(u,QUOTE_ROLES)
         with transaction(path) as db:
             j=one(db,"SELECT * FROM jobs WHERE id=?",(jid,))
             if not j or j["status"]!="Completed":raise HTTPException(409,"Complete the service before requesting a public review.")
