@@ -7,7 +7,7 @@ from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
 from urllib.parse import urlencode, quote
-import base64, hashlib, hmac, json, os, secrets, time
+import base64, hashlib, hmac, html, json, os, re, secrets, time
 import requests
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -105,8 +105,27 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
        'BillEmail':{'Address':t['customer'].get('email','')},'TxnDate':doc['service_date'],'PrivateNote':'CrownOps '+doc['id']+' revision '+str(doc['revision']),
        'CustomerMemo':{'value':t.get('approval_reference','')[:1000]},'ApplyTaxAfterDiscount':True}
 
+def branded_email_html(message):
+    body=str(message.get('body') or '')
+    escaped=html.escape(body)
+    urls=re.findall(r'https://[^\\s<]+',body)
+    escaped=escaped.replace('\\n','<br>')
+    cta=''
+    if urls:
+        url=html.escape(urls[0],quote=True)
+        french='devis' in str(message.get('subject','')).lower() or 'réservation' in str(message.get('subject','')).lower()
+        label='VOIR LE DEVIS' if french else 'VIEW ESTIMATE'
+        cta=f'<p style="margin:28px 0"><a href="{url}" style="display:inline-block;background:#1d355d;color:#fff;text-decoration:none;font-weight:700;padding:14px 22px;border-radius:7px">{label}</a></p>'
+    return f'''<!doctype html><html><body style="margin:0;background:#f5f7fb;font-family:Arial,Helvetica,sans-serif;color:#1e2b45">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:28px 12px"><tr><td align="center">
+      <table role="presentation" width="640" cellspacing="0" cellpadding="0" style="max-width:640px;width:100%;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5eaf2">
+      <tr><td style="padding:28px 32px;background:#1d355d;color:#fff"><div style="font-size:26px;font-weight:800">Crown Movers</div><div style="opacity:.82;margin-top:4px">Moving made simple.</div></td></tr>
+      <tr><td style="padding:34px 32px;font-size:16px;line-height:1.65">{escaped}{cta}
+      <div style="margin-top:32px;padding-top:18px;border-top:1px solid #e9edf3;color:#6f7d92;font-size:12px">Crown Movers · Montréal, Québec · 514-606-4030 · info@crownmovers.ca</div>
+      </td></tr></table></td></tr></table></body></html>'''
+
 def send_gmail(path,message):
-    t=provider_token(path,'gmail');m=EmailMessage();m['To']=message['recipient'];m['Subject']=message['subject'];m['Message-ID']='<'+message['id'].lower()+'@crownops.local>';m.set_content(message['body'])
+    t=provider_token(path,'gmail');m=EmailMessage();m['To']=message['recipient'];m['Subject']=message['subject'];m['Message-ID']='<'+message['id'].lower()+'@crownops.local>';m.set_content(message['body']);m.add_alternative(branded_email_html(message),subtype='html')
     if message['category']=='Invoice':
         marker=message['event_key'].split(':')
         if marker[0] in ('invoice-delivery','invoice-mail') and len(marker)==3:
@@ -444,4 +463,11 @@ def register_providers(app,path,auth,public_url,new_lead=None):
                 result={'applied':False,'reason':'Refund/dispute requires finance reconciliation'}
                 add_task(db,None,'URGENT: Square refund/dispute needs finance reconciliation',key=eid)
             insert(db,'bridge_events',dict(event_id=eid,body_hash=hashlib.sha256(body).hexdigest(),kind='Square payment',result_json=dumps(result),created_at=now()))
+        mail_id=result.get('confirmation_mail_id')
+        if mail_id:
+            try:
+                result['confirmation_sent']=bool(process_mail(path,mail_id).get('sent'))
+            except Exception:
+                result['confirmation_sent']=False
+                result['confirmation_error']='Booking is confirmed, but the confirmation email needs review in Communications.'
         return {'ok':True,**result}
