@@ -291,10 +291,13 @@ def confirm_job(db,q,lead,actor,reason):
     else:
         db.execute("UPDATE jobs SET status='Confirmed',exception_reason=?,version=version+1 WHERE id=?",(reason,j["id"]))
     add_task(db,lead["id"],"Assign crew and truck for confirmed service",lead.get("assigned_to",""),"assign:"+j["id"])
-    key="booking-confirmed:"+q["id"]
-    if lead.get("email") and not one(db,"SELECT id FROM outbound_messages WHERE event_key=?",(key,)):
-        queue_message(db,lead["id"],"Booking confirmed | Réservation confirmée",confirmation(lead),"Preparation",actor,key,j["id"],j.get("version",1))
+    key="booking-confirmed:"+q["id"];confirmation_message_id=None
+    if lead.get("email"):
+        existing=one(db,"SELECT * FROM outbound_messages WHERE event_key=?",(key,))
+        msg=existing or queue_message(db,lead["id"],"Booking confirmed | Réservation confirmée",confirmation(lead),"Booking confirmation",actor,key,j["id"],j.get("version",1))
+        confirmation_message_id=msg["id"]
     db.execute("UPDATE leads SET stage='Booked',updated_at=? WHERE id=?",(now(),lead["id"]))
+    j=dict(j);j["confirmation_message_id"]=confirmation_message_id
     return j
 
 def register_sales_crm_v6(app,path,auth,public_url):
@@ -551,11 +554,20 @@ def register_sales_crm_v6(app,path,auth,public_url):
                 pid=uid("PAY");insert(db,"payments",dict(id=pid,lead_id=l["id"],amount_cents=amount,method=method,purpose="Deposit",reference=ref,verified=1,recorded_by=u["id"],created_at=now()))
                 total=db.execute("SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE lead_id=? AND purpose='Deposit' AND verified=1",(l["id"],)).fetchone()[0]
                 if total<required:return {"ok":True,"confirmed":False,"remaining_cents":required-total}
-                j=confirm_job(db,q,l,u["id"],method+" deposit verified");audit(db,u["id"],"Deposit verified and booking confirmed","payments",pid,{"job_id":j["id"]});return {"ok":True,"confirmed":True,"job_id":j["id"]}
+                j=confirm_job(db,q,l,u["id"],method+" deposit verified");audit(db,u["id"],"Deposit verified and booking confirmed","payments",pid,{"job_id":j["id"]});result={"ok":True,"confirmed":True,"job_id":j["id"],"confirmation_message_id":j.get("confirmation_message_id")}
             if mode!="due_on_service":raise HTTPException(422,"Choose received or due on service day.")
             if method not in ("Cash","Cheque"):raise HTTPException(422,"Only cash or cheque can be approved as due on the service day. Record an e-transfer only after it is actually received.")
             j=confirm_job(db,q,l,u["id"],"Manager-approved deposit exception: "+method+" due on service day");audit(db,u["id"],"Booking confirmed with deposit exception","jobs",j["id"],{"method":method})
-            return {"ok":True,"confirmed":True,"job_id":j["id"],"exception":True}
+            result={"ok":True,"confirmed":True,"job_id":j["id"],"exception":True,"confirmation_message_id":j.get("confirmation_message_id")}
+        mid=result.get("confirmation_message_id");result["confirmation_sent"]=False
+        if mid:
+            try:
+                from .providers import process_mail
+                with transaction(path) as db:db.execute("UPDATE outbound_messages SET status='Approved',approved_by=? WHERE id=? AND status='Draft'",(u["id"],mid))
+                result["confirmation_sent"]=bool(process_mail(path,mid).get("sent"))
+            except Exception as ex:
+                result["confirmation_email_error"]=str(getattr(ex,"detail",ex))[:250]
+        return result
 
     @app.post("/api/crm/quotes/{qid}/deposit-reminder")
     def reminder(qid:str,u=Depends(auth)):
