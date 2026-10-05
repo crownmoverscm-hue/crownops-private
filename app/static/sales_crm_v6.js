@@ -1,6 +1,7 @@
 /* CrownOps v6 launch CRM: client-first sales and fast quote workflow. */
 'use strict';
-const CRM={clientSearch:'',clients:[],templates:[],currentClient:null,currentLead:null,currentQuote:null,lastCalc:null};
+const CRM={clientSearch:'',clients:[],templates:[],currentClient:null,currentLead:null,currentQuote:null,lastCalc:null,installPrompt:null};
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();CRM.installPrompt=e;});
 
 function crmCash(c){return 'CA$'+(Number(c||0)/100).toLocaleString('en-CA',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function crmServiceLabel(s){return s||'Moving';}
@@ -12,11 +13,12 @@ function crmLineTable(result){
  return rows.length?xtable(['Item','Qty','Price','Total'],rows):'<p class="small muted">This older estimate does not contain itemized v6 lines.</p>';
 }
 function crmClientCard(c){
- const latest=(c.services||[])[0];
+ const latest=(c.services||[])[0],status=latest?.job_status||latest?.quote_status||latest?.stage||'';
  return '<button class="search-result crm-client-result" data-crm="client-open" data-id="'+h(c.id)+'">'+
    '<div class="avatar">'+h(initials(c.client_name))+'</div><div class="grow"><div class="strong">'+h(c.client_name)+'</div>'+
    '<div class="tiny muted">'+h(c.email||'No email')+' · '+h(c.phone||'No phone')+'</div>'+
-   '<div class="tiny">'+(latest?(h(latest.move_date||'Date needed')+' · '+h(latest.pickup||'Address needed')+' · '+h(latest.stage||'')):'No service history yet')+'</div></div>'+
+   '<div class="tiny">'+(latest?(h(latest.lead_type||'Moving')+' · '+h(latest.move_date||'Date needed')+' · '+h(latest.pickup||'Address needed')):'No service history yet')+'</div></div>'+
+   (status?'<span class="pill gray">'+h(status)+'</span>':'')+
    '<span class="pill gray">'+Number((c.services||[]).length)+' service'+((c.services||[]).length===1?'':'s')+'</span>'+icon('right')+'</button>';
 }
 async function crmSearchClients(q=''){
@@ -35,14 +37,14 @@ async function crmClientBrowser(){
     '<button class="btn-small" data-crm="client-open" data-id="'+h(c.id)+'">Open</button>'
    ];
  });
- return head('Sales & clients','Search one client by name, email or phone, then add new services without losing their history.',
+ return head('Sales & clients','Search one client by name, email, phone or address, then add a new service without losing any older history.',
    '<button class="btn-primary" data-crm="client-new">'+icon('plus')+'New client</button>'+
    '<button class="btn-soft" data-action="new-lead">'+icon('plus')+'New inquiry</button>')+
    '<div class="filterbar"><div class="searchbox" style="min-width:360px">'+icon('search')+
-   '<input id="crm-client-search" value="'+h(CRM.clientSearch)+'" placeholder="Search name, email or phone..." aria-label="Search clients"></div>'+
+   '<input id="crm-client-search" value="'+h(CRM.clientSearch)+'" placeholder="Search name, email, phone or address..." aria-label="Search clients"></div>'+
    '<span class="tiny muted">'+clients.length+' client matches</span></div>'+
    '<div class="panel"><div class="panel-head"><h2>Client database</h2><span class="tiny muted">Newest service shown first</span></div>'+
-   '<div class="panel-body flush">'+(rows.length?xtable(['Client','Latest service','Stage','History',''],rows):empty('No clients found','Search another email, phone or name, or create a new client.'))+'</div></div>';
+   '<div class="panel-body flush">'+(rows.length?xtable(['Client','Latest service','Stage','History',''],rows):empty('No clients found','Search another email, phone, name or address, or create a new client.'))+'</div></div>';
 }
 X.pageRenderers.sales=crmClientBrowser;
 
@@ -50,7 +52,7 @@ const crmBaseQuotes=X.pageRenderers.quotes;
 X.pageRenderers.quotes=async()=>{
  const all=await api('/quotes');
  const search=String(UX.estimateSearch||'').trim().toLowerCase();
- const filtered=all.filter(q=>(UX.estimateStatus==='all'||q.status===UX.estimateStatus)&&(!search||[q.client_name,q.status,q.inputs?.move_date,q.inputs?.pickup,q.inputs?.dropoff,q.inputs?.service_type].join(' ').toLowerCase().includes(search)));
+ const filtered=all.filter(q=>(UX.estimateStatus==='all'||q.status===UX.estimateStatus)&&(!search||[q.client_name,q.email,q.phone,q.pickup,q.dropoff,q.status,q.inputs?.move_date,q.inputs?.pickup,q.inputs?.dropoff,q.inputs?.service_type].join(' ').toLowerCase().includes(search)));
  const counts={all:all.length,Draft:0,Approved:0,Accepted:0};all.forEach(q=>{if(counts[q.status]!==undefined)counts[q.status]++;});
  const rows=filtered.map(q=>[
    '<div class="client-name">'+h(q.client_name)+'</div><div class="tiny muted">Revision '+h(q.revision)+' · '+h(q.inputs?.service_type||'Moving')+'</div>',
@@ -82,9 +84,9 @@ X.pageRenderers.quotes=async()=>{
 async function crmChooseClient(){
  const clients=await crmSearchClients('');
  showModal('Choose a client for a quote',
-   '<div class="callout teal"><strong>Find the client once.</strong>Search name, email or phone. You can use an existing service, add a new service, or create a brand-new client.</div>'+
+   '<div class="callout teal"><strong>Find the client once.</strong>Search name, email, phone or address. You can use an existing service, add a new service, or create a brand-new client.</div>'+
    '<div class="spacer"></div><div class="searchbox" style="width:100%">'+icon('search')+
-   '<input id="crm-quote-client-search" placeholder="Search name, email or phone..." autocomplete="off"></div>'+
+   '<input id="crm-quote-client-search" placeholder="Search name, email, phone or address..." autocomplete="off"></div>'+
    '<div id="crm-client-results" style="margin-top:14px">'+clients.map(crmClientCard).join('')+'</div>',
    '<button data-crm="client-new" class="btn-soft">'+icon('plus')+'New client</button>'+btn('close','Cancel'),true);
 }
@@ -281,7 +283,7 @@ document.addEventListener('click',async e=>{
 
 document.addEventListener('input',async e=>{
  if(e.target.id==='crm-quote-client-search'){
-   try{const r=await crmSearchClients(e.target.value);const box=document.getElementById('crm-client-results');if(box)box.innerHTML=r.length?r.map(crmClientCard).join(''):empty('No client found','Try another email, phone or name, or create a new client.');}catch(ex){}
+   try{const r=await crmSearchClients(e.target.value);const box=document.getElementById('crm-client-results');if(box)box.innerHTML=r.length?r.map(crmClientCard).join(''):empty('No client found','Try another email, phone, name or address, or create a new client.');}catch(ex){}
  }
  if(e.target.id==='crm-client-search'){
    CRM.clientSearch=e.target.value;
