@@ -1,9 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-from app.store import initialize, transaction, one
-from app.sales_crm_v6 import schema, calculate
+from app.store import initialize, transaction, one, insert, dumps, now
+from app.sales_crm_v6 import schema, calculate, stage_tentative_job, QUOTE_ROLES
+from app.providers import branded_email_html
 
 
 class SalesCrmV6Tests(unittest.TestCase):
@@ -80,6 +83,34 @@ class SalesCrmV6Tests(unittest.TestCase):
             self.assertEqual(item["sell_cents"],3500)
         finally:
             td.cleanup()
+
+    def test_dispatch_managers_can_use_quote_workflow(self):
+        self.assertIn("dispatch", QUOTE_ROLES)
+
+    def test_accepted_quote_stages_tentative_job_with_selected_start(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                insert(db,"pricing_versions",dict(id="PRICE-TEST",label="Test",rates_json="[]",settings_json="{}",approved=1,created_at=now()))
+                insert(db,"leads",dict(id="LEAD-TEST",client_name="Test Client",email="test@example.com",phone="5145550000",
+                    move_date="2026-10-15",pickup="Montreal",dropoff="Laval",created_at=now(),updated_at=now()))
+                insert(db,"quotes",dict(id="QUOTE-TEST",lead_id="LEAD-TEST",revision=1,status="Accepted",
+                    inputs_json=dumps({"service_type":"Moving","move_date":"2026-10-15","service_start":"13:00","deposit_required":300}),
+                    result_json=dumps({"service_high":5,"transport_hours":1}),pricing_id="PRICE-TEST",
+                    lead_snapshot_json=dumps({}),lead_version=1,created_by="test",created_at=now()))
+                q=one(db,"SELECT * FROM quotes WHERE id='QUOTE-TEST'");lead=one(db,"SELECT * FROM leads WHERE id='LEAD-TEST'")
+                job=stage_tentative_job(db,q,lead,"test")
+            self.assertEqual(job["status"],"Tentative")
+            local=datetime.fromisoformat(job["start_at"]).astimezone(ZoneInfo("America/Toronto"))
+            self.assertEqual((local.hour,local.minute),(13,0))
+        finally:
+            td.cleanup()
+
+    def test_branded_email_has_safe_html_and_quote_cta(self):
+        html=branded_email_html({"subject":"Your Crown Movers estimate is ready","body":"Hi <Client>\nhttps://example.com/estimate"})
+        self.assertIn("VIEW ESTIMATE",html)
+        self.assertIn("&lt;Client&gt;",html)
+        self.assertNotIn("<Client>",html)
 
 
 if __name__=="__main__":
