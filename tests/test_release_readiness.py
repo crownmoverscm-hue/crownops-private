@@ -59,8 +59,30 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 "/api/invoices/{iid}/quickbooks",
                 "/api/quotes/{qid}/quickbooks",
                 "/api/payments/{pid}/quickbooks",
+                "/api/crm/clients",
+                "/api/crm/templates",
+                "/api/crm/quote-setup",
+                "/api/crm/quotes/calculate",
+                "/api/crm/quotes/{qid}",
+                "/api/crm/payment-settings",
+                "/api/crm/jobs/{jid}/review-request",
             ):
                 self.assertIn(required, paths)
+
+
+    def test_launch_crm_static_experience_contains_required_sales_paths(self):
+        root = Path(__file__).resolve().parents[1]
+        js = (root / "app" / "static" / "sales_crm_v6.js").read_text(encoding="utf-8")
+        for phrase in (
+            "Search name, email, phone or address",
+            "New Quote",
+            "Edit draft",
+            "Create new revision",
+            "Long-distance fuel rate / km",
+            "Install CrownOps",
+            "Interac e-Transfer recipient email",
+        ):
+            self.assertIn(phrase, js)
 
     def test_quickbooks_sandbox_writes_are_off_by_default(self):
         self.assertFalse(quickbooks_write_enabled())
