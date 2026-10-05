@@ -83,17 +83,79 @@ def schema(path):
         """)
         sync_unlinked_clients(db)
         defaults=[
-          ("moving-en","Moving","English","Local Moving - English",{"title":"Moving Service","liability":"Free limited liability coverage: $0.60/lb per article.","fragile":"TVs, large mirrors, glass, marble and other fragile items require appropriate protective packing or boxing. Added protection does not increase carrier liability unless separate replacement-value coverage is purchased and its conditions are met."}),
-          ("moving-fr","Moving","French","Déménagement local - Français",{"title":"Service de déménagement","liability":"Responsabilité limitée gratuite : 0,60 $/lb par article.","fragile":"Les téléviseurs, grands miroirs, articles en verre, marbre et autres objets fragiles exigent un emballage ou une boîte de protection appropriée. La protection additionnelle n'augmente pas la responsabilité du transporteur à moins qu'une couverture de valeur de remplacement distincte soit achetée et que ses conditions soient respectées."}),
-          ("packing-en","Packing","English","Packing Service - English",{"title":"Packing Service","liability":"Packing labour is billed at the selected moving crew hourly rate. Materials are additional unless specifically included.","fragile":"Fragile items require suitable boxes and protective materials."}),
-          ("packing-fr","Packing","French","Service d'emballage - Français",{"title":"Service d'emballage","liability":"La main-d'œuvre d'emballage est facturée au taux horaire de l'équipe sélectionnée. Les matériaux sont en supplément sauf indication contraire.","fragile":"Les objets fragiles exigent des boîtes et matériaux de protection appropriés."}),
-          ("junk-en","Junk Removal","English","Junk Removal - English",{"title":"Junk Removal","liability":"Final disposal pricing is based on the actual truck space used on site.","fragile":"Additional on-site labour, difficult access or sorting may be charged separately."}),
-          ("junk-fr","Junk Removal","French","Enlèvement de déchets - Français",{"title":"Enlèvement de déchets","liability":"Le prix final est établi selon l'espace réellement utilisé dans le camion sur place.","fragile":"Du temps de main-d'œuvre supplémentaire, un accès difficile ou du tri peuvent être facturés séparément."}),
-          ("long-en","Long Distance","English","Long Distance Moving - English (blank)",{"title":"Long-Distance Moving Service","liability":"Free limited liability coverage: $0.60/lb per article.","fragile":"Fragile-item packing requirements and any replacement-value insurance must be reviewed before the move.","blank_notes":"Blank long-distance template: enter agreed service hours, fixed transportation fee or transport hours, distance, stops and special handling."}),
-          ("long-fr","Long Distance","French","Déménagement longue distance - Français (vierge)",{"title":"Service de déménagement longue distance","liability":"Responsabilité limitée gratuite : 0,60 $/lb par article.","fragile":"Les exigences d'emballage des objets fragiles et toute assurance de valeur de remplacement doivent être révisées avant le déménagement.","blank_notes":"Modèle longue distance vierge : inscrire les heures convenues, les frais fixes de transport ou les heures de transport, la distance, les arrêts et la manutention spéciale."}),
+          ("moving-en","Moving","English","Local Moving - English",{
+            "title":"Moving Service",
+            "included":"Furniture blanket wrapping; ordinary disassembly/reassembly as needed; free limited liability coverage of $0.60/lb per article.",
+            "liability":"Free limited liability coverage: $0.60/lb per article.",
+            "fragile":"TVs, large mirrors, glass, marble and other fragile items require appropriate protective packing or boxing. Added protection does not increase carrier liability unless separate replacement-value coverage is purchased and its conditions are met.",
+            "deposit_terms":"The booking is secured when the required deposit is verified, or when Crown approves an alternate cash/cheque arrangement.",
+            "date_change_terms":"We will always try to accommodate an emergency date change. At least 10 days' notice is required under the booking terms. Changes inside 10 days may result in loss of the deposit, are subject to availability, and may use the rates applicable to the new date."
+          }),
+          ("moving-fr","Moving","French","Déménagement local - Français",{
+            "title":"Service de déménagement",
+            "included":"Protection des meubles avec couvertures; montage/démontage ordinaire au besoin; responsabilité limitée gratuite de 0,60 $/lb par article.",
+            "liability":"Responsabilité limitée gratuite : 0,60 $/lb par article.",
+            "fragile":"Les téléviseurs, grands miroirs, articles en verre, marbre et autres objets fragiles exigent un emballage ou une boîte de protection appropriée. La protection additionnelle n'augmente pas la responsabilité du transporteur à moins qu'une couverture de valeur de remplacement distincte soit achetée et que ses conditions soient respectées.",
+            "deposit_terms":"La réservation est confirmée lorsque le dépôt requis est vérifié ou lorsqu'une entente de paiement comptant/chèque est approuvée par Crown.",
+            "date_change_terms":"Nous ferons toujours notre possible pour accommoder un changement de date en cas d'urgence. Un préavis d'au moins 10 jours est requis selon les conditions de réservation. Un changement à moins de 10 jours peut entraîner la perte du dépôt, dépend des disponibilités et peut être facturé selon le tarif applicable à la nouvelle date."
+          }),
+          ("packing-en","Packing","English","Packing Service - English",{
+            "title":"Packing Service",
+            "included":"Packing labour is billed at the selected crew hourly rate. Furniture blankets used for moving protection are included; consumable packing materials are additional unless specifically included.",
+            "liability":"Free limited liability coverage for the move remains $0.60/lb per article unless separate replacement-value coverage is purchased and its conditions are met.",
+            "fragile":"Fragile items require suitable boxes and protective materials. TVs, large mirrors and fragile glass require proper boxing/protection.",
+            "deposit_terms":"The booking is secured when the required deposit is verified, or when Crown approves an alternate cash/cheque arrangement.",
+            "date_change_terms":"Date changes are subject to availability and may affect the applicable rate."
+          }),
+          ("packing-fr","Packing","French","Service d'emballage - Français",{
+            "title":"Service d'emballage",
+            "included":"La main-d'œuvre d'emballage est facturée au taux horaire de l'équipe sélectionnée. Les couvertures utilisées pour la protection lors du déménagement sont incluses; les matériaux d'emballage consommables sont en supplément sauf indication contraire.",
+            "liability":"La responsabilité limitée gratuite pour le déménagement demeure de 0,60 $/lb par article, sauf si une couverture de valeur de remplacement distincte est achetée et que ses conditions sont respectées.",
+            "fragile":"Les objets fragiles exigent des boîtes et matériaux de protection appropriés. Les téléviseurs, grands miroirs et articles en verre fragile exigent une protection/boîte adéquate.",
+            "deposit_terms":"La réservation est confirmée lorsque le dépôt requis est vérifié ou lorsqu'une entente de paiement comptant/chèque est approuvée par Crown.",
+            "date_change_terms":"Les changements de date dépendent des disponibilités et peuvent modifier le tarif applicable."
+          }),
+          ("junk-en","Junk Removal","English","Junk Removal - English",{
+            "title":"Junk Removal",
+            "included":"Pricing is based on the actual truck space used on site.",
+            "liability":"Final disposal pricing is based on the actual truck space used on site.",
+            "fragile":"Additional on-site labour, difficult access, sorting or unusual disposal requirements may be charged separately.",
+            "deposit_terms":"Any deposit or payment arrangement shown on the estimate must be completed before the booking is considered fully secured.",
+            "date_change_terms":"Changes are subject to crew and truck availability."
+          }),
+          ("junk-fr","Junk Removal","French","Enlèvement de déchets - Français",{
+            "title":"Enlèvement de déchets",
+            "included":"Le prix est établi selon l'espace réellement utilisé dans le camion sur place.",
+            "liability":"Le prix final est établi selon l'espace réellement utilisé dans le camion sur place.",
+            "fragile":"Du temps de main-d'œuvre supplémentaire, un accès difficile, du tri ou des exigences d'élimination particulières peuvent être facturés séparément.",
+            "deposit_terms":"Tout dépôt ou arrangement de paiement indiqué au devis doit être complété avant que la réservation soit considérée comme entièrement confirmée.",
+            "date_change_terms":"Les changements dépendent des disponibilités de l'équipe et du camion."
+          }),
+          ("long-en","Long Distance","English","Long Distance Moving - English (blank)",{
+            "title":"Long-Distance Moving Service",
+            "included":"Blank long-distance template for a reviewed fixed transportation fee or internally calculated transport hours, plus route-distance fuel.",
+            "liability":"Free limited liability coverage: $0.60/lb per article.",
+            "fragile":"Fragile-item packing requirements and any replacement-value insurance must be reviewed before the move.",
+            "deposit_terms":"The booking is secured when the required deposit is verified, or when Crown approves an alternate cash/cheque arrangement.",
+            "date_change_terms":"Long-distance date changes are subject to route, crew and truck availability and may change the applicable rate or transportation fee.",
+            "blank_notes":"Enter the agreed service-hour range, fixed transportation fee (or internal transport hours), route kilometres, stops, truck count and special handling. The client sees only the final transportation amount, not the internal hour multiplication."
+          }),
+          ("long-fr","Long Distance","French","Déménagement longue distance - Français (vierge)",{
+            "title":"Service de déménagement longue distance",
+            "included":"Modèle longue distance vierge pour un frais de transport forfaitaire révisé ou des heures de transport calculées à l'interne, plus les frais de carburant selon la distance.",
+            "liability":"Responsabilité limitée gratuite : 0,60 $/lb par article.",
+            "fragile":"Les exigences d'emballage des objets fragiles et toute assurance de valeur de remplacement doivent être révisées avant le déménagement.",
+            "deposit_terms":"La réservation est confirmée lorsque le dépôt requis est vérifié ou lorsqu'une entente de paiement comptant/chèque est approuvée par Crown.",
+            "date_change_terms":"Les changements de date longue distance dépendent de la route, de l'équipe et des camions disponibles et peuvent modifier le tarif ou les frais de transport applicables.",
+            "blank_notes":"Inscrire la plage d'heures de service convenue, le frais de transport forfaitaire (ou les heures de transport internes), les kilomètres de route, les arrêts, le nombre de camions et la manutention spéciale. Le client voit uniquement le montant final du transport, pas le calcul interne des heures."
+          }),
         ]
         for key,service,lang,name,body in defaults:
-            if not one(db,"SELECT id FROM crm_quote_templates WHERE template_key=?",(key,)):
+            old=one(db,"SELECT id FROM crm_quote_templates WHERE template_key=?",(key,))
+            if old:
+                db.execute("UPDATE crm_quote_templates SET service_type=?,language=?,name=?,body_json=?,active=1,updated_at=? WHERE id=?",
+                           (service,lang,name,dumps(body),now(),old["id"]))
+            else:
                 insert(db,"crm_quote_templates",dict(id=uid("TMPL"),template_key=key,service_type=service,
                   language=lang,name=name,body_json=dumps(body),active=1,updated_at=now()))
         if one(db,"SELECT name FROM sqlite_master WHERE type='table' AND name='material_catalog'"):
@@ -220,15 +282,28 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.get("/api/crm/clients")
     def clients(q:str="",u=Depends(auth)):
-        require_role(u,OFFICE);needle=(q or "").strip().lower();like="%"+needle+"%"
+        require_role(u,OFFICE);needle=(q or "").strip().lower();like="%"+needle+"%";digits=norm_phone(needle)
         with transaction(path) as db:
             sync_unlinked_clients(db)
-            accts=rows(db,"SELECT * FROM client_accounts WHERE lower(client_name||' '||email||' '||phone) LIKE ? ORDER BY updated_at DESC LIMIT 40",(like,)) if needle else rows(db,"SELECT * FROM client_accounts ORDER BY updated_at DESC LIMIT 40")
+            if needle:
+                phone_like="%"+digits+"%" if digits else "%"
+                accts=rows(db,"""SELECT DISTINCT a.* FROM client_accounts a
+                  WHERE lower(a.client_name||' '||a.email||' '||a.phone) LIKE ?
+                     OR replace(replace(replace(replace(replace(a.phone,'(',''),')',''),'-',''),' ',''),'+','') LIKE ?
+                     OR EXISTS(
+                       SELECT 1 FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
+                       WHERE x.client_id=a.id AND lower(COALESCE(l.pickup,'')||' '||COALESCE(l.dropoff,'')||' '||
+                         COALESCE(l.home_size,'')||' '||COALESCE(l.notes,'')) LIKE ?)
+                  ORDER BY a.updated_at DESC LIMIT 60""",(like,phone_like,like))
+            else:
+                accts=rows(db,"SELECT * FROM client_accounts ORDER BY updated_at DESC LIMIT 60")
             for a in accts:
-                a["services"]=rows(db,"""SELECT l.id,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.created_at,
-                  (SELECT status FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_status
+                a["services"]=rows(db,"""SELECT l.id,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.lead_type,l.created_at,
+                  (SELECT id FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_id,
+                  (SELECT status FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_status,
+                  (SELECT status FROM jobs j WHERE j.lead_id=l.id ORDER BY created_at DESC LIMIT 1) job_status
                   FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=?
-                  ORDER BY COALESCE(l.move_date,l.created_at) DESC LIMIT 12""",(a["id"],))
+                  ORDER BY COALESCE(l.move_date,l.created_at) DESC LIMIT 20""",(a["id"],))
         return accts
 
     @app.get("/api/crm/clients/{cid}")
@@ -237,7 +312,13 @@ def register_sales_crm_v6(app,path,auth,public_url):
         with closing(connect(path)) as db:
             a=one(db,"SELECT * FROM client_accounts WHERE id=?",(cid,))
             if not a:raise HTTPException(404,"Client not found.")
-            a["services"]=rows(db,"SELECT l.* FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=? ORDER BY COALESCE(l.move_date,l.created_at) DESC",(cid,))
+            a["services"]=rows(db,"""SELECT l.*,
+              (SELECT id FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_id,
+              (SELECT status FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_status,
+              (SELECT status FROM jobs j WHERE j.lead_id=l.id ORDER BY created_at DESC LIMIT 1) job_status,
+              (SELECT COALESCE(SUM(amount_cents),0) FROM payments p WHERE p.lead_id=l.id AND p.purpose='Deposit' AND p.verified=1) verified_deposit_cents
+              FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=?
+              ORDER BY COALESCE(l.move_date,l.created_at) DESC""",(cid,))
         return a
 
     @app.post("/api/crm/clients")
@@ -329,10 +410,38 @@ def register_sales_crm_v6(app,path,auth,public_url):
             if not p:raise HTTPException(422,"A pricing snapshot is required for audit history.")
             rev=db.execute("SELECT COALESCE(MAX(revision),0)+1 FROM quotes WHERE lead_id=?",(lid,)).fetchone()[0]
             inp=dict(data);inp["deposit_required"]=float(data.get("deposit_required",300) or 0);inp["limited_liability"]="$0.60/lb per article"
+            template_key=str(data.get("template_key") or "").strip()
+            tmpl=one(db,"SELECT body_json,name FROM crm_quote_templates WHERE template_key=? AND active=1",(template_key,)) if template_key else None
+            inp["template_name"]=tmpl["name"] if tmpl else ""
+            inp["template_body"]=json.loads(tmpl["body_json"]) if tmpl else {}
             qid=uid("QUOTE");snapshot={k:l[k] for k in l.keys() if k!="raw_json"}
             insert(db,"quotes",dict(id=qid,lead_id=lid,revision=rev,status="Draft",inputs_json=dumps(inp),result_json=dumps(result),
               pricing_id=p["id"],lead_snapshot_json=dumps(snapshot),lead_version=l["version"],created_by=u["id"],created_at=now()))
             db.execute("UPDATE leads SET stage='Quote',updated_at=? WHERE id=?",(now(),lid));audit(db,u["id"],"CRM quote revision created","quotes",qid,{"revision":rev})
+            return payload(one(db,"SELECT * FROM quotes WHERE id=?",(qid,)))
+
+    @app.patch("/api/crm/quotes/{qid}")
+    def edit_quote(qid:str,data:dict,u=Depends(auth)):
+        require_role(u,SALES)
+        with transaction(path) as db:
+            q=one(db,"SELECT * FROM quotes WHERE id=?",(qid,))
+            if not q:raise HTTPException(404,"Estimate not found.")
+            if q["status"]!="Draft":raise HTTPException(409,"Only a draft can be edited in place. Create a new revision after an estimate is finalized.")
+            if str(data.get("lead_id") or q["lead_id"])!=q["lead_id"]:raise HTTPException(422,"The client/service cannot be changed on an existing draft.")
+            l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],))
+            result=calculate(db,data);day=str(data.get("move_date") or l["move_date"])
+            if day and day!=l["move_date"]:
+                db.execute("UPDATE leads SET move_date=?,version=version+1,updated_at=? WHERE id=?",(day,now(),l["id"]));l=one(db,"SELECT * FROM leads WHERE id=?",(l["id"],))
+            inp=dict(data);inp["deposit_required"]=float(data.get("deposit_required",300) or 0);inp["limited_liability"]="$0.60/lb per article"
+            template_key=str(data.get("template_key") or "").strip()
+            tmpl=one(db,"SELECT body_json,name FROM crm_quote_templates WHERE template_key=? AND active=1",(template_key,)) if template_key else None
+            inp["template_name"]=tmpl["name"] if tmpl else ""
+            inp["template_body"]=json.loads(tmpl["body_json"]) if tmpl else {}
+            snapshot={k:l[k] for k in l.keys() if k!="raw_json"}
+            db.execute("UPDATE quotes SET inputs_json=?,result_json=?,lead_snapshot_json=?,lead_version=? WHERE id=?",
+                       (dumps(inp),dumps(result),dumps(snapshot),l["version"],qid))
+            db.execute("UPDATE leads SET stage='Quote',updated_at=? WHERE id=?",(now(),l["id"]))
+            audit(db,u["id"],"CRM draft estimate edited","quotes",qid,{"revision":q["revision"]})
             return payload(one(db,"SELECT * FROM quotes WHERE id=?",(qid,)))
 
     @app.get("/api/crm/quotes/{qid}")
