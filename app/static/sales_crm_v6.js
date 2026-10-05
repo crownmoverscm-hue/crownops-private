@@ -21,6 +21,18 @@ function crmClientCard(c){
    (status?'<span class="pill gray">'+h(status)+'</span>':'')+
    '<span class="pill gray">'+Number((c.services||[]).length)+' service'+((c.services||[]).length===1?'':'s')+'</span>'+icon('right')+'</button>';
 }
+function crmQuoteClientCard(c){
+ const latest=(c.services||[])[0];
+ return '<div class="search-result crm-quote-client-result">'+
+   '<div class="avatar">'+h(initials(c.client_name))+'</div><div class="grow"><div class="strong">'+h(c.client_name)+'</div>'+
+   '<div class="tiny muted">'+h(c.email||'No email')+' · '+h(c.phone||'No phone')+'</div>'+
+   '<div class="tiny">'+(latest?(h(latest.lead_type||'Moving')+' · '+h(latest.move_date||'Date needed')+' · '+h(latest.pickup||'Address needed')):'No service history yet')+'</div></div>'+
+   '<div class="row wrap">'+
+     (latest?'<button class="btn-primary btn-small" data-crm="quote-from-service" data-id="'+h(latest.id)+'">Use latest service</button>':'')+
+     '<button class="btn-soft btn-small" data-crm="service-new" data-id="'+h(c.id)+'">'+icon('plus')+'New service</button>'+
+     '<button class="btn-small" data-crm="client-open" data-id="'+h(c.id)+'">Client file</button>'+
+   '</div></div>';
+}
 async function crmSearchClients(q=''){
  CRM.clientSearch=q;CRM.clients=await api('/crm/clients?q='+encodeURIComponent(q));
  return CRM.clients;
@@ -108,7 +120,7 @@ async function crmChooseClient(){
    '<div class="callout teal"><strong>Find the client once.</strong>Search name, email, phone or address. You can use an existing service, add a new service, or create a brand-new client.</div>'+
    '<div class="spacer"></div><div class="searchbox" style="width:100%">'+icon('search')+
    '<input id="crm-quote-client-search" placeholder="Search name, email, phone or address..." autocomplete="off"></div>'+
-   '<div id="crm-client-results" style="margin-top:14px">'+clients.map(crmClientCard).join('')+'</div>',
+   '<div id="crm-client-results" style="margin-top:14px">'+clients.map(crmQuoteClientCard).join('')+'</div>',
    '<button data-crm="client-new" class="btn-soft">'+icon('plus')+'New client</button>'+btn('close','Cancel'),true);
 }
 async function crmNewClient(){
@@ -344,7 +356,7 @@ document.addEventListener('click',async e=>{
 
 document.addEventListener('input',async e=>{
  if(e.target.id==='crm-quote-client-search'){
-   try{const r=await crmSearchClients(e.target.value);const box=document.getElementById('crm-client-results');if(box)box.innerHTML=r.length?r.map(crmClientCard).join(''):empty('No client found','Try another email, phone, name or address, or create a new client.');}catch(ex){}
+   try{const r=await crmSearchClients(e.target.value);const box=document.getElementById('crm-client-results');if(box)box.innerHTML=r.length?r.map(crmQuoteClientCard).join(''):empty('No client found','Try another email, phone, name or address, or create a new client.');}catch(ex){}
  }
  if(e.target.id==='crm-client-search'){
    CRM.clientSearch=e.target.value;
