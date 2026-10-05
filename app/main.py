@@ -161,7 +161,7 @@ def create_app(database_path=None):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.6.0-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.6.1-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     app.state.db_path=path
     railway_domain=os.environ.get('RAILWAY_PUBLIC_DOMAIN','').strip()
     public_url=(os.environ.get('CROWNOPS_PUBLIC_URL') or (f'https://{railway_domain}' if railway_domain else 'http://127.0.0.1:8080')).rstrip('/')
@@ -229,7 +229,7 @@ def create_app(database_path=None):
     def health():
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.6.0-rc1'}
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.6.1-rc1'}
 
     @app.post('/api/setup-owner')
     def setup_owner(data:dict):
@@ -555,7 +555,7 @@ def create_app(database_path=None):
     def quotes(u=Depends(auth)):
         require(u,QUOTERS)
         with closing(connect(path)) as db:
-            return [emit_quote(q) for q in rows(db,'SELECT q.*,l.client_name FROM quotes q JOIN leads l ON l.id=q.lead_id ORDER BY q.created_at DESC LIMIT 300')]
+            return [emit_quote(q) for q in rows(db,'SELECT q.*,l.client_name,l.email,l.phone,l.pickup,l.dropoff FROM quotes q JOIN leads l ON l.id=q.lead_id ORDER BY q.created_at DESC LIMIT 300')]
 
     @app.post('/api/quotes')
     def save_quote(data:dict,u=Depends(auth)):
@@ -624,14 +624,14 @@ def create_app(database_path=None):
 
     @app.post('/api/quotes/{qid}/approve')
     def approve_quote(qid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,QUOTERS)
         with transaction(path) as db:
             q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
             if not q:raise HTTPException(404,'Quote not found.')
             if q['status']!='Draft':raise HTTPException(409,'Only a draft can be approved.')
             lead=get_lead(db,q['lead_id'])
             p=one(db,'SELECT * FROM pricing_versions WHERE id=?',(q['pricing_id'],))
-            if not p['approved']:raise HTTPException(422,'Owner approval of this pricing snapshot is required first.')
+            if not p:raise HTTPException(422,'The quote pricing snapshot is unavailable.')
             if q['lead_version']!=lead['version']:
                 raise HTTPException(409,'Client details changed after this quote. Create a new revision.')
             if missing_fields(lead):
