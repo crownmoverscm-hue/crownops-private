@@ -555,10 +555,12 @@ def register_sales_crm_v6(app,path,auth,public_url):
                 total=db.execute("SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE lead_id=? AND purpose='Deposit' AND verified=1",(l["id"],)).fetchone()[0]
                 if total<required:return {"ok":True,"confirmed":False,"remaining_cents":required-total}
                 j=confirm_job(db,q,l,u["id"],method+" deposit verified");audit(db,u["id"],"Deposit verified and booking confirmed","payments",pid,{"job_id":j["id"]});result={"ok":True,"confirmed":True,"job_id":j["id"],"confirmation_message_id":j.get("confirmation_message_id")}
-            if mode!="due_on_service":raise HTTPException(422,"Choose received or due on service day.")
-            if method not in ("Cash","Cheque"):raise HTTPException(422,"Only cash or cheque can be approved as due on the service day. Record an e-transfer only after it is actually received.")
-            j=confirm_job(db,q,l,u["id"],"Manager-approved deposit exception: "+method+" due on service day");audit(db,u["id"],"Booking confirmed with deposit exception","jobs",j["id"],{"method":method})
-            result={"ok":True,"confirmed":True,"job_id":j["id"],"exception":True,"confirmation_message_id":j.get("confirmation_message_id")}
+            elif mode=="due_on_service":
+                if method not in ("Cash","Cheque"):raise HTTPException(422,"Only cash or cheque can be approved as due on the service day. Record an e-transfer only after it is actually received.")
+                j=confirm_job(db,q,l,u["id"],"Manager-approved deposit exception: "+method+" due on service day");audit(db,u["id"],"Booking confirmed with deposit exception","jobs",j["id"],{"method":method})
+                result={"ok":True,"confirmed":True,"job_id":j["id"],"exception":True,"confirmation_message_id":j.get("confirmation_message_id")}
+            else:
+                raise HTTPException(422,"Choose received or due on service day.")
         mid=result.get("confirmation_message_id");result["confirmation_sent"]=False
         if mid:
             try:
