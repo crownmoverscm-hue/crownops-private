@@ -25,18 +25,22 @@ async function crmSearchClients(q=''){
  CRM.clientSearch=q;CRM.clients=await api('/crm/clients?q='+encodeURIComponent(q));
  return CRM.clients;
 }
-async function crmClientBrowser(){
- const clients=await crmSearchClients(CRM.clientSearch);
+function crmClientTable(clients){
  const rows=clients.map(c=>{
    const latest=(c.services||[])[0]||{};
    return [
     '<div class="client-name">'+h(c.client_name)+'</div><div class="tiny muted">'+h(c.email||'')+'<br>'+h(c.phone||'')+'</div>',
     latest.id?(h(latest.move_date||'Date needed')+'<div class="tiny muted">'+h(latest.pickup||'Address needed')+'</div>'):'No service yet',
-    h(latest.stage||'—'),
+    '<div class="row wrap">'+(latest.stage?pill(latest.stage):'')+(latest.quote_status?pill(latest.quote_status):'')+(latest.job_status?pill(latest.job_status):'')+'</div>',
     h((c.services||[]).length),
     '<button class="btn-small" data-crm="client-open" data-id="'+h(c.id)+'">Open</button>'
    ];
  });
+ return rows.length?xtable(['Client','Latest service','Status','History',''],rows):empty('No clients found','Search another email, phone, name or address, or create a new client.');
+}
+async function crmClientBrowser(){
+ const clients=await crmSearchClients(CRM.clientSearch);
+
  return head('Sales & clients','Search one client by name, email, phone or address, then add a new service without losing any older history.',
    '<button class="btn-primary" data-crm="client-new">'+icon('plus')+'New client</button>'+
    '<button class="btn-soft" data-action="new-lead">'+icon('plus')+'New inquiry</button>')+
@@ -189,6 +193,28 @@ async function crmQuoteBuilder(leadId){
    btn('close','Cancel')+'<button type="button" class="btn-soft" data-crm="quote-calc">Calculate</button><button type="submit" form="crm-quote-form" class="btn-primary">Save draft</button>',true);
  crmToggleServiceFields();
 }
+async function crmLoadQuoteForEdit(qid,newRevision=false){
+ const d=await api('/crm/quotes/'+encodeURIComponent(qid)),q=d.quote,inp=q.inputs||{};
+ await crmQuoteBuilder(d.lead.id);
+ const f=document.getElementById('crm-quote-form');if(!f)return;
+ if(!newRevision){
+   const x=document.createElement('input');x.type='hidden';x.name='quote_id';x.value=qid;f.prepend(x);
+ }
+ const set=(name,val)=>{if(f.elements[name]&&val!==undefined&&val!==null)f.elements[name].value=val;};
+ set('service_type',inp.service_type);set('language',inp.language);set('move_date',inp.move_date);
+ const type=f.elements.service_type.value,lang=f.elements.language.value;
+ const choices=CRM.templates.filter(t=>t.service_type===type&&t.language===lang);
+ f.elements.template_key.innerHTML=choices.map(t=>'<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>').join('');
+ set('template_key',inp.template_key);['movers','trucks','hourly_rate','hours_low','hours_high','minimum_hours','deposit_required','transport_hours','fixed_transport','distance_km','distance_rate','junk_tier','junk_extra_half_hours','other_amount','discount_amount'].forEach(k=>set(k,inp[k]));
+ document.querySelectorAll('.crm-mat-check').forEach(ch=>{
+   const found=(inp.materials||[]).find(m=>m.code===ch.dataset.code);ch.checked=!!found;
+   const qty=document.querySelector('.crm-mat-qty[data-code="'+CSS.escape(ch.dataset.code)+'"]');
+   if(qty){qty.disabled=!found;if(found)qty.value=found.qty||1;}
+ });
+ const src=document.getElementById('crm-rate-source');if(src)src.textContent=q.result?.rate_source||'Saved calendar rate';
+ crmToggleServiceFields();crmRenderCalc(q.result);
+ if(newRevision)toast('Loaded the previous estimate. Saving will create a new revision.');
+}
 function crmQuoteData(){
  const f=document.getElementById('crm-quote-form');if(!f||!f.reportValidity())return null;
  const d=Object.fromEntries(new FormData(f));d.materials=[];
@@ -226,7 +252,12 @@ async function crmOpenQuote(qid){
  const depositRequired=Math.round(Number(q.inputs?.deposit_required||0)*100);const due=Math.max(0,depositRequired-Number(d.verified_deposit_cents||0));
  const status='<div class="row wrap">'+pill(q.status)+(d.job?pill(d.job.status):'')+(depositRequired?'<span class="pill '+(due<=0?'teal':'orange')+'">Deposit '+(due<=0?'received':crmCash(due)+' due')+'</span>':'')+'</div>';
  const actions=[];
- if(q.status==='Draft'||q.status==='Approved')actions.push('<button class="btn-primary" data-crm="quote-finalize" data-id="'+h(q.id)+'">Finalize & send</button>');
+ if(q.status==='Draft'){
+   actions.push('<button class="btn-soft" data-crm="quote-edit" data-id="'+h(q.id)+'">Edit draft</button>');
+   actions.push('<button class="btn-primary" data-crm="quote-finalize" data-id="'+h(q.id)+'">Finalize & send</button>');
+ }else{
+   actions.push('<button class="btn-soft" data-crm="quote-revise" data-id="'+h(q.id)+'">Create new revision</button>');
+ }
  if(['Approved','Accepted'].includes(q.status))actions.push('<button class="btn-soft" data-v4="qbo-estimate" data-id="'+h(q.id)+'">QuickBooks draft</button>');
  if(q.status==='Accepted'&&due>0){actions.push('<button class="btn-soft" data-crm="deposit-remind" data-id="'+h(q.id)+'">Deposit reminder</button>');actions.push('<button class="btn-primary" data-crm="deposit-record" data-id="'+h(q.id)+'">Record / approve deposit</button>');}
  showModal('Estimate · '+h(l.client_name),
@@ -279,8 +310,11 @@ document.addEventListener('click',async e=>{
   if(a==='service-new')return crmNewService(id);
   if(a==='quote-from-service')return crmQuoteBuilder(id);
   if(a==='quote-open')return crmOpenQuote(id);
+  if(a==='quote-edit')return crmLoadQuoteForEdit(id,false);
+  if(a==='quote-revise')return crmLoadQuoteForEdit(id,true);
   if(a==='templates')return crmTemplates();
   if(a==='quote-calc'){const d=crmQuoteData();if(!d)return;return crmRenderCalc(await api('/crm/quotes/calculate',{method:'POST',data:d}));}
+  if(a==='quote-use-hours'){const f=document.getElementById('crm-quote-form');if(f){f.elements.hours_low.value=b.dataset.low;f.elements.hours_high.value=b.dataset.high;}return;}
   if(a==='quote-finalize')return crmFinalize(id);
   if(a==='deposit-record')return crmDepositDialog(id);
   if(a==='deposit-remind'){const r=await api('/crm/quotes/'+encodeURIComponent(id)+'/deposit-reminder',{method:'POST'});toast('Friendly deposit reminder drafted in Communications.');return;}
@@ -293,6 +327,11 @@ document.addEventListener('input',async e=>{
  }
  if(e.target.id==='crm-client-search'){
    CRM.clientSearch=e.target.value;
+   clearTimeout(CRM.clientSearchTimer);CRM.clientSearchTimer=setTimeout(async()=>{
+     try{const list=await crmSearchClients(CRM.clientSearch),box=document.getElementById('crm-client-browser-results'),count=document.getElementById('crm-client-match-count');
+       if(box)box.innerHTML=crmClientTable(list);if(count)count.textContent=list.length+' client matches';
+     }catch(ex){}
+   },220);
  }
 });
 
@@ -302,6 +341,8 @@ document.addEventListener('change',async e=>{
    const f=document.getElementById('crm-quote-form');
    if(e.target.name==='service_type'){crmToggleServiceFields();const type=e.target.value,lang=f.elements.language.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
    if(e.target.name==='language'){const type=f.elements.service_type.value,lang=e.target.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
+   if(e.target.name==='trucks')f.dataset.trucksTouched='1';
+   if(e.target.name==='movers'&&!f.dataset.trucksTouched)f.elements.trucks.value=Number(e.target.value)>=4?2:1;
    if((e.target.name==='move_date'||e.target.name==='movers')&&f.elements.service_type.value!=='Junk Removal'){try{await crmRefreshRate();}catch(ex){toast(ex.message);}}
  }
 });
@@ -316,7 +357,7 @@ document.addEventListener('submit',async e=>{
    if(kind==='client'){const c=await api('/crm/clients',{method:'POST',data:d});modal.close();CRM.currentClient=c;return crmNewService(c.id);}
    if(kind==='client-edit'){const cid=d.client_id;delete d.client_id;await api('/crm/clients/'+encodeURIComponent(cid),{method:'PATCH',data:d});toast('Client contact saved.');modal.close();return crmOpenClient(cid);}
    if(kind==='service'){const cid=d.client_id;delete d.client_id;const r=await api('/crm/clients/'+encodeURIComponent(cid)+'/services',{method:'POST',data:d});modal.close();return crmQuoteBuilder(r.lead_id);}
-   if(kind==='quote'){const qd=crmQuoteData();if(!qd)return;await api('/crm/quotes/calculate',{method:'POST',data:qd});const q=await api('/crm/quotes',{method:'POST',data:qd});toast('Draft estimate saved.');modal.close();return crmOpenQuote(q.id);}
+   if(kind==='quote'){const qd=crmQuoteData();if(!qd)return;const qid=qd.quote_id;delete qd.quote_id;await api('/crm/quotes/calculate',{method:'POST',data:qd});const q=qid?await api('/crm/quotes/'+encodeURIComponent(qid),{method:'PATCH',data:qd}):await api('/crm/quotes',{method:'POST',data:qd});toast(qid?'Draft estimate updated.':'Draft estimate saved.');modal.close();return crmOpenQuote(q.id);}
    if(kind==='deposit'){const qid=d.quote_id;delete d.quote_id;d.amount=Number(d.amount||0);const r=await api('/crm/quotes/'+encodeURIComponent(qid)+'/manual-deposit',{method:'POST',data:d});toast(r.confirmed?'Booking confirmed. Confirmation email is prepared.':'Partial deposit saved.');modal.close();return crmOpenQuote(qid);}
  }catch(ex){modalError(ex);}
 });
