@@ -294,17 +294,19 @@ def _record_incoming_message(db, lead_id, actor, subject, body, created_at=None)
 def _record_call_and_followup(db, lead_id, parsed, subject, actor, gmail_id, event_type):
     cid = uid('CALL')
     title = 'Return missed call' if event_type == 'gmail_missed_call' else 'Review voicemail'
+    occurred_at=_call_occurred_iso(parsed) or now()
     details = {
         'phone': parsed.get('phone') or '',
         'caller': _caller_name(parsed),
         'call_time': parsed.get('call_time') or '',
+        'occurred_at': occurred_at,
         'subject': subject or '',
         'source': 'Gmail / UniFi',
         'gmail_id': gmail_id,
         'voicemail': event_type == 'gmail_voicemail',
         'attachments': parsed.get('attachments') or [],
     }
-    insert(db, 'calls', dict(id=cid, legacy_id=None, lead_id=lead_id, payload_json=dumps(details), created_at=now()))
+    insert(db, 'calls', dict(id=cid, legacy_id=None, lead_id=lead_id, payload_json=dumps(details), created_at=occurred_at))
     open_task = one(db, "SELECT id FROM tasks WHERE lead_id=? AND title=? AND status!='Done' AND historical=0 ORDER BY created_at DESC LIMIT 1", (lead_id, title))
     if not open_task:
         insert(db, 'tasks', dict(id=uid('TASK'), legacy_id=None, lead_id=lead_id, title=title, due_date=now()[:10], owner='', status='Open', historical=0, raw_json=dumps({'call_id': cid, 'gmail_id': gmail_id}), created_at=now()))
