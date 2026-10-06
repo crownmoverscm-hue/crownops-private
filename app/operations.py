@@ -60,13 +60,13 @@ def register_operations(app,path,auth):
     def get_settings(u=Depends(auth)):
         require_role(u,OFFICE)
         with closing(connect(path)) as db:
-            result={k:settings(db,k,{}) for k in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy')}
+            result={k:settings(db,k,{}) for k in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy','deposit_policy')}
         return result
 
     @app.post('/api/platform/settings/{key}')
     def set_settings(key:str,data:dict,u=Depends(auth)):
         require_role(u,MANAGERS)
-        if key not in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy'):raise HTTPException(422,'Unknown settings group.')
+        if key not in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy','deposit_policy'):raise HTTPException(422,'Unknown settings group.')
         if key in ('client_terms','media_program'):
             if not text(data.get('version',''),'Version',100):raise HTTPException(422,'A version is required.')
             field='release_text' if key=='media_program' else 'text'
@@ -90,6 +90,16 @@ def register_operations(app,path,auth):
             allowed={'preparation','invoice_followup','review_request','fleet_tasks'}
             if set(data)-allowed-{'review_url','enabled'}:raise HTTPException(422,'Unknown automation setting.')
             if data.get('review_url') and not str(data['review_url']).startswith('https://'):raise HTTPException(422,'Use a secure review URL.')
+        if key=='deposit_policy':
+            allowed={'enabled','recipient_name','recipient_email','auto_deposit','reference_note','approved','review_note'}
+            if set(data)-allowed:raise HTTPException(422,'Unknown deposit setting.')
+            email=text(data.get('recipient_email',''),'Interac recipient email',320)
+            name=text(data.get('recipient_name',''),'Interac recipient name',200)
+            note=text(data.get('reference_note',''),'Interac reference note',500)
+            if data.get('enabled') or data.get('approved'):
+                if not name:raise HTTPException(422,'Enter the Interac recipient name.')
+                if not email or '@' not in email or '.' not in email.rsplit('@',1)[-1]:raise HTTPException(422,'Enter a valid Interac recipient email.')
+            data={**data,'recipient_name':name,'recipient_email':email.lower(),'reference_note':note,'auto_deposit':bool(data.get('auto_deposit',True))}
         if data.get('approved') is True and not data.get('review_note'):raise HTTPException(422,'Record who reviewed these operational terms and rules.')
         with transaction(path) as db:
             put_setting(db,key,{**data,'updated_by':u['id'],'updated_at':now()});audit(db,u['id'],'Configuration updated','settings',key,{'approved':data.get('approved',False)})
