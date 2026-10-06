@@ -229,12 +229,13 @@ def client_latest_activity(db,client_id):
     if call:
         try:detail=json.loads(call.get("payload_json") or "{}")
         except Exception:detail={}
-        disposition=str(detail.get("disposition") or "Missed").strip()
-        label="Voicemail" if "voice" in disposition.lower() else ("Missed call" if "miss" in disposition.lower() else "Phone call")
-        note=str(detail.get("note") or "").strip()
+        disposition=str(detail.get("disposition") or "").strip()
+        is_voicemail=detail.get("voicemail") is True or "voice" in disposition.lower()
+        label="Voicemail" if is_voicemail else ("Missed call" if not disposition or "miss" in disposition.lower() else "Phone call")
+        summary=str(detail.get("note") or detail.get("subject") or detail.get("caller") or disposition or label).strip()
         candidates.append({"type":"call","label":label,"source":str(detail.get("source") or "Phone"),
-          "at":call["created_at"],"occurred_at":detail.get("occurred_at") or call["created_at"],
-          "lead_id":call["lead_id"],"summary":note[:180] if note else disposition})
+          "at":call["created_at"],"occurred_at":detail.get("occurred_at") or detail.get("call_time") or call["created_at"],
+          "lead_id":call["lead_id"],"summary":summary[:180]})
 
     msg=one(db,"""SELECT m.* FROM messages m JOIN client_account_leads x ON x.lead_id=m.lead_id
       WHERE x.client_id=? AND lower(m.kind)='incoming email'
