@@ -156,7 +156,7 @@ async function crmQuoteBuilder(leadId){
    '<div id="crm-custom-start" style="display:none">'+field('start_time','Custom exact start time','','time')+'</div>'+
    select('template_key','Template',templates.filter(t=>t.service_type===type&&t.language===lang).map(t=>[t.template_key,t.name]),template?.template_key||'')+
    '</div></div>'+
-   '<div class="panel panel-body" id="crm-moving-fields"><div class="eyebrow">2 · CREW & RATE</div><p class="small muted">Operational rule: crews of 4 or more movers require at least 2 trucks.</p><div class="grid2">'+
+   '<div class="panel panel-body" id="crm-moving-fields"><div class="eyebrow">2 · CREW & RATE</div><p class="small muted">Operational rule: 4-5 movers require at least 2 trucks; 6 movers require at least 3 trucks.</p><div class="grid2">'+
    select('movers','Movers',[2,3,4,5,6],2,'required')+select('trucks','Truck(s)',[1,2,3],1,'required')+
    field('hourly_rate','Hourly rate',firstSetup.suggested_hourly_rate??'','number','step="0.01" min="1" required')+
    '<div class="form-field"><label>Rate source</label><input id="crm-rate-source" value="'+h(firstSetup.rate_source||'Select date')+'" disabled></div>'+
@@ -308,7 +308,13 @@ document.addEventListener('change',async e=>{
    if(e.target.name==='service_type'){crmToggleServiceFields();const type=e.target.value,lang=f.elements.language.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
    if(e.target.name==='language'){const type=f.elements.service_type.value,lang=e.target.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
    if(e.target.name==='start_window')crmToggleStartTime();
-   if(e.target.name==='movers'&&Number(e.target.value)>=4&&Number(f.elements.trucks.value)<2){f.elements.trucks.value='2';toast('4 or more movers requires at least 2 trucks. Truck count set to 2.');}
+   if(e.target.name==='movers'){
+     const movers=Number(e.target.value),minimumTrucks=movers>=6?3:(movers>=4?2:1);
+     if(Number(f.elements.trucks.value)<minimumTrucks){
+       f.elements.trucks.value=String(minimumTrucks);
+       toast(movers+' movers requires at least '+minimumTrucks+' truck'+(minimumTrucks===1?'':'s')+'. Truck count set to '+minimumTrucks+'.');
+     }
+   }
    if((e.target.name==='move_date'||e.target.name==='movers')&&f.elements.service_type.value!=='Junk Removal'){try{await crmRefreshRate();}catch(ex){toast(ex.message);}}
  }
 });
