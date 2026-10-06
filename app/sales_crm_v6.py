@@ -198,6 +198,48 @@ def sync_unlinked_clients(db):
                     flag_duplicate(db,m["client"]["id"],cid,reason)
         insert(db,"client_account_leads",dict(client_id=cid,lead_id=l["id"],created_at=now()))
 
+def call_activity_time(detail,fallback=""):
+    raw=str((detail or {}).get("occurred_at") or (detail or {}).get("call_time") or "").strip()
+    if not raw:return fallback
+    try:
+        local=datetime.strptime(raw,"%m/%d/%Y %H:%M:%S").replace(tzinfo=MONTREAL)
+        return local.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except ValueError:
+        pass
+    try:
+        dt=datetime.fromisoformat(raw.replace("Z","+00:00"))
+        if dt.tzinfo is None:dt=dt.replace(tzinfo=MONTREAL)
+        return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except ValueError:
+        return fallback
+
+def repair_call_activity(db):
+    """Repair imported Gmail call times and collapse duplicate machine-generated callback tasks."""
+    for call in rows(db,"SELECT id,lead_id,payload_json,created_at FROM calls"):
+        try:detail=json.loads(call.get("payload_json") or "{}")
+        except Exception:detail={}
+        actual=call_activity_time(detail,call.get("created_at") or "")
+        if actual and actual!=call.get("created_at"):
+            db.execute("UPDATE calls SET created_at=? WHERE id=?",(actual,call["id"]))
+    lead_ids=rows(db,"""SELECT DISTINCT lead_id FROM tasks
+      WHERE title IN ('Return missed call','Review voicemail') AND status='Open' AND historical=0""")
+    for item in lead_ids:
+        tasks=rows(db,"""SELECT * FROM tasks WHERE lead_id=? AND title IN ('Return missed call','Review voicemail')
+          AND status='Open' AND historical=0 ORDER BY CASE WHEN title='Review voicemail' THEN 0 ELSE 1 END, created_at DESC""",(item["lead_id"],))
+        generated=[]
+        for task in tasks:
+            try:meta=json.loads(task.get("raw_json") or "{}")
+            except Exception:meta={}
+            if meta.get("call_id") or meta.get("gmail_id"):generated.append((task,meta))
+        if len(generated)<=1:continue
+        keep=generated[0][0]
+        if any(t[0].get("title")=="Review voicemail" for t in generated) and keep.get("title")!="Review voicemail":
+            db.execute("UPDATE tasks SET title='Review voicemail' WHERE id=?",(keep["id"],))
+        for task,meta in generated[1:]:
+            meta["auto_coalesced_into"]=keep["id"]
+            meta["auto_coalesced_reason"]="Duplicate call/voicemail follow-up"
+            db.execute("UPDATE tasks SET status='Done',historical=1,raw_json=? WHERE id=?",(dumps(meta),task["id"]))
+
 def client_latest_activity(db,client_id):
     """Return the newest real inbound/client inquiry signal for inbox ordering."""
     candidates=[]
