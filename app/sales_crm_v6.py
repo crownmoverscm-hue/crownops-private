@@ -320,6 +320,7 @@ def schema(path):
           UNIQUE(client_id,candidate_client_id,reason));
         """)
         sync_unlinked_clients(db)
+        repair_call_activity(db)
         defaults=[
           ("moving-en","Moving","English","Local Moving - English",{"title":"Moving Service","liability":"Free limited liability coverage: $0.60/lb per article.","fragile":"TVs, large mirrors, glass, marble and other fragile items require appropriate protective packing or boxing. Added protection does not increase carrier liability unless separate replacement-value coverage is purchased and its conditions are met."}),
           ("moving-fr","Moving","French","Déménagement local - Français",{"title":"Service de déménagement","liability":"Responsabilité limitée gratuite : 0,60 $/lb par article.","fragile":"Les téléviseurs, grands miroirs, articles en verre, marbre et autres objets fragiles exigent un emballage ou une boîte de protection appropriée. La protection additionnelle n'augmente pas la responsabilité du transporteur à moins qu'une couverture de valeur de remplacement distincte soit achetée et que ses conditions soient respectées."}),
@@ -478,7 +479,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
         require_role(u,OFFICE);needle=(q or "").strip().lower();like="%"+needle+"%"
         activity_expr="""MAX(
           a.created_at,
-          COALESCE((SELECT MAX(l.created_at) FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=a.id),a.created_at),
+          COALESCE((SELECT MAX(l.created_at) FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
+            WHERE x.client_id=a.id AND lower(COALESCE(l.lead_type,'')) NOT IN ('missed call','voicemail')),a.created_at),
           COALESCE((SELECT MAX(c.created_at) FROM calls c JOIN client_account_leads x ON x.lead_id=c.lead_id WHERE x.client_id=a.id),a.created_at),
           COALESCE((SELECT MAX(m.created_at) FROM messages m JOIN client_account_leads x ON x.lead_id=m.lead_id WHERE x.client_id=a.id AND lower(m.kind) LIKE 'incoming %'),a.created_at)
         )"""
