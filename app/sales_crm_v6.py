@@ -231,6 +231,8 @@ def calculate(db,data):
     try:date.fromisoformat(day)
     except Exception:raise HTTPException(422,"Choose the service date.")
     movers=int(number(data.get("movers",2),"Movers",2,6));trucks=int(number(data.get("trucks",1),"Trucks",1,8))
+    if movers>=4 and trucks<2:
+        raise HTTPException(422,"Crown Movers requires at least 2 trucks for crews of 4 or more movers.")
     suggested,source=rate_for(db,day,movers)
     override=data.get("hourly_rate");rate=number(override,"Hourly rate",1,5000) if override not in (None,"") else suggested
     low=number(data.get("hours_low",3),"Estimated low hours",.25,100);high=number(data.get("hours_high",low),"Estimated high hours",.25,120)
