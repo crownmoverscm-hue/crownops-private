@@ -198,6 +198,20 @@ def register_operations(app,path,auth):
         require_role(u,OFFICE)
         with closing(connect(path)) as db:
             result={k:settings(db,k,{}) for k in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy','deposit_policy')}
+        billing=dict(result.get('billing_policy') or {})
+        terms=dict(billing.get('terms') or {})
+        issuer=dict(terms.get('issuer') or {})
+        issuer.setdefault('name','Crown Movers')
+        issuer.setdefault('email','info@crownmovers.ca')
+        issuer.setdefault('phone','514-606-4030')
+        terms['issuer']=issuer
+        if not terms.get('taxes'):
+            terms['taxes']=[
+              {'name':'GST','rate_percent':5.0,'registration':'737446534RT001'},
+              {'name':'QST','rate_percent':9.975,'registration':'1227197265TQ001'}]
+        terms.setdefault('catalogue',[])
+        billing['terms']=terms
+        result['billing_policy']=billing
         return result
 
     @app.post('/api/platform/settings/{key}')
