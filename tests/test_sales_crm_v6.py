@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.store import initialize, transaction, one
-from app.sales_crm_v6 import schema, calculate
+from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours
 
 
 class SalesCrmV6Tests(unittest.TestCase):
@@ -68,6 +68,27 @@ class SalesCrmV6Tests(unittest.TestCase):
             self.assertEqual(r["low_cents"],56000)
             self.assertEqual(r["high_cents"],56000)
             self.assertEqual(len(r["line_items"]),2)
+        finally:
+            td.cleanup()
+
+    def test_quote_start_windows_and_block_hours_follow_sold_timing(self):
+        self.assertEqual(quote_start_window({"start_window":"morning"}),("09:00","9:00-9:30 AM"))
+        self.assertEqual(quote_start_window({"start_window":"afternoon"}),("13:00","1:00-4:00 PM"))
+        self.assertEqual(quote_start_window({"start_window":"custom","start_time":"11:15"}),("11:15","11:15 AM"))
+        self.assertEqual(float(quoted_block_hours({"service_type":"Moving","hours_high":4,"minimum_hours":3,"transport_hours":1})),5.0)
+
+    def test_french_quote_lines_follow_selected_quote_language(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                r=calculate(db,{"service_type":"Moving","language":"French","move_date":"2026-10-15",
+                    "movers":2,"trucks":1,"hours_low":3,"hours_high":4,"minimum_hours":3,
+                    "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
+                    "other_amount":0,"discount_amount":0})
+            self.assertEqual(r["language"],"French")
+            self.assertIn("demenageurs",r["line_items"][0]["name"])
+            self.assertEqual(r["line_items"][1]["name"],"Frais de transport")
+            self.assertEqual(r["line_items"][2]["name"],"Frais de carburant")
         finally:
             td.cleanup()
 
