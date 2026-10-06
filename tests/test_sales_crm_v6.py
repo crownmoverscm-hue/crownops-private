@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from pathlib import Path
 
 from app.store import initialize, transaction, one
-from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours, minimum_trucks_for_movers, service_minimum_hours
+from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours, minimum_trucks_for_movers, service_minimum_hours, long_distance_hos_plan
 
 
 class SalesCrmV6Tests(unittest.TestCase):
@@ -99,6 +99,23 @@ class SalesCrmV6Tests(unittest.TestCase):
             self.assertTrue(r["small_afternoon_job"])
         finally:
             td.cleanup()
+
+    def test_quebec_hos_plan_blocks_impossible_one_day_long_distance(self):
+        one=long_distance_hos_plan(6,5)
+        self.assertTrue(one["one_day_possible"])
+        self.assertEqual(one["minimum_schedule_days"],1)
+
+        toronto=long_distance_hos_plan(12,5)
+        self.assertFalse(toronto["one_day_possible"])
+        self.assertEqual(toronto["minimum_schedule_days"],2)
+        self.assertEqual(toronto["estimated_on_duty_hours"],17.0)
+
+        very_long=long_distance_hos_plan(28,5)
+        self.assertEqual(very_long["minimum_schedule_days"],3)
+
+    def test_long_distance_tentative_block_includes_daily_rest_between_hos_days(self):
+        # Toronto-style plan: 12 h driving + 5 h service => 2 days + 10 h off-duty block.
+        self.assertEqual(float(quoted_block_hours({"service_type":"Long Distance","hours_high":5,"minimum_hours":3,"transport_hours":12})),27.0)
 
     def test_long_distance_transport_uses_true_drive_time_times_one_point_fifteen(self):
         td,path=self.make_db()
