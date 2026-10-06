@@ -43,6 +43,22 @@ CREATE TABLE IF NOT EXISTS fleet_profiles (
  inspection_due TEXT NOT NULL DEFAULT '', inspection_interval_hours INTEGER NOT NULL DEFAULT 24,
  check_required INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS fleet_documents (
+ id TEXT PRIMARY KEY,
+ vehicle_id TEXT NOT NULL REFERENCES vehicles(id),
+ category TEXT NOT NULL,
+ original_name TEXT NOT NULL,
+ stored_name TEXT NOT NULL UNIQUE,
+ mime TEXT NOT NULL,
+ size INTEGER NOT NULL,
+ sha256 TEXT NOT NULL,
+ scan_status TEXT NOT NULL DEFAULT 'Quarantined',
+ author TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS fleet_documents_vehicle ON fleet_documents(vehicle_id,created_at);
+
 CREATE TABLE IF NOT EXISTS inspections (
  id TEXT PRIMARY KEY, vehicle_id TEXT NOT NULL REFERENCES vehicles(id), job_id TEXT REFERENCES jobs(id),
  checked_by TEXT NOT NULL, checked_at TEXT NOT NULL, odometer_km REAL NOT NULL,
