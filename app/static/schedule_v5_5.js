@@ -124,5 +124,5 @@
   });
 
   const oldShell=shell;
-  shell=function(){oldShell();const strip=document.getElementById('pilot-strip');if(strip)strip.innerHTML=`${icon('shield')}<span>Private review build v5.5.1. Weekly truck-colour schedule + simplified client/job workflow. Live Gmail, QuickBooks, payments and production schedule connections remain off.</span>`;};
+  shell=function(){oldShell();const strip=document.getElementById('pilot-strip');if(strip)strip.innerHTML=`${icon('shield')}<span>CrownOps live build. Gmail inquiry sync is read-only. Outbound email, QuickBooks production writes and card payments remain separately controlled.</span>`;};
 })();
