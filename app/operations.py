@@ -3,12 +3,14 @@ from contextlib import closing
 from datetime import datetime, timezone, timedelta, date
 from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
-import csv, io, json, os
-from fastapi import Depends, HTTPException
-from fastapi.responses import Response
+from pathlib import Path
+import csv, io, json, os, hashlib, shlex, subprocess
+from fastapi import Depends, HTTPException, File, Form, UploadFile
+from fastapi.responses import Response, FileResponse
 from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .pricing import number,cents
 from .platform_common import *
+from .portal import detect
 
 
 def prefill_payroll(db,inv,doc,actor):
@@ -135,6 +137,57 @@ def require_hos_dispatch_verification(db,jid):
 
 
 def register_operations(app,path,auth):
+    storage=Path(os.getenv('CROWNOPS_UPLOADS',os.getenv('CROWNOPS_UPLOAD_DIR',str(Path(path).parent/'uploads')))).resolve()
+    storage.mkdir(parents=True,exist_ok=True,mode=0o700)
+
+    def fleet_doc_public(r):
+        return {k:r[k] for k in ('id','vehicle_id','category','original_name','mime','size','scan_status','created_at','deleted_at')}
+
+    def fleet_doc(db,fid):
+        r=one(db,'SELECT * FROM fleet_documents WHERE id=? AND deleted_at IS NULL',(fid,))
+        if not r:raise HTTPException(404,'Fleet document not found.')
+        return r
+
+    async def save_fleet_doc(file,vid,category,actor):
+        if not uploads_enabled():raise HTTPException(503,'Private file uploads are disabled until production malware scanning is configured.')
+        allowed_categories=('Registration','GVWR / door sticker','Insurance','Inspection','Maintenance','Other')
+        if category not in allowed_categories:raise HTTPException(422,'Unsupported fleet document category.')
+        with closing(connect(path)) as db:
+            if not one(db,'SELECT id FROM vehicles WHERE id=?',(vid,)):raise HTTPException(404,'Truck not found.')
+        name=Path((file.filename or 'upload').replace('\\','/')).name[:180]
+        if any(ord(ch)<32 for ch in name):raise HTTPException(422,'Invalid filename.')
+        limit=int(os.getenv('CROWNOPS_FLEET_FILE_MB','25'))*1024*1024
+        key=uid('FLEETFILE');temp=storage/(key+'.upload');n=0;digest=hashlib.sha256();head=b''
+        try:
+            with open(temp,'xb') as out:
+                while chunk:=await file.read(1024*1024):
+                    n+=len(chunk)
+                    if n>limit:raise HTTPException(413,'Fleet document is too large.')
+                    if not head:head=chunk[:32]
+                    digest.update(chunk);out.write(chunk)
+            if n==0:raise HTTPException(422,'File is empty.')
+            mime=detect(head,name)
+            if mime not in ('image/jpeg','image/png','image/webp','application/pdf'):
+                raise HTTPException(422,'Fleet documents must be JPEG, PNG, WebP or PDF.')
+            status='Quarantined';command=os.getenv('CROWNOPS_SCAN_COMMAND','').strip()
+            if command:
+                try:
+                    from starlette.concurrency import run_in_threadpool
+                    scan=await run_in_threadpool(subprocess.run,shlex.split(command)+[str(temp)],capture_output=True,timeout=120,check=False)
+                    status='Clean' if scan.returncode==0 else 'Rejected'
+                except (OSError,subprocess.TimeoutExpired):status='Quarantined'
+            dest=storage/(key+Path(name).suffix.lower());temp.rename(dest);dest.chmod(0o600)
+            with transaction(path) as db:
+                total=db.execute('SELECT coalesce(sum(size),0) FROM fleet_documents WHERE vehicle_id=? AND deleted_at IS NULL',(vid,)).fetchone()[0]
+                if total+n>int(os.getenv('CROWNOPS_FLEET_UPLOAD_MB','250'))*1024*1024:
+                    dest.unlink(missing_ok=True);raise HTTPException(413,'Fleet document storage limit reached for this truck.')
+                rec=dict(id=key,vehicle_id=vid,category=category,original_name=name,stored_name=dest.name,mime=mime,
+                    size=n,sha256=digest.hexdigest(),scan_status=status,author=actor,created_at=now())
+                insert(db,'fleet_documents',rec)
+                audit(db,actor,'Fleet document uploaded','fleet_documents',key,{'vehicle_id':vid,'category':category,'bytes':n,'scan_status':status})
+            return fleet_doc_public({**rec,'deleted_at':None})
+        finally:
+            temp.unlink(missing_ok=True)
     @app.get('/api/jobs/{jid}/hos-verification')
     def get_hos_verification(jid:str,u=Depends(auth)):
         require_role(u,OFFICE)
@@ -299,9 +352,37 @@ def register_operations(app,path,auth):
                 p,w,latest=fleet_warnings(db,v);pos=one(db,'SELECT * FROM positions WHERE vehicle_id=?',(v['id'],))
                 if pos:
                     pos['stale']=(datetime.now(timezone.utc)-datetime.fromisoformat(pos['observed_at'])).total_seconds()>900
-                out.append({**v,'profile':p,'warnings':w,'latest_check':latest,'position':pos,
+                documents=[fleet_doc_public(x) for x in rows(db,'SELECT * FROM fleet_documents WHERE vehicle_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(v['id'],))] if u['role'] in OFFICE else []
+                out.append({**v,'profile':p,'warnings':w,'latest_check':latest,'position':pos,'documents':documents,
                     'maintenance':rows(db,'SELECT * FROM maintenance WHERE vehicle_id=? ORDER BY created_at DESC',(v['id'],))})
             return out
+
+    @app.post('/api/fleet/{vid}/documents')
+    async def upload_fleet_document(vid:str,file:UploadFile=File(...),category:str=Form('Registration'),u=Depends(auth)):
+        require_role(u,{'owner','sales','dispatch'})
+        return await save_fleet_doc(file,vid,category,u['id'])
+
+    @app.get('/api/fleet-documents/{fid}')
+    def download_fleet_document(fid:str,u=Depends(auth)):
+        require_role(u,OFFICE)
+        with closing(connect(path)) as db:r=fleet_doc(db,fid)
+        if r['scan_status']!='Clean':raise HTTPException(409,'This fleet document is quarantined or rejected until safety review.')
+        p=(storage/r['stored_name']).resolve()
+        if p.parent!=storage or not p.exists():raise HTTPException(404,'Stored fleet document unavailable.')
+        return FileResponse(p,media_type=r['mime'],filename=r['original_name'],headers={'Cache-Control':'no-store'})
+
+    @app.post('/api/fleet-documents/{fid}/review')
+    def review_fleet_document(fid:str,data:dict,u=Depends(auth)):
+        require_role(u,MANAGERS)
+        if os.getenv('CROWNOPS_ENV','test')=='production' and data.get('decision')=='Clean':
+            raise HTTPException(409,'Production file clearance requires the configured scanner.')
+        decision=data.get('decision');note=text(data.get('note',''),'Review evidence',2000)
+        if decision not in ('Clean','Rejected') or len(note)<8:raise HTTPException(422,'Enter a safety-review decision and evidence.')
+        with transaction(path) as db:
+            r=fleet_doc(db,fid);db.execute('UPDATE fleet_documents SET scan_status=? WHERE id=?',(decision,fid))
+            audit(db,u['id'],'Fleet document safety status reviewed','fleet_documents',fid,
+                {'decision':decision,'note':note,'vehicle_id':r['vehicle_id']})
+        return {'ok':True}
 
     @app.put('/api/fleet/{vid}/profile')
     def fleet_profile(vid:str,data:dict,u=Depends(auth)):
