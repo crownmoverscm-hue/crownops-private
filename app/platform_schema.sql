@@ -43,6 +43,22 @@ CREATE TABLE IF NOT EXISTS fleet_profiles (
  inspection_due TEXT NOT NULL DEFAULT '', inspection_interval_hours INTEGER NOT NULL DEFAULT 24,
  check_required INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS fleet_documents (
+ id TEXT PRIMARY KEY,
+ vehicle_id TEXT NOT NULL REFERENCES vehicles(id),
+ category TEXT NOT NULL,
+ original_name TEXT NOT NULL,
+ stored_name TEXT NOT NULL UNIQUE,
+ mime TEXT NOT NULL,
+ size INTEGER NOT NULL,
+ sha256 TEXT NOT NULL,
+ scan_status TEXT NOT NULL DEFAULT 'Quarantined',
+ author TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS fleet_documents_vehicle ON fleet_documents(vehicle_id,created_at);
+
 CREATE TABLE IF NOT EXISTS inspections (
  id TEXT PRIMARY KEY, vehicle_id TEXT NOT NULL REFERENCES vehicles(id), job_id TEXT REFERENCES jobs(id),
  checked_by TEXT NOT NULL, checked_at TEXT NOT NULL, odometer_km REAL NOT NULL,
@@ -66,6 +82,28 @@ CREATE TABLE IF NOT EXISTS paid_work_terms (
  job_id TEXT PRIMARY KEY REFERENCES jobs(id), paid_transport_minutes INTEGER,
  basis TEXT NOT NULL, approved_by TEXT NOT NULL, approved_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS hos_dispatch_verifications (
+ id TEXT PRIMARY KEY,
+ job_id TEXT NOT NULL REFERENCES jobs(id),
+ job_version INTEGER NOT NULL,
+ driver_id TEXT NOT NULL REFERENCES employees(id),
+ vehicle_id TEXT NOT NULL REFERENCES vehicles(id),
+ cycle INTEGER NOT NULL CHECK(cycle IN (1,2)),
+ cycle_on_duty_hours REAL NOT NULL,
+ on_duty_since_last_24h_off REAL NOT NULL,
+ consecutive_off_duty_before_shift REAL NOT NULL,
+ had_24h_off_in_prev_14d INTEGER NOT NULL DEFAULT 0,
+ dce_log_checked INTEGER NOT NULL DEFAULT 0,
+ daily_off_duty_plan_checked INTEGER NOT NULL DEFAULT 0,
+ elapsed_window_checked INTEGER NOT NULL DEFAULT 0,
+ projected_on_duty_hours REAL NOT NULL,
+ status TEXT NOT NULL DEFAULT 'Verified',
+ note TEXT NOT NULL,
+ verified_by TEXT NOT NULL,
+ verified_at TEXT NOT NULL,
+ UNIQUE(job_id,job_version,driver_id,vehicle_id)
+);
+CREATE INDEX IF NOT EXISTS hos_dispatch_job_version ON hos_dispatch_verifications(job_id,job_version);
 CREATE TABLE IF NOT EXISTS payroll_drafts (
  id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), employee_id TEXT NOT NULL REFERENCES employees(id),
  invoice_id TEXT NOT NULL REFERENCES job_invoices(id), invoice_revision INTEGER NOT NULL,

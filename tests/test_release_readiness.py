@@ -1,17 +1,20 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
-from app.main import create_app
-from app.store import connect, initialize, transaction
-from app.platform_common import put_setting, quickbooks_gate, quickbooks_write_enabled, settings
+from app.main import create_app, sha
+from app.store import connect, initialize, transaction, insert, dumps, now
+from app.platform_common import put_setting, quickbooks_gate, quickbooks_write_enabled, settings, stamp_hash
 from app.providers import qbo_customer, qbo_invoice_payload, qbo_mapping, qbo_read
 from app.backups import make_backup, restore_archive
 from app.security import validate_deployment
+from app.operations import hos_dispatch_status, hos_cycle_capacity_errors
 
 
 class EnvMixin:
@@ -25,6 +28,7 @@ class EnvMixin:
         "CROWNOPS_SECRET_KEY",
         "CROWNOPS_SCAN_COMMAND",
         "CROWNOPS_UPLOADS_ENABLED",
+        "CROWNOPS_UPLOADS",
     )
 
     def setUp(self):
@@ -180,6 +184,247 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             validate_deployment("https://example.invalid", True)
         self.assertIn("malware scanning", str(ctx.exception))
+
+    def _make_hos_job(self, db_path):
+        initialize(db_path)
+        start=(datetime.now(timezone.utc)+timedelta(hours=12)).isoformat(timespec="seconds")
+        end=(datetime.now(timezone.utc)+timedelta(hours=39)).isoformat(timespec="seconds")
+        with transaction(db_path) as db:
+            insert(db,"leads",dict(id="LEAD-HOS",client_name="Long Distance Client",created_at=now(),updated_at=now()))
+            for eid,name in (("DRV-1","Driver One"),("DRV-2","Driver Two")):
+                insert(db,"employees",dict(id=eid,name=name,role="Mover",active=1,driver_verified=1))
+            for vid,name in (("TRUCK-1","Truck One"),("TRUCK-2","Truck Two")):
+                insert(db,"vehicles",dict(id=vid,name=name,active=1))
+                insert(db,"fleet_profiles",dict(vehicle_id=vid,gvwr_kg=7000,updated_at=now()))
+            insert(db,"pricing_versions",dict(id="PRICE-HOS",label="test",rates_json="{}",settings_json="{}",created_at=now()))
+            insert(db,"quotes",dict(id="QUOTE-HOS",lead_id="LEAD-HOS",revision=1,status="Accepted",
+                inputs_json=dumps({"service_type":"Long Distance","transport_hours":12,"deposit_required":300}),
+                result_json=dumps({"service_type":"Long Distance","service_high":5,"transport_hours":12,
+                    "hos_plan":{"estimated_on_duty_hours":17,"minimum_schedule_days":2}}),
+                pricing_id="PRICE-HOS",lead_snapshot_json="{}",lead_version=1,created_by="test",created_at=now()))
+            insert(db,"jobs",dict(id="JOB-HOS",lead_id="LEAD-HOS",quote_id="QUOTE-HOS",title="Toronto",
+                phase="Long Distance",start_at=start,end_at=end,status="Confirmed",created_by="test",created_at=now()))
+            for eid in ("DRV-1","DRV-2"):insert(db,"assignments",dict(job_id="JOB-HOS",resource_type="employee",resource_id=eid))
+            for vid in ("TRUCK-1","TRUCK-2"):insert(db,"assignments",dict(job_id="JOB-HOS",resource_type="vehicle",resource_id=vid))
+
+    def _add_hos_verification(self,db,driver,truck,job_version=1):
+        insert(db,"hos_dispatch_verifications",dict(id="HOS-"+driver+"-"+truck+"-"+str(job_version),job_id="JOB-HOS",
+            job_version=job_version,driver_id=driver,vehicle_id=truck,cycle=1,cycle_on_duty_hours=30,
+            on_duty_since_last_24h_off=30,consecutive_off_duty_before_shift=8,had_24h_off_in_prev_14d=1,
+            dce_log_checked=1,daily_off_duty_plan_checked=1,elapsed_window_checked=1,projected_on_duty_hours=17,
+            status="Verified",note="Current DCE reviewed for dispatch.",verified_by="dispatcher",verified_at=now()))
+
+    def test_crown_tax_defaults_and_deferred_fleet_document_setup(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            os.environ["CROWNOPS_UPLOADS"]=str(root/"uploads")
+            db_path=root/"crownops.sqlite3"
+            app=create_app(db_path)
+            token="fleet-owner-session";csrf="fleet-owner-csrf"
+            expiry=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(timespec="seconds")
+            with transaction(db_path) as db:
+                insert(db,"users",dict(id="USER-FLEET",email="fleet-owner@example.invalid",name="Fleet Owner",role="owner",
+                    password_hash="unused-test-hash",active=1,created_at=now()))
+                insert(db,"sessions",dict(token_hash=sha(token),user_id="USER-FLEET",csrf=csrf,expires_at=expiry))
+                insert(db,"vehicles",dict(id="TRUCK-DEFERRED",name="Deferred Fleet Truck",active=1))
+                insert(db,"fleet_profiles",dict(vehicle_id="TRUCK-DEFERRED",inspection_interval_hours=24,
+                    check_required=0,updated_at=now()))
+
+            client=TestClient(app);client.cookies.set("crownops_session",token)
+            headers={"x-csrf-token":csrf}
+
+            settings_response=client.get("/api/platform/settings")
+            self.assertEqual(settings_response.status_code,200,settings_response.text)
+            billing=settings_response.json()["billing_policy"]
+            self.assertFalse(bool(billing.get("approved")))
+            self.assertEqual(billing["terms"]["issuer"]["name"],"9411-8213 Quebec Inc. / Déménagement Crown / Crown Movers")
+            self.assertEqual(billing["terms"]["issuer"]["address"],"4030 Blvd. de la Côte-Vertu, Suite 111, Montréal, QC H4R 1V4")
+            taxes=billing["terms"]["taxes"]
+            self.assertEqual(taxes[0],{"name":"GST","rate_percent":5.0,"registration":"737446534RT001"})
+            self.assertEqual(taxes[1],{"name":"QST","rate_percent":9.975,"registration":"1227197265TQ001"})
+
+            readiness=client.get("/api/readiness")
+            self.assertEqual(readiness.status_code,200,readiness.text)
+            fleet_item=next(x for x in readiness.json()["launch"]["items"] if x["key"]=="fleet_gvwr")
+            self.assertFalse(fleet_item["ready"])
+            self.assertFalse(fleet_item["critical"])
+            self.assertIn("TRUCK-DEFERRED",[x["id"] for x in readiness.json()["launch"]["missing_gvwr"]])
+
+            pdf=b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n"
+            uploaded=client.post("/api/fleet/TRUCK-DEFERRED/documents",headers=headers,
+                files={"file":("registration.pdf",pdf,"application/pdf")},
+                data={"category":"Registration"})
+            self.assertEqual(uploaded.status_code,200,uploaded.text)
+            doc=uploaded.json();self.assertEqual(doc["scan_status"],"Quarantined")
+
+            fleet=client.get("/api/fleet")
+            self.assertEqual(fleet.status_code,200,fleet.text)
+            truck=next(x for x in fleet.json() if x["id"]=="TRUCK-DEFERRED")
+            self.assertEqual(len(truck["documents"]),1)
+            self.assertEqual(truck["documents"][0]["id"],doc["id"])
+
+            blocked=client.get("/api/fleet-documents/"+doc["id"])
+            self.assertEqual(blocked.status_code,409)
+            reviewed=client.post("/api/fleet-documents/"+doc["id"]+"/review",headers=headers,
+                json={"decision":"Clean","note":"Test-only safety review for fleet document."})
+            self.assertEqual(reviewed.status_code,200,reviewed.text)
+            downloaded=client.get("/api/fleet-documents/"+doc["id"])
+            self.assertEqual(downloaded.status_code,200,downloaded.text)
+            self.assertEqual(downloaded.content,pdf)
+
+    def test_hos_cycle_capacity_blocks_insufficient_cycle_hours(self):
+        self.assertEqual(hos_cycle_capacity_errors(1,50,50,17),[])
+        self.assertTrue(any("Cycle 1" in x for x in hos_cycle_capacity_errors(1,60,60,17)))
+        self.assertTrue(any("70 on-duty hours" in x for x in hos_cycle_capacity_errors(2,90,60,17)))
+        self.assertTrue(any("Cycle 2" in x for x in hos_cycle_capacity_errors(2,110,20,17)))
+
+    def test_long_distance_dispatch_requires_current_hos_record_per_heavy_truck(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            self._make_hos_job(db_path)
+            with transaction(db_path) as db:
+                status=hos_dispatch_status(db,"JOB-HOS")
+                self.assertTrue(status["required"]);self.assertFalse(status["ready"])
+                self._add_hos_verification(db,"DRV-1","TRUCK-1")
+                self.assertFalse(hos_dispatch_status(db,"JOB-HOS")["ready"])
+                self._add_hos_verification(db,"DRV-2","TRUCK-2")
+                self.assertTrue(hos_dispatch_status(db,"JOB-HOS")["ready"])
+                db.execute("UPDATE jobs SET version=version+1 WHERE id='JOB-HOS'")
+                self.assertFalse(hos_dispatch_status(db,"JOB-HOS")["ready"])
+
+    def test_missing_heavy_truck_gvwr_blocks_hos_readiness(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            self._make_hos_job(db_path)
+            with transaction(db_path) as db:
+                db.execute("UPDATE fleet_profiles SET gvwr_kg=NULL WHERE vehicle_id='TRUCK-2'")
+                status=hos_dispatch_status(db,"JOB-HOS")
+                self.assertFalse(status["ready"])
+                self.assertTrue(any("GVWR" in x and "Truck Two" in x for x in status["blockers"]))
+
+    def test_launch_simulation_long_distance_quote_to_dispatch_and_invoice_draft(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            app=create_app(db_path)
+            staff_token="staff-session-token"
+            staff_csrf="staff-csrf-token"
+            portal_token="client-session-token"
+            portal_csrf="client-csrf-token"
+            expiry=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(timespec="seconds")
+            # Simulate day-of dispatch so the HOS verification falls inside CrownOps' 24-hour freshness window.
+            service_date=datetime.now(timezone.utc).date().isoformat()
+
+            with transaction(db_path) as db:
+                insert(db,"users",dict(id="USER-OWNER",email="owner@example.invalid",name="Owner",role="owner",
+                    password_hash="unused-test-hash",active=1,created_at=now()))
+                insert(db,"sessions",dict(token_hash=sha(staff_token),user_id="USER-OWNER",csrf=staff_csrf,expires_at=expiry))
+                insert(db,"pricing_versions",dict(id="PRICE-LAUNCH",label="Launch test",rates_json="{}",settings_json="{}",approved=1,
+                    approved_by="USER-OWNER",approved_at=now(),created_at=now()))
+                insert(db,"daily_rates",dict(id="RATE-LAUNCH",service_date=service_date,movers=3,hourly_cents=17500,version=1,
+                    approved_by="USER-OWNER",note="Launch simulation",created_at=now()))
+                for eid,name,verified in (("DRV-LAUNCH","Driver Launch",1),("MOV-2","Mover Two",0),("MOV-3","Mover Three",0)):
+                    insert(db,"employees",dict(id=eid,name=name,role="Mover",active=1,driver_verified=verified,hourly_cents=2500))
+                insert(db,"vehicles",dict(id="TRUCK-LAUNCH",name="Launch Truck",active=1))
+                insert(db,"fleet_profiles",dict(vehicle_id="TRUCK-LAUNCH",gvwr_kg=7000,inspection_interval_hours=24,
+                    check_required=0,updated_at=now()))
+                put_setting(db,"client_terms",{"approved":True,"version":"launch-test-v1",
+                    "text":"Launch simulation booking terms. These terms are intentionally test-only and confirm the complete CrownOps acceptance workflow without contacting a real client."})
+                put_setting(db,"billing_policy",{"approved":True,"terms":{
+                    "issuer":{"name":"Crown Movers","address":"700 Rue Hodge, Saint-Laurent, QC","email":"info@crownmovers.ca","phone":"514-606-4030"},
+                    "taxes":[
+                        {"name":"GST","rate_percent":5,"registration":"TEST-GST"},
+                        {"name":"QST","rate_percent":9.975,"registration":"TEST-QST"}],
+                    "catalogue":[],"approval_reference":"Launch simulation billing policy"}})
+                put_setting(db,"quickbooks_mappings_sandbox",{"service_item_id":"TEST-SERVICE","tax_code_id":"TEST-TAX"})
+
+            staff=TestClient(app)
+            staff.cookies.set("crownops_session",staff_token)
+            sh={"x-csrf-token":staff_csrf}
+
+            readiness=staff.get("/api/readiness")
+            self.assertEqual(readiness.status_code,200,readiness.text)
+            self.assertIn("launch",readiness.json())
+            self.assertEqual(readiness.json()["launch"]["verified_driver_count"],1)
+            self.assertEqual(readiness.json()["launch"]["missing_gvwr"],[])
+            self.assertFalse(readiness.json()["launch"]["critical_ready"])  # test mode: Gmail/live actions intentionally off
+
+            r=staff.post("/api/crm/clients",headers=sh,json={"client_name":"Launch Toronto Client",
+                "email":"launch-client@example.invalid","phone":"514-555-0142","language":"English"})
+            self.assertEqual(r.status_code,200,r.text);cid=r.json()["id"]
+
+            r=staff.post(f"/api/crm/clients/{cid}/services",headers=sh,json={"service_type":"Long Distance",
+                "move_date":service_date,"pickup":"700 Rue Hodge, Saint-Laurent, QC",
+                "dropoff":"Toronto, ON","home_size":"2 bedroom","boxes":"40","inventory":"Launch simulation inventory"})
+            self.assertEqual(r.status_code,200,r.text);lid=r.json()["lead_id"]
+
+            quote_data={"lead_id":lid,"service_type":"Long Distance","language":"English","template_key":"long-en",
+                "move_date":service_date,"start_window":"morning","movers":3,"trucks":1,"hourly_rate":175,
+                "hours_low":4,"hours_high":5,"minimum_hours":3,"deposit_required":300,
+                "transport_hours":12,"distance_km":1082,"distance_rate":0.94,"materials":[],
+                "other_amount":0,"discount_amount":0}
+            r=staff.post("/api/crm/quotes",headers=sh,json=quote_data)
+            self.assertEqual(r.status_code,200,r.text);q=r.json();qid=q["id"]
+            self.assertEqual(q["result"]["transport_cents"],241500)
+            self.assertEqual(q["result"]["fuel_cents"],106793)
+            self.assertEqual(q["result"]["hos_plan"]["minimum_schedule_days"],2)
+
+            # Finalize prepares portal/email artifacts. QBO is requested deliberately while writes are disabled:
+            # it must fail safely without poisoning a future retry operation.
+            r=staff.post(f"/api/crm/quotes/{qid}/finalize",headers=sh,json={"send_now":False,"sync_quickbooks":True})
+            self.assertEqual(r.status_code,200,r.text)
+            self.assertEqual(r.json()["quote_status"],"Approved")
+            self.assertTrue(r.json()["quickbooks_error"])
+            with connect(db_path) as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM provider_operations WHERE object_id=?",(qid,)).fetchone()[0],0)
+                insert(db,"portal_sessions",dict(token_hash=stamp_hash(portal_token),lead_id=lid,
+                    email="launch-client@example.invalid",csrf=portal_csrf,expires_at=expiry,created_at=now()))
+
+            portal=TestClient(app)
+            portal.cookies.set("crownops_client",portal_token)
+            r=portal.post(f"/api/portal/quotes/{qid}/accept",headers={"x-csrf-token":portal_csrf},
+                json={"agree":True,"signed_name":"Launch Toronto Client","terms_version":"launch-test-v1"})
+            self.assertEqual(r.status_code,200,r.text);jid=r.json()["tentative_job_id"]
+            self.assertFalse(r.json()["booking_confirmed"])
+
+            r=staff.post(f"/api/crm/quotes/{qid}/manual-deposit",headers=sh,json={"method":"Interac e-Transfer",
+                "mode":"received","amount":300,"reference":"TEST-INTERAC-LAUNCH-001"})
+            self.assertEqual(r.status_code,200,r.text);self.assertTrue(r.json()["confirmed"])
+            self.assertEqual(r.json()["job_id"],jid)
+
+            jobs=staff.get("/api/jobs").json();job=next(x for x in jobs if x["id"]==jid)
+            r=staff.put(f"/api/jobs/{jid}/plan",headers=sh,json={"version":job["version"],"title":"Toronto launch simulation",
+                "start_at":job["start_at"],"end_at":job["end_at"],"quote_id":qid,
+                "crew_ids":["DRV-LAUNCH","MOV-2","MOV-3"],"truck_ids":["TRUCK-LAUNCH"],
+                "stops":["700 Rue Hodge, Saint-Laurent, QC","Toronto, ON"],"notes":"Launch simulation",
+                "reason":"Assign launch crew and truck","capacity_reviewed":True})
+            self.assertEqual(r.status_code,200,r.text)
+
+            r=staff.get(f"/api/jobs/{jid}/hos-verification")
+            self.assertEqual(r.status_code,200,r.text);self.assertFalse(r.json()["ready"])
+            r=staff.post(f"/api/jobs/{jid}/hos-verification",headers=sh,json={"driver_id":"DRV-LAUNCH",
+                "vehicle_id":"TRUCK-LAUNCH","cycle":1,"cycle_on_duty_hours":40,
+                "on_duty_since_last_24h_off":40,"consecutive_off_duty_before_shift":8,
+                "had_24h_off_in_prev_14d":True,"dce_log_checked":True,
+                "daily_off_duty_plan_checked":True,"elapsed_window_checked":True,
+                "note":"Launch simulation DCE and dispatch review completed."})
+            self.assertEqual(r.status_code,200,r.text);self.assertTrue(r.json()["ready"])
+
+            jobs=staff.get("/api/jobs").json();job=next(x for x in jobs if x["id"]==jid)
+            r=staff.patch(f"/api/jobs/{jid}",headers=sh,json={"version":job["version"],"status":"In progress"})
+            self.assertEqual(r.status_code,200,r.text)
+
+            r=staff.post(f"/api/jobs/{jid}/invoice-from-quote",headers=sh,json={})
+            self.assertEqual(r.status_code,200,r.text);iid=r.json()["id"]
+            with connect(db_path) as db:
+                inv=db.execute("SELECT status,terms_json FROM job_invoices WHERE id=?",(iid,)).fetchone()
+                lead=db.execute("SELECT stage FROM leads WHERE id=?",(lid,)).fetchone()
+                quote=db.execute("SELECT status FROM quotes WHERE id=?",(qid,)).fetchone()
+                jobrow=db.execute("SELECT status FROM jobs WHERE id=?",(jid,)).fetchone()
+                self.assertEqual(inv["status"],"Draft")
+                self.assertEqual(lead["stage"],"Booked")
+                self.assertEqual(quote["status"],"Accepted")
+                self.assertEqual(jobrow["status"],"In progress")
+                self.assertIn("Long Distance",db.execute("SELECT phase FROM jobs WHERE id=?",(jid,)).fetchone()["phase"])
 
     def test_read_only_qbo_call_does_not_need_global_external_switch(self):
         response = Mock()

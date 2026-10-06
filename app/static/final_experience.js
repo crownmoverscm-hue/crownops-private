@@ -108,7 +108,7 @@
     const missing=d.readiness?.missing||[];
     const statusLine=`<div class="final-status-line">${readyPill(d.readiness)} ${pill(j.status)} ${q?`<span class="pill ${qAccepted?'teal':'purple'}">Quote ${h(q.status)} · v${h(q.revision)}</span>`:'<span class="pill red">Quote needed</span>'} ${depositPill(p)} ${j.status==='Completed'||d.invoice?paymentPill(p):''}</div>`;
     const moving=`<section class="job-section"><div class="job-section-head"><div><div class="eyebrow">${h(serviceType(j.phase).toUpperCase())} INFORMATION</div><h3>${h(dateLabel(localDay(j.start_at)))} · ${h(timeLabel(j.start_at))}${j.end_at?`–${h(timeLabel(j.end_at))}`:''}</h3></div>${statusLine}</div><div class="job-highlight-strip final-five"><div><span>Team size</span><strong>${d.crew.length} Mover${d.crew.length===1?'':'s'}</strong></div><div><span>Estimated service</span><strong>${h(estimate(q))}</strong></div><div><span>Transportation</span><strong>${h(transport(q))}</strong></div><div><span>Truck</span><strong>${h(d.trucks.map(x=>x.name).join(', ')||'Not assigned')}</strong></div><div><span>Photos</span><strong>${d.photo_count} photo${d.photo_count===1?'':'s'}</strong></div></div><div class="job-info-grid job-grid-3">${info('Assigned team',h(d.crew.map(x=>x.name).join(', ')||'Not assigned'))}${info('Home size',h(c.home_size||'Not supplied'))}${info('Boxes',h(c.boxes||'Not supplied'))}${info('Heavy / specialty',h(c.heavy_items||'None recorded'))}${info('Minimum service',q?`${h(hrs(q.minimum_hours))} hrs`:'Not quoted')}${info('Hourly rate',q?money(q.hourly_rate_cents):'Not quoted')}</div><div class="job-route-grid"><div class="route-card"><div class="info-label">PICKUP</div><strong>${h(c.pickup||'Not supplied')}</strong><div>${h(c.pickup_access||'Access not supplied')}</div><div class="tiny muted">${h(c.pickup_walk||'Parking / walk not supplied')}</div></div><div class="route-arrow">→</div><div class="route-card"><div class="info-label">DESTINATION</div><strong>${h(c.dropoff||'Not supplied')}</strong><div>${h(c.dropoff_access||'Access not supplied')}</div><div class="tiny muted">${h(c.dropoff_walk||'Parking / walk not supplied')}</div></div></div><div class="job-notes"><div class="info-label">INVENTORY / IMPORTANT NOTES</div><div>${h([c.inventory,c.notes,j.notes].filter(Boolean).join('\n\n')||'No inventory or notes recorded.')}</div></div>${missing.length?`<div class="spacer"></div><div class="callout orange"><strong>Needs attention</strong>${missing.map(x=>`<span class="attention-chip">${h(x)}</span>`).join('')}</div>`:''}</section>`;
-    let actions=`<div class="job-actions final-actions"><button class="job-action-card" data-jx="photos" data-id="${h(jid)}"><span class="job-action-icon">▧</span><span><strong>Photos</strong><small>View ${d.photo_count} photo${d.photo_count===1?'':'s'} or upload more</small></span></button>${q?`<button class="job-action-card" data-jx="quote" data-id="${h(jid)}"><span class="job-action-icon">$</span><span><strong>View Quote Details</strong><small>${h(estimate(q))} · ${h(transport(q))}</small></span></button>`:`<button class="job-action-card muted-action" disabled><span class="job-action-icon">$</span><span><strong>Quote needed</strong><small>Create / link the estimate first</small></span></button>`}${qAccepted&&!readOnly?`<button class="job-action-card" data-jx="invoice" data-id="${h(jid)}"><span class="job-action-icon">▤</span><span><strong>${d.invoice?'Open invoice':'Prepare invoice'}</strong><small>Uses accepted Quote v${h(q.revision)}</small></span></button>`:`<button class="job-action-card muted-action" disabled><span class="job-action-icon">▤</span><span><strong>Invoice</strong><small>Available after quote acceptance</small></span></button>`}${!readOnly&&['In progress','Completed'].includes(j.status)?`<button class="job-action-card" data-final="team-hours" data-id="${h(jid)}"><span class="job-action-icon">◷</span><span><strong>Team hours</strong><small>Enter once, adjust exceptions only</small></span></button>`:''}${S.user.role!=='crew'&&may(['owner','sales','dispatch'])?`<button class="job-action-card" data-jx="edit-plan-simple" data-id="${h(jid)}"><span class="job-action-icon">✎</span><span><strong>Edit team / truck / timing</strong><small>Change operational assignment</small></span></button>`:''}</div>`;
+    let actions=`<div class="job-actions final-actions"><button class="job-action-card" data-jx="photos" data-id="${h(jid)}"><span class="job-action-icon">▧</span><span><strong>Photos</strong><small>View ${d.photo_count} photo${d.photo_count===1?'':'s'} or upload more</small></span></button>${q?`<button class="job-action-card" data-jx="quote" data-id="${h(jid)}"><span class="job-action-icon">$</span><span><strong>View Quote Details</strong><small>${h(estimate(q))} · ${h(transport(q))}</small></span></button>`:`<button class="job-action-card muted-action" disabled><span class="job-action-icon">$</span><span><strong>Quote needed</strong><small>Create / link the estimate first</small></span></button>`}${qAccepted&&!readOnly?`<button class="job-action-card" data-jx="invoice" data-id="${h(jid)}"><span class="job-action-icon">▤</span><span><strong>${d.invoice?'Open invoice':'Prepare invoice'}</strong><small>Uses accepted Quote v${h(q.revision)}</small></span></button>`:`<button class="job-action-card muted-action" disabled><span class="job-action-icon">▤</span><span><strong>Invoice</strong><small>Available after quote acceptance</small></span></button>`}${!readOnly&&['In progress','Completed'].includes(j.status)?`<button class="job-action-card" data-final="team-hours" data-id="${h(jid)}"><span class="job-action-icon">◷</span><span><strong>Team hours</strong><small>Enter once, adjust exceptions only</small></span></button>`:''}${q?.service_type==='Long Distance'&&S.user.role!=='crew'?`<button class="job-action-card" data-final="hos-verify" data-id="${h(jid)}"><span class="job-action-icon">H</span><span><strong>Driver HOS verification</strong><small>Review DCE/log, rest, cycle and heavy-truck coverage</small></span></button>`:''}${S.user.role!=='crew'&&may(['owner','sales','dispatch'])?`<button class="job-action-card" data-jx="edit-plan-simple" data-id="${h(jid)}"><span class="job-action-icon">✎</span><span><strong>Edit team / truck / timing</strong><small>Change operational assignment</small></span></button>`:''}</div>`;
     let primary='';
     if(j.status==='Tentative'&&!readOnly&&may(['owner','sales','dispatch']))primary+=`<button class="btn-primary" data-jx="confirm" data-id="${h(jid)}">Confirm job</button>`;
     if(j.status==='Confirmed'&&!readOnly)primary+=btn('job-status','Start job','btn-primary',`data-id="${h(jid)}" data-version="${raw.version}" data-status="In progress"`);
@@ -122,6 +122,36 @@
     showModal('Email client',`<form id="final-email-form" data-final-form="email"><input type="hidden" name="lead_id" value="${h(lid)}"><div class="callout teal"><strong>Company email draft</strong>This is prepared inside CrownOps. Nothing is sent from a personal mailbox.</div><div class="spacer"></div>${field('subject','Subject','Crown Movers - your service','text','required')}${textArea('body','Message','',8)}<input type="hidden" name="category" value="Reply"></form>`,`${btn('close','Cancel')}<button class="btn-primary" type="submit" form="final-email-form">Save email draft</button>`,true);
   }
 
+  async function hosVerification(jid){
+    const s=await api('/jobs/'+encodeURIComponent(jid)+'/hos-verification');
+    const blockerHtml=(s.blockers||[]).length?'<div class="callout orange"><strong>Not dispatch-ready</strong>'+(s.blockers||[]).map(x=>'<div class="tiny" style="margin-top:5px">'+h(x)+'</div>').join('')+'</div>':
+      '<div class="callout teal"><strong>HOS dispatch status</strong>'+(s.required?'Current verification is complete for the assigned heavy truck(s).':'No heavy-vehicle HOS verification is required for the current assigned truck profile.')+'</div>';
+    const vehicleRows=(s.vehicles||[]).map(v=>'<div class="quote-line"><span>'+h(v.name)+'</span><strong>'+(v.gvwr_kg==null?'GVWR missing':h(v.gvwr_kg)+' kg')+'</strong></div>').join('');
+    const records=(s.records||[]).slice(0,8).map(r=>'<div class="activity-row"><div><strong>'+h(r.driver_name)+' · '+h(r.vehicle_name)+'</strong><p>Cycle '+h(r.cycle)+' · '+h(r.cycle_on_duty_hours)+' h accumulated · '+h(r.projected_on_duty_hours)+' h projected</p><span class="tiny muted">'+h(new Date(r.verified_at).toLocaleString('en-CA',{timeZone:'America/Toronto'}))+' · job version '+h(r.job_version)+'</span></div></div>').join('')||'<p class="small muted">No HOS verification has been recorded for this job yet.</p>';
+    let form='';
+    if(may(['owner','dispatch'])&&(s.heavy_vehicles||[]).length&&(s.drivers||[]).length){
+      const drivers=(s.drivers||[]).map(x=>[x.id,x.name]);
+      const trucks=(s.heavy_vehicles||[]).map(x=>[x.id,x.name+' · '+x.gvwr_kg+' kg']);
+      form='<div class="spacer"></div><section class="job-section"><div class="eyebrow">DISPATCH VERIFICATION</div><form id="hos-verification-form" data-final-form="hos"><input type="hidden" name="job_id" value="'+h(jid)+'"><div class="grid2">'+
+        select('driver_id','Assigned verified driver',drivers,drivers[0]?.[0]||'','required')+
+        select('vehicle_id','Assigned heavy truck',trucks,trucks[0]?.[0]||'','required')+
+        select('cycle','Driver cycle',[['1','Cycle 1 · 70 h / 7 days'],['2','Cycle 2 · 120 h / 14 days']],'1','required')+
+        field('cycle_on_duty_hours','Current cycle on-duty hours','','number','step="0.25" min="0" max="120" required')+
+        field('on_duty_since_last_24h_off','On-duty hours since last 24 h off','','number','step="0.25" min="0" max="120" required')+
+        field('consecutive_off_duty_before_shift','Consecutive off-duty hours before shift',8,'number','step="0.25" min="0" max="48" required')+
+        '</div>'+
+        checkedField('had_24h_off_in_prev_14d','DCE/log confirms at least 24 consecutive off-duty hours in the preceding 14 days')+
+        checkedField('dce_log_checked','I reviewed the driver DCE/ELD/activity log for current hours')+
+        checkedField('daily_off_duty_plan_checked','The schedule preserves the daily 10-hour off-duty requirement')+
+        checkedField('elapsed_window_checked','The 16-hour elapsed-time window has been reviewed for the planned work/rest periods')+
+        textArea('note','Verification evidence / note','',3)+
+        '<div class="callout"><strong>Internal safety rule</strong>Complete or refresh this verification within 24 hours of departure. CrownOps will not allow a long-distance heavy-truck job to start without a current record for every heavy truck.</div></form></section>';
+    }
+    const body=blockerHtml+'<div class="spacer"></div><section class="job-section"><div class="eyebrow">ASSIGNED TRUCKS</div>'+vehicleRows+'</section><div class="spacer"></div><section class="job-section"><div class="eyebrow">VERIFICATION HISTORY</div>'+records+'</section>'+form;
+    const footer=btn('close','Close')+(form?'<button type="submit" form="hos-verification-form" class="btn-primary">Save HOS verification</button>':'');
+    showModal('Driver HOS · '+h(s.job?.title||'Long-distance job'),body,footer,true);
+  }
+
   document.addEventListener('click',async e=>{
     const el=e.target.closest('[data-final]');if(!el)return;e.preventDefault();const a=el.dataset.final,id=el.dataset.id;
     try{
@@ -132,6 +162,7 @@
       if(a==='legacy-client'){modal.close();return legacyOpenLead(id);}
       if(a==='email-client')return emailForm(id);
       if(a==='team-hours')return addTime(id);
+      if(a==='hos-verify')return hosVerification(id);
     }catch(ex){modal.open?modalError(ex):toast(ex.message);}
   });
 
@@ -140,6 +171,23 @@
     try{
       if(f.dataset.finalForm==='email'){
         const d=readForm(f);await api('/outbound',{method:'POST',data:d});modal.close();toast('Company email draft saved. Nothing was sent.');return navigate('communications');
+      }
+      if(f.dataset.finalForm==='hos'){
+        const jobId=f.elements.job_id.value;
+        const d={
+          driver_id:f.elements.driver_id.value,vehicle_id:f.elements.vehicle_id.value,cycle:Number(f.elements.cycle.value),
+          cycle_on_duty_hours:Number(f.elements.cycle_on_duty_hours.value),
+          on_duty_since_last_24h_off:Number(f.elements.on_duty_since_last_24h_off.value),
+          consecutive_off_duty_before_shift:Number(f.elements.consecutive_off_duty_before_shift.value),
+          had_24h_off_in_prev_14d:f.elements.had_24h_off_in_prev_14d.checked,
+          dce_log_checked:f.elements.dce_log_checked.checked,
+          daily_off_duty_plan_checked:f.elements.daily_off_duty_plan_checked.checked,
+          elapsed_window_checked:f.elements.elapsed_window_checked.checked,
+          note:f.elements.note.value
+        };
+        await api('/jobs/'+encodeURIComponent(jobId)+'/hos-verification',{method:'POST',data:d});
+        toast('HOS verification saved for this driver and truck.');
+        return hosVerification(jobId);
       }
     }catch(ex){modalError(ex);}
   });

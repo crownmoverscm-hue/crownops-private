@@ -86,7 +86,7 @@ def register_portal(app,path,auth,public_url,secure):
                 r=json.loads(q['result_json']);snap=json.loads(q['lead_snapshot_json'])
                 quotes.append({'id':q['id'],'revision':q['revision'],'status':q['status'],'stale':q['lead_version']!=l['version'],
                     'created_at':q['created_at'],'move_date':snap.get('move_date'),'pickup':snap.get('pickup'),'dropoff':snap.get('dropoff'),
-                    'result':{k:r.get(k) for k in ('hourly_rate_cents','service_low','service_high','minimum_hours','transport_hours','transport_cents','fuel_cents','materials_cents','other_cents','discount_cents','low_cents','high_cents','movers','trucks','tax_note','service_type','language','line_items','distance_km','distance_rate_cents')},'inputs':{k:json.loads(q['inputs_json']).get(k) for k in ('service_type','language','template_key','limited_liability')},'deposit_required':json.loads(q['inputs_json']).get('deposit_required',300)})
+                    'result':{k:r.get(k) for k in ('hourly_rate_cents','service_low','service_high','minimum_hours','transport_hours','transport_cents','fuel_cents','materials_cents','other_cents','discount_cents','low_cents','high_cents','movers','trucks','tax_note','service_type','language','line_items','distance_km','distance_rate_cents')},'inputs':{k:json.loads(q['inputs_json']).get(k) for k in ('service_type','language','template_key','template_snapshot','limited_liability','start_window','start_time','start_window_label','move_date')},'deposit_required':json.loads(q['inputs_json']).get('deposit_required',300)})
             jobs=rows(db,"SELECT id,title,phase,start_at,end_at,status FROM jobs WHERE lead_id=? AND status!='Tentative' ORDER BY start_at",(c['lead_id'],))
             invs=[]
             for inv in rows(db,"SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND i.status='Issued'",(c['lead_id'],)):
@@ -97,6 +97,13 @@ def register_portal(app,path,auth,public_url,secure):
                 qr['deposit']=deposit_state(db,c['lead_id'],source_q)
             cfg=settings(db,'media_program',{})
             terms=settings(db,'client_terms',{})
+            dep=settings(db,'deposit_policy',{}) or {}
+            card_deposit_available=live_enabled() and bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID'))
+            public_deposit={'enabled':False}
+            if dep.get('approved') and dep.get('enabled') and dep.get('recipient_email'):
+                public_deposit={'enabled':True,'recipient_name':dep.get('recipient_name','Crown Movers'),
+                  'recipient_email':dep.get('recipient_email',''),'auto_deposit':bool(dep.get('auto_deposit',True)),
+                  'reference_note':dep.get('reference_note','')}
             return {'csrf':c['csrf'],'client':public_client(l),'quotes':quotes,'jobs':jobs,'invoices':invs,
                 'changes':rows(db,'SELECT id,payload_json,status,created_at,review_note FROM client_changes WHERE lead_id=? ORDER BY created_at DESC',(c['lead_id'],)),
                 'attachments':[safe_attachment(r) for r in rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(c['lead_id'],))],
@@ -104,6 +111,7 @@ def register_portal(app,path,auth,public_url,secure):
                 'payment_links':rows(db,"SELECT p.invoice_id,p.url,p.amount_cents FROM payment_links p JOIN job_invoices i ON i.id=p.invoice_id JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND p.status='Active' AND p.revision=i.revision AND i.status='Issued'",(c['lead_id'],)),
                 'media_program':{'approved':cfg.get('approved',False),'release_version':cfg.get('version',''),'release_text':cfg.get('release_text',''),'channels':cfg.get('channels',[]),'amount_cents':5000},
                 'terms':{k:terms.get(k) for k in ('approved','version','text')} if terms.get('approved') else {'approved':False},
+                'deposit_policy':public_deposit,'card_deposit_available':card_deposit_available,
                 'releases':rows(db,'SELECT id,status,signed_at,withdrawn_at FROM media_releases WHERE lead_id=?',(c['lead_id'],))}
 
     @app.post('/api/portal/quotes/{qid}/deposit-checkout')
@@ -165,24 +173,10 @@ def register_portal(app,path,auth,public_url,secure):
             ref=dumps({'name':data['signed_name'],'portal_email':c['email'],'terms_version':terms['version'],'terms_text':terms['text'],'accepted_at':now()})
             db.execute("UPDATE quotes SET status='Accepted',acceptance_ref=?,accepted_at=? WHERE id=?",(ref,now(),qid))
             db.execute("UPDATE leads SET stage='Accepted' WHERE id=?",(c['lead_id'],))
-            # Put an accepted estimate on the working schedule immediately as a tentative hold.
-            # This is not a confirmed booking until the deposit or a manager-approved exception is recorded.
-            job=one(db,"SELECT * FROM jobs WHERE quote_id=? ORDER BY created_at DESC LIMIT 1",(qid,))
-            if not job:
-                from zoneinfo import ZoneInfo
-                inp=json.loads(q['inputs_json'])
-                move_day=inp.get('move_date') or l.get('move_date')
-                if move_day:
-                    local_start=datetime.fromisoformat(move_day+'T09:00:00').replace(tzinfo=ZoneInfo('America/Toronto'))
-                    utc_start=local_start.astimezone(timezone.utc);utc_end=utc_start+timedelta(hours=8)
-                    jid=uid('JOB')
-                    insert(db,'jobs',dict(id=jid,lead_id=l['id'],quote_id=qid,title=l['client_name'],
-                        phase=inp.get('service_type') or 'Moving',start_at=utc_start.isoformat(timespec='seconds'),
-                        end_at=utc_end.isoformat(timespec='seconds'),status='Tentative',
-                        stops_json=dumps([x for x in (l.get('pickup'),l.get('dropoff')) if x]),
-                        notes='Accepted estimate - awaiting deposit / booking confirmation.',capacity_reviewed=0,
-                        exception_reason='',created_by='client:'+c['email'],created_at=now()))
-                    job=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
+            # Put the accepted estimate on the working schedule using the sold arrival window.
+            # It remains tentative until the deposit or a manager-approved exception confirms the booking.
+            from .sales_crm_v6 import ensure_tentative_job
+            job=ensure_tentative_job(db,q,l,'client:'+c['email'])
             add_task(db,c['lead_id'],'Verify deposit and assign crew/truck after acceptance',l['assigned_to'],'accepted:'+qid)
             audit(db,'client:'+c['email'],'Quote accepted in portal','quotes',qid,{'terms_version':terms['version'],'tentative_job_id':job['id'] if job else None})
         return {'ok':True,'booking_confirmed':False,'tentative_job_id':job['id'] if job else None,'message':'Estimate accepted. Your requested date is now held as tentative while Crown verifies the deposit and final booking details.'}

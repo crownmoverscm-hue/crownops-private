@@ -3,12 +3,14 @@ from contextlib import closing
 from datetime import datetime, timezone, timedelta, date
 from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
-import csv, io, json, os
-from fastapi import Depends, HTTPException
-from fastapi.responses import Response
+from pathlib import Path
+import csv, io, json, os, hashlib, shlex, subprocess
+from fastapi import Depends, HTTPException, File, Form, UploadFile
+from fastapi.responses import Response, FileResponse
 from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .pricing import number,cents
 from .platform_common import *
+from .portal import detect
 
 
 def prefill_payroll(db,inv,doc,actor):
@@ -55,18 +57,221 @@ def check_fleet_dispatch(db,trucks,crew,start):
             if e and e['driver_verified']:raise HTTPException(409,'An assigned driver license expires before this job.')
 
 
+def _job_hos_projection(db,j):
+    if not j or not j.get('quote_id'):return None
+    q=one(db,'SELECT * FROM quotes WHERE id=?',(j['quote_id'],))
+    if not q:return None
+    try:
+        inputs=json.loads(q['inputs_json']);result=json.loads(q['result_json'])
+    except Exception:return None
+    service=result.get('service_type') or inputs.get('service_type')
+    if service!='Long Distance':return None
+    plan=result.get('hos_plan') or {}
+    projected=float(plan.get('estimated_on_duty_hours') or 0)
+    if projected<=0:
+        projected=float(result.get('service_high') or 0)+float(inputs.get('transport_hours') or result.get('transport_hours') or 0)
+    return {'quote':q,'inputs':inputs,'result':result,'projected_on_duty_hours':projected,'hos_plan':plan}
+
+def hos_dispatch_status(db,jid):
+    j=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
+    if not j:return {'required':False,'ready':False,'blockers':['Job not found.'],'job':None}
+    projection=_job_hos_projection(db,j)
+    crew=rows(db,"""SELECT e.id,e.name,e.driver_verified FROM assignments a
+      JOIN employees e ON e.id=a.resource_id WHERE a.job_id=? AND a.resource_type='employee' ORDER BY e.name""",(jid,))
+    vehicles=rows(db,"""SELECT v.id,v.name,p.gvwr_kg FROM assignments a
+      JOIN vehicles v ON v.id=a.resource_id
+      LEFT JOIN fleet_profiles p ON p.vehicle_id=v.id
+      WHERE a.job_id=? AND a.resource_type='vehicle' ORDER BY v.name""",(jid,))
+    drivers=[x for x in crew if x.get('driver_verified')]
+    unknown=[v for v in vehicles if v.get('gvwr_kg') is None]
+    heavy=[v for v in vehicles if v.get('gvwr_kg') is not None and float(v['gvwr_kg'])>=4500]
+    records=rows(db,"""SELECT h.*,e.name driver_name,v.name vehicle_name FROM hos_dispatch_verifications h
+      JOIN employees e ON e.id=h.driver_id JOIN vehicles v ON v.id=h.vehicle_id
+      WHERE h.job_id=? ORDER BY h.verified_at DESC""",(jid,))
+    required=bool(projection and (heavy or unknown))
+    blockers=[]
+    if not projection:
+        return {'required':False,'ready':True,'blockers':[],'job':j,'drivers':drivers,'vehicles':vehicles,
+          'heavy_vehicles':heavy,'unknown_gvwr_vehicles':unknown,'records':records,'projected_on_duty_hours':0}
+    if unknown:
+        blockers.extend(['Enter GVWR for '+v['name']+' before deciding HOS applicability.' for v in unknown])
+    if heavy and len(drivers)<len(heavy):
+        blockers.append('Assign at least one verified driver for each heavy truck.')
+    current=[r for r in records if int(r['job_version'])==int(j['version']) and r['status']=='Verified']
+    valid=[]
+    used=set()
+    start=datetime.fromisoformat(j['start_at'])
+    freshness_cutoff=start-timedelta(hours=24)
+    assigned_driver_ids={x['id'] for x in drivers};heavy_ids={x['id'] for x in heavy}
+    for r in current:
+        if r['driver_id'] not in assigned_driver_ids or r['vehicle_id'] not in heavy_ids:continue
+        if r['driver_id'] in used:continue
+        used.add(r['driver_id']);valid.append(r)
+    for v in heavy:
+        rec=next((r for r in valid if r['vehicle_id']==v['id']),None)
+        if not rec:
+            blockers.append('HOS verification required for '+v['name']+'.')
+        else:
+            try:fresh=datetime.fromisoformat(rec['verified_at'])>=freshness_cutoff
+            except Exception:fresh=False
+            if not fresh:blockers.append('Refresh HOS verification for '+v['name']+' within 24 hours of departure.')
+    return {'required':required,'ready':not blockers,'blockers':blockers,'job':j,'drivers':drivers,'vehicles':vehicles,
+      'heavy_vehicles':heavy,'unknown_gvwr_vehicles':unknown,'records':records,
+      'projected_on_duty_hours':projection['projected_on_duty_hours'],'hos_plan':projection.get('hos_plan') or {}}
+
+def hos_cycle_capacity_errors(cycle,cycle_hours,on_duty_since_last_24h_off,projected_on_duty_hours):
+    cycle=int(cycle);cycle_hours=float(cycle_hours);since_24=float(on_duty_since_last_24h_off);projected=float(projected_on_duty_hours)
+    errors=[]
+    limit=70.0 if cycle==1 else 120.0
+    if cycle_hours+projected>limit+1e-8:
+        errors.append(f'Projected job would exceed Cycle {cycle} on-duty capacity ({limit:g} h).')
+    if cycle==2 and since_24+projected>70+1e-8:
+        errors.append('Cycle 2 would exceed 70 on-duty hours without another qualifying 24-hour off-duty period.')
+    return errors
+
+def require_hos_dispatch_verification(db,jid):
+    status=hos_dispatch_status(db,jid)
+    if status['required'] and not status['ready']:
+        raise HTTPException(409,'Long-distance HOS dispatch verification is incomplete: '+'; '.join(status['blockers'][:4]))
+    return status
+
+
 def register_operations(app,path,auth):
+    storage=Path(os.getenv('CROWNOPS_UPLOADS',os.getenv('CROWNOPS_UPLOAD_DIR',str(Path(path).parent/'uploads')))).resolve()
+    storage.mkdir(parents=True,exist_ok=True,mode=0o700)
+
+    def fleet_doc_public(r):
+        return {k:r[k] for k in ('id','vehicle_id','category','original_name','mime','size','scan_status','created_at','deleted_at')}
+
+    def fleet_doc(db,fid):
+        r=one(db,'SELECT * FROM fleet_documents WHERE id=? AND deleted_at IS NULL',(fid,))
+        if not r:raise HTTPException(404,'Fleet document not found.')
+        return r
+
+    async def save_fleet_doc(file,vid,category,actor):
+        if not uploads_enabled():raise HTTPException(503,'Private file uploads are disabled until production malware scanning is configured.')
+        allowed_categories=('Registration','GVWR / door sticker','Insurance','Inspection','Maintenance','Other')
+        if category not in allowed_categories:raise HTTPException(422,'Unsupported fleet document category.')
+        with closing(connect(path)) as db:
+            if not one(db,'SELECT id FROM vehicles WHERE id=?',(vid,)):raise HTTPException(404,'Truck not found.')
+        name=Path((file.filename or 'upload').replace('\\','/')).name[:180]
+        if any(ord(ch)<32 for ch in name):raise HTTPException(422,'Invalid filename.')
+        limit=int(os.getenv('CROWNOPS_FLEET_FILE_MB','25'))*1024*1024
+        key=uid('FLEETFILE');temp=storage/(key+'.upload');n=0;digest=hashlib.sha256();head=b''
+        try:
+            with open(temp,'xb') as out:
+                while chunk:=await file.read(1024*1024):
+                    n+=len(chunk)
+                    if n>limit:raise HTTPException(413,'Fleet document is too large.')
+                    if not head:head=chunk[:32]
+                    digest.update(chunk);out.write(chunk)
+            if n==0:raise HTTPException(422,'File is empty.')
+            mime=detect(head,name)
+            if mime not in ('image/jpeg','image/png','image/webp','application/pdf'):
+                raise HTTPException(422,'Fleet documents must be JPEG, PNG, WebP or PDF.')
+            status='Quarantined';command=os.getenv('CROWNOPS_SCAN_COMMAND','').strip()
+            if command:
+                try:
+                    from starlette.concurrency import run_in_threadpool
+                    scan=await run_in_threadpool(subprocess.run,shlex.split(command)+[str(temp)],capture_output=True,timeout=120,check=False)
+                    status='Clean' if scan.returncode==0 else 'Rejected'
+                except (OSError,subprocess.TimeoutExpired):status='Quarantined'
+            dest=storage/(key+Path(name).suffix.lower());temp.rename(dest);dest.chmod(0o600)
+            with transaction(path) as db:
+                total=db.execute('SELECT coalesce(sum(size),0) FROM fleet_documents WHERE vehicle_id=? AND deleted_at IS NULL',(vid,)).fetchone()[0]
+                if total+n>int(os.getenv('CROWNOPS_FLEET_UPLOAD_MB','250'))*1024*1024:
+                    dest.unlink(missing_ok=True);raise HTTPException(413,'Fleet document storage limit reached for this truck.')
+                rec=dict(id=key,vehicle_id=vid,category=category,original_name=name,stored_name=dest.name,mime=mime,
+                    size=n,sha256=digest.hexdigest(),scan_status=status,author=actor,created_at=now())
+                insert(db,'fleet_documents',rec)
+                audit(db,actor,'Fleet document uploaded','fleet_documents',key,{'vehicle_id':vid,'category':category,'bytes':n,'scan_status':status})
+            return fleet_doc_public({**rec,'deleted_at':None})
+        finally:
+            temp.unlink(missing_ok=True)
+    @app.get('/api/jobs/{jid}/hos-verification')
+    def get_hos_verification(jid:str,u=Depends(auth)):
+        require_role(u,OFFICE)
+        with closing(connect(path)) as db:
+            status=hos_dispatch_status(db,jid)
+            if status.get('job') is None:raise HTTPException(404,'Job not found.')
+            return status
+
+    @app.post('/api/jobs/{jid}/hos-verification')
+    def save_hos_verification(jid:str,data:dict,u=Depends(auth)):
+        require_role(u,{'owner','dispatch'})
+        with transaction(path) as db:
+            status=hos_dispatch_status(db,jid);j=status.get('job')
+            if not j:raise HTTPException(404,'Job not found.')
+            projection=_job_hos_projection(db,j)
+            if not projection:raise HTTPException(422,'HOS dispatch verification is available for long-distance jobs only.')
+            driver_id=str(data.get('driver_id') or '');vehicle_id=str(data.get('vehicle_id') or '')
+            driver=one(db,"""SELECT e.* FROM employees e JOIN assignments a ON a.resource_id=e.id
+              WHERE a.job_id=? AND a.resource_type='employee' AND e.id=?""",(jid,driver_id))
+            if not driver or not driver.get('driver_verified'):raise HTTPException(422,'Choose an assigned verified driver.')
+            vehicle=one(db,"""SELECT v.*,p.gvwr_kg FROM vehicles v JOIN assignments a ON a.resource_id=v.id
+              LEFT JOIN fleet_profiles p ON p.vehicle_id=v.id
+              WHERE a.job_id=? AND a.resource_type='vehicle' AND v.id=?""",(jid,vehicle_id))
+            if not vehicle:raise HTTPException(422,'Choose an assigned truck.')
+            if vehicle.get('gvwr_kg') is None:raise HTTPException(422,'Enter this truck GVWR before HOS verification.')
+            if float(vehicle['gvwr_kg'])<4500:raise HTTPException(422,'This truck is below the 4,500 kg HOS threshold; no heavy-vehicle HOS verification is required for it.')
+            try:cycle=int(data.get('cycle'))
+            except Exception:raise HTTPException(422,'Choose Cycle 1 or Cycle 2.')
+            if cycle not in (1,2):raise HTTPException(422,'Choose Cycle 1 or Cycle 2.')
+            try:
+                cycle_hours=float(number(data.get('cycle_on_duty_hours'),'Current cycle on-duty hours',0,120))
+                since_24=float(number(data.get('on_duty_since_last_24h_off'),'On-duty hours since last 24-hour rest',0,120))
+                rest_before=float(number(data.get('consecutive_off_duty_before_shift'),'Consecutive off-duty hours before shift',0,48))
+            except ValueError as ex:raise HTTPException(422,str(ex))
+            if rest_before<8:raise HTTPException(422,'Driver needs at least 8 consecutive off-duty hours before driving again.')
+            if data.get('had_24h_off_in_prev_14d') is not True:raise HTTPException(422,'Confirm at least 24 consecutive off-duty hours in the preceding 14 days.')
+            if data.get('dce_log_checked') is not True:raise HTTPException(422,'Review the driver DCE/ELD/activity log before verification.')
+            if data.get('daily_off_duty_plan_checked') is not True:raise HTTPException(422,'Confirm the daily 10-hour off-duty requirement is covered by the plan.')
+            if data.get('elapsed_window_checked') is not True:raise HTTPException(422,'Confirm the 16-hour elapsed-time window is covered by the plan.')
+            projected=float(projection['projected_on_duty_hours'])
+            capacity_errors=hos_cycle_capacity_errors(cycle,cycle_hours,since_24,projected)
+            if capacity_errors:raise HTTPException(422,capacity_errors[0])
+            note=text(data.get('note',''),'HOS verification note',3000)
+            if len(note)<12:raise HTTPException(422,'Document the DCE/log and dispatch review.')
+            duplicate=one(db,"""SELECT id FROM hos_dispatch_verifications WHERE job_id=? AND job_version=? AND driver_id=? AND vehicle_id!=? AND status='Verified'""",
+              (jid,j['version'],driver_id,vehicle_id))
+            if duplicate:raise HTTPException(422,'One driver cannot be verified to operate two trucks on the same job.')
+            db.execute("DELETE FROM hos_dispatch_verifications WHERE job_id=? AND job_version=? AND vehicle_id=?",(jid,j['version'],vehicle_id))
+            rec=dict(id=uid('HOS'),job_id=jid,job_version=j['version'],driver_id=driver_id,vehicle_id=vehicle_id,cycle=cycle,
+              cycle_on_duty_hours=cycle_hours,on_duty_since_last_24h_off=since_24,
+              consecutive_off_duty_before_shift=rest_before,had_24h_off_in_prev_14d=1,dce_log_checked=1,
+              daily_off_duty_plan_checked=1,elapsed_window_checked=1,projected_on_duty_hours=projected,
+              status='Verified',note=note,verified_by=u['id'],verified_at=now())
+            insert(db,'hos_dispatch_verifications',rec)
+            audit(db,u['id'],'Long-distance HOS dispatch verification recorded','hos_dispatch_verifications',rec['id'],
+              {'job_id':jid,'driver_id':driver_id,'vehicle_id':vehicle_id,'cycle':cycle,'projected_on_duty_hours':projected})
+            return hos_dispatch_status(db,jid)
+
     @app.get('/api/platform/settings')
     def get_settings(u=Depends(auth)):
         require_role(u,OFFICE)
         with closing(connect(path)) as db:
-            result={k:settings(db,k,{}) for k in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy')}
+            result={k:settings(db,k,{}) for k in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy','deposit_policy')}
+        billing=dict(result.get('billing_policy') or {})
+        terms=dict(billing.get('terms') or {})
+        issuer=dict(terms.get('issuer') or {})
+        issuer.setdefault('name','9411-8213 Quebec Inc. / Déménagement Crown / Crown Movers')
+        issuer.setdefault('address','4030 Blvd. de la Côte-Vertu, Suite 111, Montréal, QC H4R 1V4')
+        issuer.setdefault('email','info@crownmovers.ca')
+        issuer.setdefault('phone','514-606-4030')
+        terms['issuer']=issuer
+        if not terms.get('taxes'):
+            terms['taxes']=[
+              {'name':'GST','rate_percent':5.0,'registration':'737446534RT001'},
+              {'name':'QST','rate_percent':9.975,'registration':'1227197265TQ001'}]
+        terms.setdefault('catalogue',[])
+        billing['terms']=terms
+        result['billing_policy']=billing
         return result
 
     @app.post('/api/platform/settings/{key}')
     def set_settings(key:str,data:dict,u=Depends(auth)):
         require_role(u,MANAGERS)
-        if key not in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy'):raise HTTPException(422,'Unknown settings group.')
+        if key not in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy','deposit_policy'):raise HTTPException(422,'Unknown settings group.')
         if key in ('client_terms','media_program'):
             if not text(data.get('version',''),'Version',100):raise HTTPException(422,'A version is required.')
             field='release_text' if key=='media_program' else 'text'
@@ -90,6 +295,16 @@ def register_operations(app,path,auth):
             allowed={'preparation','invoice_followup','review_request','fleet_tasks'}
             if set(data)-allowed-{'review_url','enabled'}:raise HTTPException(422,'Unknown automation setting.')
             if data.get('review_url') and not str(data['review_url']).startswith('https://'):raise HTTPException(422,'Use a secure review URL.')
+        if key=='deposit_policy':
+            allowed={'enabled','recipient_name','recipient_email','auto_deposit','reference_note','approved','review_note'}
+            if set(data)-allowed:raise HTTPException(422,'Unknown deposit setting.')
+            email=text(data.get('recipient_email',''),'Interac recipient email',320)
+            name=text(data.get('recipient_name',''),'Interac recipient name',200)
+            note=text(data.get('reference_note',''),'Interac reference note',500)
+            if data.get('enabled') or data.get('approved'):
+                if not name:raise HTTPException(422,'Enter the Interac recipient name.')
+                if not email or '@' not in email or '.' not in email.rsplit('@',1)[-1]:raise HTTPException(422,'Enter a valid Interac recipient email.')
+            data={**data,'recipient_name':name,'recipient_email':email.lower(),'reference_note':note,'auto_deposit':bool(data.get('auto_deposit',True))}
         if data.get('approved') is True and not data.get('review_note'):raise HTTPException(422,'Record who reviewed these operational terms and rules.')
         with transaction(path) as db:
             put_setting(db,key,{**data,'updated_by':u['id'],'updated_at':now()});audit(db,u['id'],'Configuration updated','settings',key,{'approved':data.get('approved',False)})
@@ -138,9 +353,37 @@ def register_operations(app,path,auth):
                 p,w,latest=fleet_warnings(db,v);pos=one(db,'SELECT * FROM positions WHERE vehicle_id=?',(v['id'],))
                 if pos:
                     pos['stale']=(datetime.now(timezone.utc)-datetime.fromisoformat(pos['observed_at'])).total_seconds()>900
-                out.append({**v,'profile':p,'warnings':w,'latest_check':latest,'position':pos,
+                documents=[fleet_doc_public(x) for x in rows(db,'SELECT * FROM fleet_documents WHERE vehicle_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(v['id'],))] if u['role'] in OFFICE else []
+                out.append({**v,'profile':p,'warnings':w,'latest_check':latest,'position':pos,'documents':documents,
                     'maintenance':rows(db,'SELECT * FROM maintenance WHERE vehicle_id=? ORDER BY created_at DESC',(v['id'],))})
             return out
+
+    @app.post('/api/fleet/{vid}/documents')
+    async def upload_fleet_document(vid:str,file:UploadFile=File(...),category:str=Form('Registration'),u=Depends(auth)):
+        require_role(u,{'owner','sales','dispatch'})
+        return await save_fleet_doc(file,vid,category,u['id'])
+
+    @app.get('/api/fleet-documents/{fid}')
+    def download_fleet_document(fid:str,u=Depends(auth)):
+        require_role(u,OFFICE)
+        with closing(connect(path)) as db:r=fleet_doc(db,fid)
+        if r['scan_status']!='Clean':raise HTTPException(409,'This fleet document is quarantined or rejected until safety review.')
+        p=(storage/r['stored_name']).resolve()
+        if p.parent!=storage or not p.exists():raise HTTPException(404,'Stored fleet document unavailable.')
+        return FileResponse(p,media_type=r['mime'],filename=r['original_name'],headers={'Cache-Control':'no-store'})
+
+    @app.post('/api/fleet-documents/{fid}/review')
+    def review_fleet_document(fid:str,data:dict,u=Depends(auth)):
+        require_role(u,MANAGERS)
+        if os.getenv('CROWNOPS_ENV','test')=='production' and data.get('decision')=='Clean':
+            raise HTTPException(409,'Production file clearance requires the configured scanner.')
+        decision=data.get('decision');note=text(data.get('note',''),'Review evidence',2000)
+        if decision not in ('Clean','Rejected') or len(note)<8:raise HTTPException(422,'Enter a safety-review decision and evidence.')
+        with transaction(path) as db:
+            r=fleet_doc(db,fid);db.execute('UPDATE fleet_documents SET scan_status=? WHERE id=?',(decision,fid))
+            audit(db,u['id'],'Fleet document safety status reviewed','fleet_documents',fid,
+                {'decision':decision,'note':note,'vehicle_id':r['vehicle_id']})
+        return {'ok':True}
 
     @app.put('/api/fleet/{vid}/profile')
     def fleet_profile(vid:str,data:dict,u=Depends(auth)):

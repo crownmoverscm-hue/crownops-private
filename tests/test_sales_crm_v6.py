@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+
+from fastapi import HTTPException
 from pathlib import Path
 
 from app.store import initialize, transaction, one
-from app.sales_crm_v6 import schema, calculate
+from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours, minimum_trucks_for_movers, service_minimum_hours, long_distance_hos_plan
 
 
 class SalesCrmV6Tests(unittest.TestCase):
@@ -45,6 +47,95 @@ class SalesCrmV6Tests(unittest.TestCase):
         finally:
             td.cleanup()
 
+    def test_minimum_trucks_follow_crown_crew_rules(self):
+        self.assertEqual(minimum_trucks_for_movers(2),1)
+        self.assertEqual(minimum_trucks_for_movers(3),1)
+        self.assertEqual(minimum_trucks_for_movers(4),2)
+        self.assertEqual(minimum_trucks_for_movers(5),2)
+        self.assertEqual(minimum_trucks_for_movers(6),3)
+
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                with self.assertRaises(HTTPException) as ctx:
+                    calculate(db,{"service_type":"Moving","language":"English","move_date":"2026-10-15",
+                        "movers":5,"trucks":1,"hours_low":3,"hours_high":4,"minimum_hours":3,
+                        "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
+                        "other_amount":0,"discount_amount":0})
+                self.assertIn("at least 2 truck",str(ctx.exception.detail))
+
+                with self.assertRaises(HTTPException) as ctx:
+                    calculate(db,{"service_type":"Moving","language":"English","move_date":"2026-10-15",
+                        "movers":6,"trucks":2,"hours_low":3,"hours_high":4,"minimum_hours":3,
+                        "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
+                        "other_amount":0,"discount_amount":0})
+                self.assertIn("at least 3 truck",str(ctx.exception.detail))
+        finally:
+            td.cleanup()
+
+    def test_small_afternoon_minimum_is_limited_to_local_afternoon_jobs(self):
+        minimum,small=service_minimum_hours({"minimum_hours":1,"start_window":"morning","small_afternoon_job":False},"Moving")
+        self.assertEqual(float(minimum),3.0);self.assertFalse(small)
+
+        minimum,small=service_minimum_hours({"minimum_hours":3,"start_window":"afternoon","small_afternoon_job":True},"Moving")
+        self.assertEqual(float(minimum),1.5);self.assertTrue(small)
+
+        with self.assertRaises(HTTPException):
+            service_minimum_hours({"start_window":"morning","small_afternoon_job":True},"Moving")
+        with self.assertRaises(HTTPException):
+            service_minimum_hours({"start_window":"afternoon","small_afternoon_job":True},"Long Distance")
+
+    def test_afternoon_small_job_calculation_uses_one_point_five_hour_minimum(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                r=calculate(db,{"service_type":"Moving","language":"English","move_date":"2026-10-15",
+                    "start_window":"afternoon","small_afternoon_job":True,
+                    "movers":2,"trucks":1,"hours_low":1,"hours_high":2,"minimum_hours":3,
+                    "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
+                    "other_amount":0,"discount_amount":0})
+            self.assertEqual(r["minimum_hours"],1.5)
+            self.assertEqual(r["service_low"],1.5)
+            self.assertTrue(r["small_afternoon_job"])
+        finally:
+            td.cleanup()
+
+    def test_quebec_hos_plan_blocks_impossible_one_day_long_distance(self):
+        one=long_distance_hos_plan(6,5)
+        self.assertTrue(one["one_day_possible"])
+        self.assertEqual(one["minimum_schedule_days"],1)
+
+        toronto=long_distance_hos_plan(12,5)
+        self.assertFalse(toronto["one_day_possible"])
+        self.assertEqual(toronto["minimum_schedule_days"],2)
+        self.assertEqual(toronto["estimated_on_duty_hours"],17.0)
+
+        very_long=long_distance_hos_plan(28,5)
+        self.assertEqual(very_long["minimum_schedule_days"],3)
+
+    def test_long_distance_tentative_block_includes_daily_rest_between_hos_days(self):
+        # Toronto-style plan: 12 h driving + 5 h service => 2 days + 10 h off-duty block.
+        self.assertEqual(float(quoted_block_hours({"service_type":"Long Distance","hours_high":5,"minimum_hours":3,"transport_hours":12})),27.0)
+
+    def test_long_distance_transport_uses_true_drive_time_times_one_point_fifteen(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                r=calculate(db,{"service_type":"Long Distance","language":"English","move_date":"2026-10-15",
+                    "movers":3,"trucks":1,"hours_low":4,"hours_high":5,"minimum_hours":3,
+                    "transport_hours":12,"distance_km":1082,"distance_rate":0.94,
+                    "materials":[],"other_amount":0,"discount_amount":0})
+            self.assertEqual(r["transport_hours"],12.0)
+            self.assertEqual(r["billable_transport_hours"],13.8)
+            self.assertEqual(r["transport_multiplier"],1.15)
+            self.assertEqual(r["transport_cents"],241500)  # 13.8 x $175
+            self.assertEqual(r["distance_km"],1082.0)
+            self.assertAlmostEqual(r["adjusted_distance_km"],1136.1,places=1)
+            self.assertEqual(r["fuel_cents"],106793)       # 1082 km x 1.05 x $0.94 x 1 truck
+            self.assertEqual(r["line_items"][1]["name"],"Long Distance Transportation Fee")
+        finally:
+            td.cleanup()
+
     def test_fixed_long_distance_transport_hides_transport_hours_and_uses_094_per_km_per_truck(self):
         td,path=self.make_db()
         try:
@@ -54,11 +145,19 @@ class SalesCrmV6Tests(unittest.TestCase):
                     "transport_hours":14,"fixed_transport":2450,"distance_km":540,"distance_rate":0.94,
                     "materials":[],"other_amount":0,"discount_amount":0})
             self.assertEqual(r["transport_hours"],0)
+            self.assertEqual(r["billable_transport_hours"],0)
             self.assertEqual(r["transport_cents"],245000)
-            self.assertEqual(r["fuel_cents"],101520)
+            self.assertAlmostEqual(r["adjusted_distance_km"],567.0,places=1)
+            self.assertEqual(r["fuel_cents"],106596)
             self.assertEqual(r["distance_rate_cents"],94)
         finally:
             td.cleanup()
+
+    def test_toronto_distance_rule_matches_crown_example(self):
+        actual=1082
+        adjusted=actual*1.05
+        self.assertAlmostEqual(adjusted,1136.1,places=1)
+        self.assertEqual(round(adjusted*0.94,2),1067.93)
 
     def test_junk_removal_tiers_and_extra_labour(self):
         td,path=self.make_db()
@@ -68,6 +167,27 @@ class SalesCrmV6Tests(unittest.TestCase):
             self.assertEqual(r["low_cents"],56000)
             self.assertEqual(r["high_cents"],56000)
             self.assertEqual(len(r["line_items"]),2)
+        finally:
+            td.cleanup()
+
+    def test_quote_start_windows_and_block_hours_follow_sold_timing(self):
+        self.assertEqual(quote_start_window({"start_window":"morning"}),("09:00","9:00-9:30 AM"))
+        self.assertEqual(quote_start_window({"start_window":"afternoon"}),("13:00","1:00-4:00 PM"))
+        self.assertEqual(quote_start_window({"start_window":"custom","start_time":"11:15"}),("11:15","11:15 AM"))
+        self.assertEqual(float(quoted_block_hours({"service_type":"Moving","hours_high":4,"minimum_hours":3,"transport_hours":1})),5.0)
+
+    def test_french_quote_lines_follow_selected_quote_language(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                r=calculate(db,{"service_type":"Moving","language":"French","move_date":"2026-10-15",
+                    "movers":2,"trucks":1,"hours_low":3,"hours_high":4,"minimum_hours":3,
+                    "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
+                    "other_amount":0,"discount_amount":0})
+            self.assertEqual(r["language"],"French")
+            self.assertIn("demenageurs",r["line_items"][0]["name"])
+            self.assertEqual(r["line_items"][1]["name"],"Frais de transport")
+            self.assertEqual(r["line_items"][2]["name"],"Frais de carburant")
         finally:
             td.cleanup()
 

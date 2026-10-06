@@ -70,6 +70,7 @@ def _quote_summary(db, j):
         'id': q['id'], 'revision': q['revision'], 'status': q['status'],
         'accepted_at': q.get('accepted_at'), 'approved_at': q.get('approved_at'),
         'movers': result.get('movers'), 'trucks': result.get('trucks'),
+        'service_type': result.get('service_type') or inputs.get('service_type'),
         'service_low': result.get('service_low'), 'service_high': result.get('service_high'),
         'hourly_rate_cents': result.get('hourly_rate_cents'), 'minimum_hours': result.get('minimum_hours'),
         'transport_hours': result.get('transport_hours'), 'transport_cents': result.get('transport_cents'),
