@@ -154,9 +154,46 @@ def register_extensions(app,path,auth,public_url):
     @app.get('/api/readiness')
     def readiness(u=Depends(auth)):
         require_role(u,OFFICE)
+        env=quickbooks_environment()
+        mappings={k:qbo_mapping(path,k) for k in ('service_item_id','tax_code_id','discount_account_id','deposit_account_id')}
         with closing(connect(path)) as db:
-            groups={k:bool(settings(db,k,{}).get('approved')) for k in ('billing_policy','client_terms','media_program','payroll_policy')}
+            groups={k:bool(settings(db,k,{}).get('approved')) for k in ('billing_policy','client_terms','deposit_policy','media_program','payroll_policy')}
+            deposit=settings(db,'deposit_policy',{}) or {}
             connected=[r['provider'] for r in rows(db,'SELECT provider FROM oauth_credentials')]
+            reviewed=settings(db,'quickbooks_mappings_reviewed_'+env,{}) or {}
+            reviewed_matches=bool(reviewed and reviewed.get('policy')=='quebec-normal-move-v1' and
+              all(str(reviewed.get(k,'')).strip()==str(mappings.get(k,'')).strip() for k in ('service_item_id','tax_code_id','deposit_account_id')))
+            qbo_mappings_complete=bool(reviewed_matches and mappings['service_item_id'] and mappings['tax_code_id'] and mappings['deposit_account_id'])
             counts={t:db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('leads','jobs','users','client_changes','attachments')}
             failures=db.execute("SELECT count(*) FROM provider_operations WHERE status IN ('Unknown','Mismatch','Failed','Running')").fetchone()[0]
-        return {'mode':os.getenv('CROWNOPS_ENV','test'),'public_url':public_url,'configuration_approved':groups,'authorized_connections':connected,'external_actions_enabled':live_enabled(),'counts':counts,'integration_exceptions':failures,'notice':'Authorized accounts and passed local tests are not a production security or accounting certification.'}
+            active_fleet=rows(db,"""SELECT v.id,v.name,p.gvwr_kg FROM vehicles v
+              LEFT JOIN fleet_profiles p ON p.vehicle_id=v.id WHERE v.active=1 ORDER BY v.name""")
+            missing_gvwr=[{'id':v['id'],'name':v['name']} for v in active_fleet if v.get('gvwr_kg') is None]
+            verified_drivers=db.execute("SELECT count(*) FROM employees WHERE active=1 AND driver_verified=1").fetchone()[0]
+        gmail_authorized='gmail' in connected
+        qbo_authorized='quickbooks' in connected
+        square_configured=bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID'))
+        interac_ready=bool(groups.get('deposit_policy') and deposit.get('enabled') and deposit.get('recipient_email'))
+        items=[
+          {'key':'billing','label':'Billing / tax policy approved','ready':groups.get('billing_policy',False),'critical':True},
+          {'key':'terms','label':'Client booking terms approved','ready':groups.get('client_terms',False),'critical':True},
+          {'key':'deposit','label':'Interac deposit instructions approved','ready':interac_ready,'critical':True},
+          {'key':'gmail','label':'Gmail account authorized','ready':gmail_authorized,'critical':True},
+          {'key':'fleet_gvwr','label':'GVWR entered for every active truck','ready':not missing_gvwr,'critical':True,
+            'detail':', '.join(v['name'] for v in missing_gvwr) if missing_gvwr else ''},
+          {'key':'drivers','label':'At least one verified driver exists','ready':verified_drivers>0,'critical':True,
+            'detail':str(verified_drivers)+' verified driver(s)'},
+          {'key':'qbo_auth','label':'QuickBooks account authorized','ready':qbo_authorized,'critical':False},
+          {'key':'qbo_mapping','label':'QuickBooks Quebec mappings reviewed','ready':qbo_mappings_complete,'critical':False},
+          {'key':'square','label':'Square card deposits configured','ready':square_configured,'critical':False},
+          {'key':'external','label':'External actions enabled for live use','ready':live_enabled(),'critical':True},
+          {'key':'exceptions','label':'No unresolved integration operations','ready':failures==0,'critical':True,
+            'detail':str(failures)+' unresolved operation(s)' if failures else ''},
+        ]
+        critical_ready=all(x['ready'] for x in items if x['critical'])
+        return {'mode':os.getenv('CROWNOPS_ENV','test'),'public_url':public_url,'configuration_approved':groups,
+          'authorized_connections':connected,'external_actions_enabled':live_enabled(),'counts':counts,
+          'integration_exceptions':failures,'launch':{'critical_ready':critical_ready,'items':items,
+          'missing_gvwr':missing_gvwr,'verified_driver_count':verified_drivers,'interac_ready':interac_ready,
+          'qbo_environment':env,'qbo_mappings_complete':qbo_mappings_complete,'square_configured':square_configured},
+          'notice':'Passing code tests and authorized accounts do not replace final production credential, accounting, tax, fleet or security review.'}
