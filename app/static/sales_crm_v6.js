@@ -163,6 +163,7 @@ async function crmQuoteBuilder(leadId){
    field('hours_low','Estimated hours - low',3,'number','step="0.25" min="0.25" required')+
    field('hours_high','Estimated hours - high',4,'number','step="0.25" min="0.25" required')+
    field('minimum_hours','Minimum service hours',3,'number','step="0.25" min="0" required')+
+   '<label id="crm-small-afternoon-wrap" class="checkbox-label full"><input type="checkbox" name="small_afternoon_job"><span><strong>Small afternoon job</strong><br><span class="tiny muted">Use only for a small local Moving/Packing job. Sets Afternoon 1:00-4:00 PM and a 1.5-hour service minimum.</span></span></label>'+
    field('deposit_required','Deposit required',300,'number','step="0.01" min="0"')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted">Local default: 1 × hourly rate. Extra trucks add $35 fuel each and $25 transportation each. Long distance defaults to $0.94/km per truck. Every amount can be reviewed.</p><div class="grid2">'+
@@ -188,6 +189,7 @@ async function crmQuoteBuilder(leadId){
 function crmQuoteData(){
  const f=document.getElementById('crm-quote-form');if(!f||!f.reportValidity())return null;
  const d=Object.fromEntries(new FormData(f));d.materials=[];
+ d.small_afternoon_job=Boolean(f.elements.small_afternoon_job?.checked);
  document.querySelectorAll('.crm-mat-check:checked').forEach(ch=>{const qty=document.querySelector('.crm-mat-qty[data-code="'+CSS.escape(ch.dataset.code)+'"]');d.materials.push({code:ch.dataset.code,name:ch.dataset.name,qty:Number(qty?.value||1),unit_price:Number(ch.dataset.price||0)/100});});
  for(const k of ['movers','trucks','hourly_rate','hours_low','hours_high','minimum_hours','deposit_required','transport_hours','fixed_transport','distance_km','distance_rate','junk_extra_half_hours','other_amount','discount_amount']){
    if(d[k]===undefined)continue;
@@ -216,6 +218,10 @@ function crmToggleServiceFields(){
  toggle('crm-junk-fields',type!=='Junk Removal');
  toggle('crm-moving-fields',type==='Junk Removal');
  toggle('crm-transport-fields',type==='Junk Removal');
+ const smallWrap=document.getElementById('crm-small-afternoon-wrap'),small=f.elements.small_afternoon_job;
+ const smallAllowed=['Moving','Packing'].includes(type);
+ if(smallWrap)smallWrap.style.display=smallAllowed?'flex':'none';
+ if(small&&!smallAllowed&&small.checked){small.checked=false;if(f.elements.minimum_hours)f.elements.minimum_hours.value='3';}
 }
 async function crmRefreshRate(){
  const f=document.getElementById('crm-quote-form');if(!f||!f.elements.move_date.value)return;
@@ -307,7 +313,14 @@ document.addEventListener('change',async e=>{
    const f=document.getElementById('crm-quote-form');
    if(e.target.name==='service_type'){crmToggleServiceFields();const type=e.target.value,lang=f.elements.language.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
    if(e.target.name==='language'){const type=f.elements.service_type.value,lang=e.target.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
-   if(e.target.name==='start_window')crmToggleStartTime();
+   if(e.target.name==='start_window'){
+     crmToggleStartTime();
+     if(e.target.value!=='afternoon'&&f.elements.small_afternoon_job?.checked){f.elements.small_afternoon_job.checked=false;f.elements.minimum_hours.value='3';toast('Small afternoon job was turned off because the arrival window changed.');}
+   }
+   if(e.target.name==='small_afternoon_job'){
+     if(e.target.checked){f.elements.start_window.value='afternoon';f.elements.minimum_hours.value='1.5';crmToggleStartTime();toast('Afternoon window selected with a 1.5-hour service minimum.');}
+     else{f.elements.minimum_hours.value='3';}
+   }
    if(e.target.name==='movers'){
      const movers=Number(e.target.value),minimumTrucks=movers>=6?3:(movers>=4?2:1);
      if(Number(f.elements.trucks.value)<minimumTrucks){
