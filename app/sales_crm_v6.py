@@ -36,6 +36,43 @@ def identity(lead):
     e=norm_email(lead.get("email"));p=norm_phone(lead.get("phone"))
     return "e:"+e if e else ("p:"+p if p else "l:"+lead["id"])
 
+def quote_start_window(inputs):
+    """Return the operational start time and client-facing arrival-window label."""
+    mode=str(inputs.get("start_window") or "morning").strip().lower()
+    if mode=="morning":return "09:00","9:00-9:30 AM"
+    if mode=="afternoon":return "13:00","1:00-4:00 PM"
+    if mode=="custom":
+        value=str(inputs.get("start_time") or "").strip()
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d",value):raise HTTPException(422,"Choose a valid custom start time.")
+        hour,minute=map(int,value.split(":"));suffix="AM" if hour<12 else "PM";shown=hour%12 or 12
+        return value,f"{shown}:{minute:02d} {suffix}"
+    raise HTTPException(422,"Choose Morning, Afternoon, or a custom exact start time.")
+
+def quoted_block_hours(inputs):
+    service=str(inputs.get("service_type") or "Moving")
+    if service=="Junk Removal":
+        return max(1.5,Decimal("1.5")+Decimal("0.5")*Decimal(str(inputs.get("junk_extra_half_hours",0) or 0)))
+    high=Decimal(str(inputs.get("hours_high",3) or 3));minimum=Decimal(str(inputs.get("minimum_hours",0) or 0))
+    transport=Decimal(str(inputs.get("transport_hours",0) or 0))
+    return max(Decimal("1"),max(high,minimum)+transport)
+
+def ensure_tentative_job(db,q,lead,actor):
+    """Create the accepted-estimate schedule hold using the sold arrival window."""
+    existing=one(db,"SELECT * FROM jobs WHERE quote_id=? ORDER BY created_at DESC LIMIT 1",(q["id"],))
+    if existing:return existing
+    inp=json.loads(q["inputs_json"]);day=inp.get("move_date") or lead.get("move_date")
+    if not day:return None
+    start_text,label=quote_start_window(inp)
+    start=datetime.fromisoformat(day+"T"+start_text+":00").replace(tzinfo=MONTREAL).astimezone(timezone.utc)
+    end=start+timedelta(hours=float(quoted_block_hours(inp)))
+    jid=uid("JOB")
+    insert(db,"jobs",dict(id=jid,lead_id=lead["id"],quote_id=q["id"],title=lead["client_name"],
+      phase=inp.get("service_type") or "Moving",start_at=start.isoformat(timespec="seconds"),end_at=end.isoformat(timespec="seconds"),
+      status="Tentative",stops_json=dumps([x for x in (lead.get("pickup"),lead.get("dropoff")) if x]),
+      notes="Accepted estimate - awaiting deposit / booking confirmation. Arrival window: "+label+".",
+      capacity_reviewed=0,exception_reason="",created_by=actor,created_at=now()))
+    return one(db,"SELECT * FROM jobs WHERE id=?",(jid,))
+
 def duplicate_candidates(db,email="",phone="",exclude_id=""):
     """Return exact contact matches without ever merging records by fuzzy name/address."""
     found={}
@@ -181,8 +218,9 @@ def calculate(db,data):
         if tier not in JUNK:raise HTTPException(422,"Choose a valid junk-removal tier.")
         name,base=JUNK[tier];units=int(number(data.get("junk_extra_half_hours",0),"Extra labour units",0,50))
         extra=JUNK_LABOUR*units;total=base+extra
-        lines=[{"name":name,"qty":1,"unit_cents":money(base),"total_cents":money(base)}]
-        if units:lines.append({"name":"Additional on-site labour - 30 minutes / 2 crew","qty":units,"unit_cents":money(JUNK_LABOUR),"total_cents":money(extra)})
+        junk_names={"single":"Disposition d'un article","quarter":"1/4 camion - env. 5 pi","half":"1/2 camion - env. 10 pi","three_quarter":"3/4 camion - env. 15 pi","full":"Camion complet - conteneur 20 pi"} if language=="French" else {}
+        lines=[{"name":junk_names.get(tier,name),"qty":1,"unit_cents":money(base),"total_cents":money(base)}]
+        if units:lines.append({"name":"Main-d'oeuvre supplementaire - 30 minutes / 2 demenageurs" if language=="French" else "Additional on-site labour - 30 minutes / 2 crew","qty":units,"unit_cents":money(JUNK_LABOUR),"total_cents":money(extra)})
         return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":0,
           "service_low":0,"service_high":0,"minimum_hours":0,"transport_hours":0,"transport_cents":0,
           "fuel_cents":0,"materials_cents":0,"other_cents":0,"discount_cents":0,"service_low_cents":money(base),
@@ -209,17 +247,18 @@ def calculate(db,data):
     slo=rate*low;shi=rate*high;fixed_total=transport+fuel+Decimal(mat_total)/100+other
     if discount>slo+fixed_total:raise HTTPException(422,"Discount exceeds the low estimate.")
     tlo=slo+fixed_total-discount;thi=shi+fixed_total-discount
+    fr=language=="French"
     lines=[
-      {"name":f"{movers} movers + {trucks} truck(s)","qty":float(low),"unit_cents":money(rate),"total_cents":money(slo),"note":f"Estimated {float(low):g}-{float(high):g} service hours. Minimum {float(minimum):g} h."},
-      {"name":"Transportation fee","qty":1,"unit_cents":money(transport),"total_cents":money(transport),"note":"Fixed client-facing transportation amount."},
+      {"name":f"{movers} demenageurs + {trucks} camion(s)" if fr else f"{movers} movers + {trucks} truck(s)","qty":float(low),"unit_cents":money(rate),"total_cents":money(slo),"note":(f"Estimation : {float(low):g}-{float(high):g} heures de service. Minimum {float(minimum):g} h." if fr else f"Estimated {float(low):g}-{float(high):g} service hours. Minimum {float(minimum):g} h.")},
+      {"name":"Frais de transport" if fr else "Transportation fee","qty":1,"unit_cents":money(transport),"total_cents":money(transport),"note":"Montant de transport presente au client." if fr else "Fixed client-facing transportation amount."},
     ]
     if service=="Long Distance":
-        lines.append({"name":"Long-distance fuel / distance fee","qty":1,"unit_cents":money(fuel),"total_cents":money(fuel),"note":f"{float(km):g} km at CAD {float(km_rate):.2f}/km x {trucks} truck(s)."})
+        lines.append({"name":"Carburant / distance longue distance" if fr else "Long-distance fuel / distance fee","qty":1,"unit_cents":money(fuel),"total_cents":money(fuel),"note":(f"{float(km):g} km a {float(km_rate):.2f} $ CA/km x {trucks} camion(s)." if fr else f"{float(km):g} km at CAD {float(km_rate):.2f}/km x {trucks} truck(s).")})
     else:
-        lines.append({"name":"Fuel fee","qty":trucks,"unit_cents":money(LOCAL_FUEL),"total_cents":money(fuel),"note":"Local fuel charge."})
+        lines.append({"name":"Frais de carburant" if fr else "Fuel fee","qty":trucks,"unit_cents":money(LOCAL_FUEL),"total_cents":money(fuel),"note":"Frais de carburant local." if fr else "Local fuel charge."})
     lines.extend(mats)
-    if other:lines.append({"name":"Other agreed charges","qty":1,"unit_cents":money(other),"total_cents":money(other)})
-    if discount:lines.append({"name":"Approved discount","qty":1,"unit_cents":-money(discount),"total_cents":-money(discount)})
+    if other:lines.append({"name":"Autres frais convenus" if fr else "Other agreed charges","qty":1,"unit_cents":money(other),"total_cents":money(other)})
+    if discount:lines.append({"name":"Rabais approuve" if fr else "Approved discount","qty":1,"unit_cents":-money(discount),"total_cents":-money(discount)})
     return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":money(rate),
       "suggested_hourly_rate_cents":money(suggested),"rate_source":source,"service_low":float(low),"service_high":float(high),
       "minimum_hours":float(minimum),"transport_hours":float(show_transport_hours),"transport_cents":money(transport),
@@ -233,27 +272,22 @@ def calculate(db,data):
 def payload(q):
     d=dict(q);d["inputs"]=json.loads(d.pop("inputs_json"));d["result"]=json.loads(d.pop("result_json"));d["lead_snapshot"]=json.loads(d.pop("lead_snapshot_json"));return d
 
-def confirmation(lead):
-    if str(lead.get("language","")).lower().startswith("fr"):
-        return f"Bonjour {lead['client_name']},\n\nVotre service avec Crown Movers est maintenant réservé et confirmé. Si une urgence vous oblige à demander un changement de date, nous ferons notre possible pour vous accommoder. Un préavis d'au moins 10 jours est requis selon les conditions de réservation. Un changement demandé à moins de 10 jours peut entraîner la perte du dépôt. Une nouvelle date dépend des disponibilités et le tarif peut changer selon la date choisie.\n\nMerci,\nCrown Movers"
-    return f"Hi {lead['client_name']},\n\nYour Crown Movers service is booked and confirmed. If an emergency means you need to request a date change, we will do our best to accommodate you. At least 10 days' notice is required under the booking terms. A change requested inside 10 days may result in loss of the deposit. A replacement date is subject to availability and rates may change for the new date.\n\nThank you,\nCrown Movers"
+def confirmation(lead,q):
+    inp=json.loads(q["inputs_json"]);fr=str(inp.get("language") or lead.get("language","")).lower().startswith("fr")
+    _,window=quote_start_window(inp)
+    if fr:
+        return f"Bonjour {lead['client_name']},\n\nVotre service avec Crown Movers est maintenant reserve et confirme. Fenetre d'arrivee : {window}. Si une urgence vous oblige a demander un changement de date, nous ferons notre possible pour vous accommoder. Un preavis d'au moins 10 jours est requis selon les conditions de reservation. Un changement demande a moins de 10 jours peut entrainer la perte du depot. Une nouvelle date depend des disponibilites et le tarif peut changer selon la date choisie.\n\nMerci,\nCrown Movers"
+    return f"Hi {lead['client_name']},\n\nYour Crown Movers service is booked and confirmed. Arrival window: {window}. If an emergency means you need to request a date change, we will do our best to accommodate you. At least 10 days' notice is required under the booking terms. A change requested inside 10 days may result in loss of the deposit. A replacement date is subject to availability and rates may change for the new date.\n\nThank you,\nCrown Movers"
 
 def confirm_job(db,q,lead,actor,reason):
-    j=one(db,"SELECT * FROM jobs WHERE quote_id=? ORDER BY created_at DESC LIMIT 1",(q["id"],))
-    if not j:
-        inp=json.loads(q["inputs_json"]);day=inp.get("move_date") or lead.get("move_date")
-        if not day:raise HTTPException(409,"Add the service date before confirming the booking.")
-        start=datetime.fromisoformat(day+"T09:00:00").replace(tzinfo=MONTREAL).astimezone(timezone.utc);end=start+timedelta(hours=8)
-        jid=uid("JOB");insert(db,"jobs",dict(id=jid,lead_id=lead["id"],quote_id=q["id"],title=lead["client_name"],
-          phase=inp.get("service_type") or "Moving",start_at=start.isoformat(timespec="seconds"),end_at=end.isoformat(timespec="seconds"),
-          status="Confirmed",stops_json=dumps([x for x in [lead.get("pickup"),lead.get("dropoff")] if x]),notes="",
-          capacity_reviewed=0,exception_reason=reason,created_by=actor,created_at=now()));j=one(db,"SELECT * FROM jobs WHERE id=?",(jid,))
-    else:
-        db.execute("UPDATE jobs SET status='Confirmed',exception_reason=?,version=version+1 WHERE id=?",(reason,j["id"]))
+    j=ensure_tentative_job(db,q,lead,actor)
+    if not j:raise HTTPException(409,"Add the service date before confirming the booking.")
+    db.execute("UPDATE jobs SET status='Confirmed',exception_reason=?,version=version+1 WHERE id=?",(reason,j["id"]))
+    j=one(db,"SELECT * FROM jobs WHERE id=?",(j["id"],))
     add_task(db,lead["id"],"Assign crew and truck for confirmed service",lead.get("assigned_to",""),"assign:"+j["id"])
     key="booking-confirmed:"+q["id"]
     if lead.get("email") and not one(db,"SELECT id FROM outbound_messages WHERE event_key=?",(key,)):
-        queue_message(db,lead["id"],"Booking confirmed | Réservation confirmée",confirmation(lead),"Preparation",actor,key,j["id"],j.get("version",1))
+        queue_message(db,lead["id"],"Reservation confirmee | Crown Movers" if str(json.loads(q["inputs_json"]).get("language","")).lower().startswith("fr") else "Booking confirmed | Crown Movers",confirmation(lead,q),"Preparation",actor,key,j["id"],j.get("version",1))
     db.execute("UPDATE leads SET stage='Booked',updated_at=? WHERE id=?",(now(),lead["id"]))
     return j
 
@@ -394,6 +428,12 @@ def register_sales_crm_v6(app,path,auth,public_url):
             if not p:raise HTTPException(422,"A pricing snapshot is required for audit history.")
             rev=db.execute("SELECT COALESCE(MAX(revision),0)+1 FROM quotes WHERE lead_id=?",(lid,)).fetchone()[0]
             inp=dict(data);inp["deposit_required"]=float(data.get("deposit_required",300) or 0);inp["limited_liability"]="$0.60/lb per article"
+            service=result["service_type"];language=result["language"];template_key=str(inp.get("template_key") or "").strip()
+            tmpl=one(db,"SELECT * FROM crm_quote_templates WHERE template_key=? AND active=1",(template_key,))
+            if not tmpl or tmpl["service_type"]!=service or tmpl["language"]!=language:
+                raise HTTPException(422,"Choose the active quote template that matches this service and language.")
+            start_time,start_label=quote_start_window(inp);inp["start_time"]=start_time;inp["start_window_label"]=start_label
+            inp["template_snapshot"]={"template_key":tmpl["template_key"],"name":tmpl["name"],**json.loads(tmpl["body_json"])}
             qid=uid("QUOTE");snapshot={k:l[k] for k in l.keys() if k!="raw_json"}
             insert(db,"quotes",dict(id=qid,lead_id=lid,revision=rev,status="Draft",inputs_json=dumps(inp),result_json=dumps(result),
               pricing_id=p["id"],lead_snapshot_json=dumps(snapshot),lead_version=l["version"],created_by=u["id"],created_at=now()))
@@ -429,10 +469,11 @@ def register_sales_crm_v6(app,path,auth,public_url):
             raw=secrets.token_urlsafe(32);db.execute("UPDATE portal_invites SET revoked=1 WHERE lead_id=? AND used_at IS NULL",(l["id"],))
             insert(db,"portal_invites",dict(token_hash=stamp_hash(raw),lead_id=l["id"],email=l["email"],
               expires_at=(datetime.now(timezone.utc)+timedelta(days=14)).isoformat(timespec="seconds"),created_by=u["id"],created_at=now()))
-            invite_url=public_url+"/portal#access="+raw;r=json.loads(q["result_json"]);fr=str(l["language"]).lower().startswith("fr")
-            subject="Votre devis Crown Movers est prêt" if fr else "Your Crown Movers estimate is ready"
-            body=(f"Bonjour {l['client_name']},\n\nVotre devis Crown Movers est prêt. Estimation avant taxes : {r['low_cents']/100:.2f} $ à {r['high_cents']/100:.2f} $ CA.\n\nConsultez et acceptez votre devis ici :\n{invite_url}\n\nAprès l'acceptation, vous verrez les options de dépôt applicables.\n\nMerci,\nCrown Movers" if fr else
-              f"Hi {l['client_name']},\n\nYour Crown Movers estimate is ready. Estimated range before tax: CAD {r['low_cents']/100:.2f} to CAD {r['high_cents']/100:.2f}.\n\nView and accept your estimate here:\n{invite_url}\n\nAfter acceptance, the available deposit options will appear.\n\nThank you,\nCrown Movers")
+            invite_url=public_url+"/portal#access="+raw;r=json.loads(q["result_json"]);inp=json.loads(q["inputs_json"]);fr=str(inp.get("language","English")).lower().startswith("fr")
+            template=inp.get("template_snapshot") or {};_,arrival=quote_start_window(inp);service_title=template.get("title") or inp.get("service_type") or "Moving"
+            subject=("Votre devis Crown Movers - "+service_title) if fr else ("Your Crown Movers estimate - "+service_title)
+            body=(f"Bonjour {l['client_name']},\n\nVotre devis Crown Movers est pret pour le {inp.get('move_date') or l.get('move_date')} ({arrival}). Estimation avant taxes : {r['low_cents']/100:.2f} $ a {r['high_cents']/100:.2f} $ CA.\n\nConsultez les details, les protections applicables et les conditions, puis acceptez votre devis ici :\n{invite_url}\n\nApres l'acceptation, les options de depot applicables seront affichees.\n\nMerci,\nCrown Movers" if fr else
+              f"Hi {l['client_name']},\n\nYour Crown Movers estimate is ready for {inp.get('move_date') or l.get('move_date')} ({arrival}). Estimated range before tax: CAD {r['low_cents']/100:.2f} to CAD {r['high_cents']/100:.2f}.\n\nReview the service details, applicable protection and booking terms, then accept your estimate here:\n{invite_url}\n\nAfter acceptance, the available deposit options will appear.\n\nThank you,\nCrown Movers")
             msg=queue_message(db,l["id"],subject,body,"Reply",u["id"],"quote-delivery:"+qid+":"+str(q["revision"]));mid=msg["id"]
             db.execute("UPDATE leads SET stage='Quote Sent',notifications_suppressed=0,updated_at=? WHERE id=?",(now(),l["id"]));audit(db,u["id"],"Estimate finalized for client delivery","quotes",qid,{"mail_id":mid})
         sent=False;err=""
@@ -498,7 +539,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
         with transaction(path) as db:
             q=one(db,"SELECT * FROM quotes WHERE id=? AND status='Accepted'",(qid,))
             if not q:raise HTTPException(409,"Only an accepted estimate can receive a deposit reminder.")
-            l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],));amount=float(json.loads(q["inputs_json"]).get("deposit_required",300));fr=str(l["language"]).lower().startswith("fr")
+            l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],));qin=json.loads(q["inputs_json"]);amount=float(qin.get("deposit_required",300));fr=str(qin.get("language") or l["language"]).lower().startswith("fr")
             subject="Rappel amical - dépôt Crown Movers" if fr else "Friendly reminder - Crown Movers deposit"
             body=(f"Bonjour {l['client_name']},\n\nPetit rappel amical : le dépôt de {amount:.2f} $ CA lié à votre réservation est toujours en attente. Si vous l'avez déjà envoyé, vous pouvez ignorer ce message. Sinon, répondez-nous si vous avez besoin des instructions de paiement.\n\nMerci,\nCrown Movers" if fr else
               f"Hi {l['client_name']},\n\nA friendly reminder that the CAD {amount:.2f} deposit for your booking is still pending. If you already sent it, please disregard this message. Otherwise, reply if you need the payment instructions.\n\nThank you,\nCrown Movers")
