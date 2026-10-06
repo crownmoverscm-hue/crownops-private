@@ -9,7 +9,7 @@ import json, re, secrets
 from fastapi import Depends, HTTPException
 
 from .store import connect, transaction, rows, one, insert, audit, uid, now, dumps
-from .platform_common import SALES, OFFICE, require_role, settings, put_setting, queue_message, add_task
+from .platform_common import SALES, OFFICE, require_role, settings, put_setting, queue_message, add_task, quickbooks_gate
 from .pricing import seasonal_rate, number
 
 MONTREAL=ZoneInfo("America/Toronto")
@@ -577,6 +577,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
         qbo_result=None;qbo_error=""
         if data.get("sync_quickbooks") is True:
             try:
+                quickbooks_gate()
                 from .extensions import qbo_work
                 from .providers import qbo_mapping,qbo_customer,qbo_call
                 with closing(connect(path)) as db:
