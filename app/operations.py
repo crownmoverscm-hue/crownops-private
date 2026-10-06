@@ -117,6 +117,16 @@ def hos_dispatch_status(db,jid):
       'heavy_vehicles':heavy,'unknown_gvwr_vehicles':unknown,'records':records,
       'projected_on_duty_hours':projection['projected_on_duty_hours'],'hos_plan':projection.get('hos_plan') or {}}
 
+def hos_cycle_capacity_errors(cycle,cycle_hours,on_duty_since_last_24h_off,projected_on_duty_hours):
+    cycle=int(cycle);cycle_hours=float(cycle_hours);since_24=float(on_duty_since_last_24h_off);projected=float(projected_on_duty_hours)
+    errors=[]
+    limit=70.0 if cycle==1 else 120.0
+    if cycle_hours+projected>limit+1e-8:
+        errors.append(f'Projected job would exceed Cycle {cycle} on-duty capacity ({limit:g} h).')
+    if cycle==2 and since_24+projected>70+1e-8:
+        errors.append('Cycle 2 would exceed 70 on-duty hours without another qualifying 24-hour off-duty period.')
+    return errors
+
 def require_hos_dispatch_verification(db,jid):
     status=hos_dispatch_status(db,jid)
     if status['required'] and not status['ready']:
@@ -165,11 +175,8 @@ def register_operations(app,path,auth):
             if data.get('daily_off_duty_plan_checked') is not True:raise HTTPException(422,'Confirm the daily 10-hour off-duty requirement is covered by the plan.')
             if data.get('elapsed_window_checked') is not True:raise HTTPException(422,'Confirm the 16-hour elapsed-time window is covered by the plan.')
             projected=float(projection['projected_on_duty_hours'])
-            cycle_limit=70.0 if cycle==1 else 120.0
-            if cycle_hours+projected>cycle_limit+1e-8:
-                raise HTTPException(422,f'Projected job would exceed Cycle {cycle} on-duty capacity ({cycle_limit:g} h).')
-            if cycle==2 and since_24+projected>70+1e-8:
-                raise HTTPException(422,'Cycle 2 would exceed 70 on-duty hours without another qualifying 24-hour off-duty period.')
+            capacity_errors=hos_cycle_capacity_errors(cycle,cycle_hours,since_24,projected)
+            if capacity_errors:raise HTTPException(422,capacity_errors[0])
             note=text(data.get('note',''),'HOS verification note',3000)
             if len(note)<12:raise HTTPException(422,'Document the DCE/log and dispatch review.')
             duplicate=one(db,"""SELECT id FROM hos_dispatch_verifications WHERE job_id=? AND job_version=? AND driver_id=? AND vehicle_id!=? AND status='Verified'""",
