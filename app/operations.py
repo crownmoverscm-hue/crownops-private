@@ -254,7 +254,8 @@ def register_operations(app,path,auth):
         billing=dict(result.get('billing_policy') or {})
         terms=dict(billing.get('terms') or {})
         issuer=dict(terms.get('issuer') or {})
-        issuer.setdefault('name','Crown Movers')
+        issuer.setdefault('name','9411-8213 Quebec Inc. / Déménagement Crown / Crown Movers')
+        issuer.setdefault('address','4030 Blvd. de la Côte-Vertu, Suite 111, Montréal, QC H4R 1V4')
         issuer.setdefault('email','info@crownmovers.ca')
         issuer.setdefault('phone','514-606-4030')
         terms['issuer']=issuer
