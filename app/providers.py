@@ -261,6 +261,29 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         except Exception as e:
             raise HTTPException(500, 'Gmail review queue error: ' + type(e).__name__ + ': ' + str(e)[:180])
 
+    @app.get('/api/gmail/test-readonly')
+    def gmail_test_readonly(u=Depends(auth)):
+        require_role(u,MANAGERS)
+        t=provider_token(path,'gmail',require_external=False)
+        try:
+            profile=gmail_sync._api(t['access_token'],'profile')
+            label_rows=gmail_sync._api(t['access_token'],'labels').get('labels') or []
+            label_ids={x.get('name'):x.get('id') for x in label_rows if x.get('name') and x.get('id')}
+            wanted={'quote':'New Quote Request','missed_call':'Missed Calls','voicemail':'Voice Mail'}
+            feeds={};missing=[]
+            for key,name in wanted.items():
+                lid=label_ids.get(name)
+                if not lid:
+                    feeds[key]={'label':name,'found':False,'recent_14d':0};missing.append(name);continue
+                listing=gmail_sync._api(t['access_token'],'messages',{'labelIds':lid,'q':'newer_than:14d','maxResults':1})
+                feeds[key]={'label':name,'found':True,'recent_14d':int(listing.get('resultSizeEstimate') or 0)}
+            return {'ok':not missing,'email':profile.get('emailAddress') or '',
+              'messages_total':profile.get('messagesTotal'),'threads_total':profile.get('threadsTotal'),
+              'feeds':feeds,'missing_labels':missing}
+        except requests.RequestException as e:
+            status=getattr(getattr(e,'response',None),'status_code',None)
+            raise HTTPException(502,'Gmail read-access test failed'+(f' (HTTP {status})' if status else '')+'. Reconnect Gmail if the authorization is stale.')
+
     @app.post('/api/gmail/sync-readonly')
     def gmail_sync_readonly(data:dict=None,u=Depends(auth)):
         require_role(u,MANAGERS)
