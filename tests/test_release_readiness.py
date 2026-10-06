@@ -62,11 +62,42 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 "/api/oauth/{provider}/callback",
                 "/api/quickbooks/setup",
                 "/api/quickbooks/test-connection",
+                "/api/gmail/test-readonly",
                 "/api/invoices/{iid}/quickbooks",
                 "/api/quotes/{qid}/quickbooks",
                 "/api/payments/{pid}/quickbooks",
             ):
                 self.assertIn(required, paths)
+
+    def test_gmail_readonly_diagnostic_reports_actual_account_and_required_labels(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            app=create_app(db_path)
+            token="gmail-diagnostic-session";csrf="gmail-diagnostic-csrf"
+            expiry=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(timespec="seconds")
+            with transaction(db_path) as db:
+                insert(db,"users",dict(id="USER-GMAIL-DIAG",email="owner@example.invalid",name="Owner",role="owner",
+                    password_hash="unused-test-hash",active=1,created_at=now()))
+                insert(db,"sessions",dict(token_hash=sha(token),user_id="USER-GMAIL-DIAG",csrf=csrf,expires_at=expiry))
+            client=TestClient(app);client.cookies.set("crownops_session",token)
+            responses=[
+                {"emailAddress":"crown@example.invalid","messagesTotal":100,"threadsTotal":50},
+                {"labels":[
+                    {"name":"New Quote Request","id":"LQ"},
+                    {"name":"Missed Calls","id":"LM"},
+                    {"name":"Voice Mail","id":"LV"}]},
+                {"resultSizeEstimate":7},{"resultSizeEstimate":3},{"resultSizeEstimate":2},
+            ]
+            with patch("app.providers.provider_token",return_value={"access_token":"test-token"}),                  patch("app.providers.gmail_sync._api",side_effect=responses):
+                r=client.get("/api/gmail/test-readonly")
+            self.assertEqual(r.status_code,200,r.text)
+            body=r.json()
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["email"],"crown@example.invalid")
+            self.assertEqual(body["feeds"]["quote"]["recent_14d"],7)
+            self.assertEqual(body["feeds"]["missed_call"]["recent_14d"],3)
+            self.assertEqual(body["feeds"]["voicemail"]["recent_14d"],2)
+            self.assertEqual(body["missing_labels"],[])
 
     def test_quickbooks_sandbox_writes_are_off_by_default(self):
         self.assertFalse(quickbooks_write_enabled())
