@@ -252,7 +252,8 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             portal_token="client-session-token"
             portal_csrf="client-csrf-token"
             expiry=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(timespec="seconds")
-            service_date=(datetime.now(timezone.utc)+timedelta(days=14)).date().isoformat()
+            # Simulate day-of dispatch so the HOS verification falls inside CrownOps' 24-hour freshness window.
+            service_date=datetime.now(timezone.utc).date().isoformat()
 
             with transaction(db_path) as db:
                 insert(db,"users",dict(id="USER-OWNER",email="owner@example.invalid",name="Owner",role="owner",
