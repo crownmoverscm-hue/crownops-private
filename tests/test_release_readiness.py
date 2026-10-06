@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.main import create_app, sha
-from app.store import connect, initialize, transaction, insert, dumps, now
+from app.store import connect, initialize, transaction, insert, one, dumps, now
 from app.platform_common import put_setting, quickbooks_gate, quickbooks_write_enabled, settings, stamp_hash
 from app.providers import qbo_customer, qbo_invoice_payload, qbo_mapping, qbo_read
 from app.backups import make_backup, restore_archive
