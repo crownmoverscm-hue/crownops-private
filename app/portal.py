@@ -97,6 +97,12 @@ def register_portal(app,path,auth,public_url,secure):
                 qr['deposit']=deposit_state(db,c['lead_id'],source_q)
             cfg=settings(db,'media_program',{})
             terms=settings(db,'client_terms',{})
+            dep=settings(db,'deposit_policy',{}) or {}
+            public_deposit={'enabled':False}
+            if dep.get('approved') and dep.get('enabled') and dep.get('recipient_email'):
+                public_deposit={'enabled':True,'recipient_name':dep.get('recipient_name','Crown Movers'),
+                  'recipient_email':dep.get('recipient_email',''),'auto_deposit':bool(dep.get('auto_deposit',True)),
+                  'reference_note':dep.get('reference_note','')}
             return {'csrf':c['csrf'],'client':public_client(l),'quotes':quotes,'jobs':jobs,'invoices':invs,
                 'changes':rows(db,'SELECT id,payload_json,status,created_at,review_note FROM client_changes WHERE lead_id=? ORDER BY created_at DESC',(c['lead_id'],)),
                 'attachments':[safe_attachment(r) for r in rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(c['lead_id'],))],
@@ -104,6 +110,7 @@ def register_portal(app,path,auth,public_url,secure):
                 'payment_links':rows(db,"SELECT p.invoice_id,p.url,p.amount_cents FROM payment_links p JOIN job_invoices i ON i.id=p.invoice_id JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND p.status='Active' AND p.revision=i.revision AND i.status='Issued'",(c['lead_id'],)),
                 'media_program':{'approved':cfg.get('approved',False),'release_version':cfg.get('version',''),'release_text':cfg.get('release_text',''),'channels':cfg.get('channels',[]),'amount_cents':5000},
                 'terms':{k:terms.get(k) for k in ('approved','version','text')} if terms.get('approved') else {'approved':False},
+                'deposit_policy':public_deposit,
                 'releases':rows(db,'SELECT id,status,signed_at,withdrawn_at FROM media_releases WHERE lead_id=?',(c['lead_id'],))}
 
     @app.post('/api/portal/quotes/{qid}/deposit-checkout')
