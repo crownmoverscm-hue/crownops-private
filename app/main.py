@@ -41,7 +41,7 @@ QUOTERS={'owner','sales'}  # owner is displayed as Manager in this pilot
 COOKIE='crownops_session'
 SETUP_TOKEN_HASH='a2f107444f141c2a3d61af99ec02063038c77b60c0f639ef6bf7f5304fa21bb1'
 from .pricing import calculate_with_overrides
-from .operations import check_fleet_dispatch
+from .operations import check_fleet_dispatch, require_hos_dispatch_verification
 from .platform_common import settings as platform_settings
 
 
@@ -825,6 +825,7 @@ def create_app(database_path=None):
             if status!=j['status'] and status not in allowed[j['status']]:
                 raise HTTPException(422,'Invalid status transition. Create a reviewed booking rather than bypass approval.')
             if status=='In progress' and j['status']=='Confirmed':
+                require_hos_dispatch_verification(db,jid)
                 from .security import check_preuse
                 check_preuse(db,jid)
             if u['role']=='crew' and status not in ('In progress','Completed'):
