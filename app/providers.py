@@ -268,7 +268,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         t=provider_token(path,'gmail',require_external=False)
         data=data or {}
         try:
-            return gmail_sync.sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',14),data.get('max_per_feed',30),fluid=False)
+            return gmail_sync.sync_gmail_readonly(path,t['access_token'],u['id'],new_lead,data.get('days',14),data.get('max_per_feed',30),fluid=True)
         except HTTPException:
             raise
         except requests.RequestException as e:

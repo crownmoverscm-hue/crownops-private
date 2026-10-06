@@ -198,6 +198,57 @@ def sync_unlinked_clients(db):
                     flag_duplicate(db,m["client"]["id"],cid,reason)
         insert(db,"client_account_leads",dict(client_id=cid,lead_id=l["id"],created_at=now()))
 
+def client_latest_activity(db,client_id):
+    """Return the newest real inbound/client inquiry signal for inbox ordering."""
+    candidates=[]
+    lead=one(db,"""SELECT l.id,l.lead_type,l.source,l.stage,l.created_at,l.move_date,l.pickup
+      FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
+      WHERE x.client_id=? AND l.archived_import=0 ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
+    if not lead:
+        lead=one(db,"""SELECT l.id,l.lead_type,l.source,l.stage,l.created_at,l.move_date,l.pickup
+          FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
+          WHERE x.client_id=? ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
+    if lead:
+        lt=str(lead.get("lead_type") or "Inquiry")
+        source=str(lead.get("source") or "")
+        if lt=="Form":
+            label="Quote request"
+        elif lt in ("Missed Call","Voicemail","Email"):
+            label=lt
+        elif source=="CrownOps CRM":
+            label="Manual service"
+        else:
+            label=lt
+        candidates.append({"type":"lead","label":label,"source":source or lt,"at":lead["created_at"],
+          "lead_id":lead["id"],"summary":lead.get("pickup") or lead.get("move_date") or "New inquiry"})
+
+    call=one(db,"""SELECT c.*,l.id lead_ref FROM calls c
+      JOIN client_account_leads x ON x.lead_id=c.lead_id
+      JOIN leads l ON l.id=c.lead_id
+      WHERE x.client_id=? ORDER BY c.created_at DESC LIMIT 1""",(client_id,))
+    if call:
+        try:detail=json.loads(call.get("payload_json") or "{}")
+        except Exception:detail={}
+        disposition=str(detail.get("disposition") or "").strip()
+        is_voicemail=detail.get("voicemail") is True or "voice" in disposition.lower()
+        label="Voicemail" if is_voicemail else ("Missed call" if not disposition or "miss" in disposition.lower() else "Phone call")
+        summary=str(detail.get("note") or detail.get("subject") or detail.get("caller") or disposition or label).strip()
+        candidates.append({"type":"call","label":label,"source":str(detail.get("source") or "Phone"),
+          "at":call["created_at"],"occurred_at":detail.get("occurred_at") or detail.get("call_time") or call["created_at"],
+          "lead_id":call["lead_id"],"summary":summary[:180]})
+
+    msg=one(db,"""SELECT m.* FROM messages m JOIN client_account_leads x ON x.lead_id=m.lead_id
+      WHERE x.client_id=? AND lower(m.kind)='incoming email'
+      ORDER BY m.created_at DESC LIMIT 1""",(client_id,))
+    if msg:
+        candidates.append({"type":"email","label":"Email","source":"Company email","at":msg["created_at"],
+          "lead_id":msg["lead_id"],"summary":str(msg.get("subject") or msg.get("body") or "")[:180]})
+
+    if not candidates:return None
+    # created_at is CrownOps receipt time and is trusted for ordering. Provider occurred_at is display-only.
+    candidates.sort(key=lambda x:str(x.get("at") or ""),reverse=True)
+    return candidates[0]
+
 def schema(path):
     with transaction(path) as db:
         db.executescript("""
@@ -380,22 +431,32 @@ def register_sales_crm_v6(app,path,auth,public_url):
     @app.get("/api/crm/clients")
     def clients(q:str="",u=Depends(auth)):
         require_role(u,OFFICE);needle=(q or "").strip().lower();like="%"+needle+"%"
+        activity_expr="""MAX(
+          a.created_at,
+          COALESCE((SELECT MAX(l.created_at) FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=a.id),a.created_at),
+          COALESCE((SELECT MAX(c.created_at) FROM calls c JOIN client_account_leads x ON x.lead_id=c.lead_id WHERE x.client_id=a.id),a.created_at),
+          COALESCE((SELECT MAX(m.created_at) FROM messages m JOIN client_account_leads x ON x.lead_id=m.lead_id WHERE x.client_id=a.id AND lower(m.kind) LIKE 'incoming %'),a.created_at)
+        )"""
         with transaction(path) as db:
             sync_unlinked_clients(db)
             if needle:
-                accts=rows(db,"""SELECT a.* FROM client_accounts a
+                accts=rows(db,f"""SELECT a.*, {activity_expr} activity_at FROM client_accounts a
                   WHERE lower(a.client_name||' '||a.email||' '||a.phone) LIKE ?
                      OR EXISTS (
                        SELECT 1 FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
                        WHERE x.client_id=a.id AND lower(COALESCE(l.pickup,'')||' '||COALESCE(l.dropoff,'')) LIKE ?)
-                  ORDER BY a.updated_at DESC LIMIT 40""",(like,like))
+                  ORDER BY activity_at DESC LIMIT 80""",(like,like))
             else:
-                accts=rows(db,"SELECT * FROM client_accounts ORDER BY updated_at DESC LIMIT 40")
+                accts=rows(db,f"SELECT a.*, {activity_expr} activity_at FROM client_accounts a ORDER BY activity_at DESC LIMIT 80")
             for a in accts:
-                a["services"]=rows(db,"""SELECT l.id,l.lead_type,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.created_at,
+                a["services"]=rows(db,"""SELECT l.id,l.lead_type,l.source,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.created_at,
                   (SELECT status FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_status
                   FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=?
-                  ORDER BY COALESCE(l.move_date,l.created_at) DESC LIMIT 12""",(a["id"],))
+                  ORDER BY l.created_at DESC LIMIT 20""",(a["id"],))
+                a["latest_activity"]=client_latest_activity(db,a["id"])
+                a["open_followups"]=db.execute("""SELECT count(*) FROM tasks t JOIN client_account_leads x ON x.lead_id=t.lead_id
+                  WHERE x.client_id=? AND t.status='Open' AND t.historical=0""",(a["id"],)).fetchone()[0]
+            accts.sort(key=lambda a:str((a.get("latest_activity") or {}).get("at") or a.get("activity_at") or ""),reverse=True)
         return accts
 
     @app.get("/api/crm/clients/{cid}")

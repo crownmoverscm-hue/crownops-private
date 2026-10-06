@@ -23,26 +23,45 @@ async function crmSearchClients(q=''){
  CRM.clientSearch=q;CRM.clients=await api('/crm/clients?q='+encodeURIComponent(q));
  return CRM.clients;
 }
+function crmActivityTime(v){
+ if(!v)return 'No inquiry activity';
+ const d=new Date(v);if(Number.isNaN(d.getTime()))return h(v);
+ const day=d.toLocaleDateString('en-CA',{timeZone:'America/Toronto',month:'short',day:'numeric'});
+ const tm=d.toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'numeric',minute:'2-digit'});
+ return day+' · '+tm;
+}
+function crmActivityBadge(a){
+ if(!a)return '<span class="pill gray">Client record</span>';
+ const label=String(a.label||'Inquiry');
+ const cl=/voicemail/i.test(label)?'purple':/missed call/i.test(label)?'red':/quote request|form/i.test(label)?'blue':/email/i.test(label)?'teal':'gray';
+ return '<span class="pill '+cl+'">'+h(label)+'</span>';
+}
 async function crmClientBrowser(){
  const clients=await crmSearchClients(CRM.clientSearch);
  const rows=clients.map(c=>{
-   const latest=(c.services||[])[0]||{};
+   const a=c.latest_activity||{};
+   const latest=(c.services||[]).find(s=>s.id===a.lead_id)||(c.services||[])[0]||{};
+   const activity=crmActivityBadge(a)+
+     '<div class="tiny strong" style="margin-top:5px">'+h(crmActivityTime(a.at||c.activity_at))+'</div>'+
+     '<div class="tiny muted">'+h(a.source||'CrownOps')+(a.summary?' · '+h(a.summary):'')+'</div>';
+   const follow=Number(c.open_followups||0);
    return [
     '<div class="client-name">'+h(c.client_name)+'</div><div class="tiny muted">'+h(c.email||'')+'<br>'+h(c.phone||'')+'</div>',
+    activity,
     latest.id?(h(latest.move_date||'Date needed')+'<div class="tiny muted">'+h(latest.pickup||'Address needed')+'</div>'):'No service yet',
-    h(latest.stage||'—'),
+    pill(latest.stage||'Client')+(follow?'<div class="tiny" style="margin-top:5px"><strong>'+h(follow)+'</strong> open follow-up'+(follow===1?'':'s')+'</div>':''),
     h((c.services||[]).length),
     '<button class="btn-small" data-crm="client-open" data-id="'+h(c.id)+'">Open</button>'
    ];
  });
- return head('Sales & clients','Search one client by name, email, phone or address, then add new services without losing their history.',
+ return head('Sales & clients','Your newest quote requests, missed calls, voicemails and client messages appear first. Search any client without losing their service history.',
    '<button class="btn-primary" data-crm="client-new">'+icon('plus')+'New client</button>'+
    '<button class="btn-soft" data-action="new-lead">'+icon('plus')+'New inquiry</button>')+
    '<div class="filterbar"><div class="searchbox" style="min-width:360px">'+icon('search')+
    '<input id="crm-client-search" value="'+h(CRM.clientSearch)+'" placeholder="Search name, email, phone or address..." aria-label="Search clients"></div>'+
-   '<span class="tiny muted">'+clients.length+' client matches</span></div>'+
-   '<div class="panel"><div class="panel-head"><h2>Client database</h2><span class="tiny muted">Newest service shown first</span></div>'+
-   '<div class="panel-body flush">'+(rows.length?xtable(['Client','Latest service','Stage','History',''],rows):empty('No clients found','Search another email, phone or name, or create a new client.'))+'</div></div>';
+   '<span class="tiny muted">'+clients.length+' client matches · newest inquiry first</span></div>'+
+   '<div class="panel"><div class="panel-head"><h2>Inquiry inbox</h2><span class="tiny muted">Forms, calls, voicemails and emails are ranked by the time CrownOps received them</span></div>'+
+   '<div class="panel-body flush">'+(rows.length?xtable(['Client','Latest inquiry','Move / service','Stage / follow-up','History',''],rows):empty('No clients found','Search another email, phone or name, or create a new client.'))+'</div></div>';
 }
 X.pageRenderers.sales=crmClientBrowser;
 
