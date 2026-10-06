@@ -27,6 +27,13 @@ JUNK_LABOUR=Decimal("80.00")
 def money(v):
     return int((Decimal(str(v))*100).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
 
+def minimum_trucks_for_movers(movers):
+    """Crown Movers launch rule for minimum truck count by crew size."""
+    movers=int(movers)
+    if movers>=6:return 3
+    if movers>=4:return 2
+    return 1
+
 def norm_email(v): return str(v or "").strip().lower()
 def norm_phone(v):
     d=re.sub(r"\D","",str(v or ""))
@@ -231,8 +238,9 @@ def calculate(db,data):
     try:date.fromisoformat(day)
     except Exception:raise HTTPException(422,"Choose the service date.")
     movers=int(number(data.get("movers",2),"Movers",2,6));trucks=int(number(data.get("trucks",1),"Trucks",1,8))
-    if movers>=4 and trucks<2:
-        raise HTTPException(422,"Crown Movers requires at least 2 trucks for crews of 4 or more movers.")
+    minimum_trucks=minimum_trucks_for_movers(movers)
+    if trucks<minimum_trucks:
+        raise HTTPException(422,f"Crown Movers requires at least {minimum_trucks} truck(s) for a crew of {movers} movers.")
     suggested,source=rate_for(db,day,movers)
     override=data.get("hourly_rate");rate=number(override,"Hourly rate",1,5000) if override not in (None,"") else suggested
     low=number(data.get("hours_low",3),"Estimated low hours",.25,100);high=number(data.get("hours_high",low),"Estimated high hours",.25,120)
