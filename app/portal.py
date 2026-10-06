@@ -98,6 +98,7 @@ def register_portal(app,path,auth,public_url,secure):
             cfg=settings(db,'media_program',{})
             terms=settings(db,'client_terms',{})
             dep=settings(db,'deposit_policy',{}) or {}
+            card_deposit_available=live_enabled() and bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID'))
             public_deposit={'enabled':False}
             if dep.get('approved') and dep.get('enabled') and dep.get('recipient_email'):
                 public_deposit={'enabled':True,'recipient_name':dep.get('recipient_name','Crown Movers'),
@@ -110,7 +111,7 @@ def register_portal(app,path,auth,public_url,secure):
                 'payment_links':rows(db,"SELECT p.invoice_id,p.url,p.amount_cents FROM payment_links p JOIN job_invoices i ON i.id=p.invoice_id JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND p.status='Active' AND p.revision=i.revision AND i.status='Issued'",(c['lead_id'],)),
                 'media_program':{'approved':cfg.get('approved',False),'release_version':cfg.get('version',''),'release_text':cfg.get('release_text',''),'channels':cfg.get('channels',[]),'amount_cents':5000},
                 'terms':{k:terms.get(k) for k in ('approved','version','text')} if terms.get('approved') else {'approved':False},
-                'deposit_policy':public_deposit,
+                'deposit_policy':public_deposit,'card_deposit_available':card_deposit_available,
                 'releases':rows(db,'SELECT id,status,signed_at,withdrawn_at FROM media_releases WHERE lead_id=?',(c['lead_id'],))}
 
     @app.post('/api/portal/quotes/{qid}/deposit-checkout')
