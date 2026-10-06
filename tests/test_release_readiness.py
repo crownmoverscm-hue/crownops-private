@@ -237,6 +237,8 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             self.assertEqual(settings_response.status_code,200,settings_response.text)
             billing=settings_response.json()["billing_policy"]
             self.assertFalse(bool(billing.get("approved")))
+            self.assertEqual(billing["terms"]["issuer"]["name"],"9411-8213 Quebec Inc. / Déménagement Crown / Crown Movers")
+            self.assertEqual(billing["terms"]["issuer"]["address"],"4030 Blvd. de la Côte-Vertu, Suite 111, Montréal, QC H4R 1V4")
             taxes=billing["terms"]["taxes"]
             self.assertEqual(taxes[0],{"name":"GST","rate_percent":5.0,"registration":"737446534RT001"})
             self.assertEqual(taxes[1],{"name":"QST","rate_percent":9.975,"registration":"1227197265TQ001"})
