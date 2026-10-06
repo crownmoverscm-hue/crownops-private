@@ -302,6 +302,44 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 self.assertFalse(status["ready"])
                 self.assertTrue(any("GVWR" in x and "Truck Two" in x for x in status["blockers"]))
 
+    def test_sales_clients_are_ranked_by_newest_form_call_or_voicemail_activity(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            app=create_app(db_path)
+            token="sales-inbox-session";csrf="sales-inbox-csrf"
+            expiry=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(timespec="seconds")
+            with transaction(db_path) as db:
+                insert(db,"users",dict(id="USER-INBOX",email="inbox@example.invalid",name="Inbox Owner",role="owner",
+                    password_hash="unused-test-hash",active=1,created_at=now()))
+                insert(db,"sessions",dict(token_hash=sha(token),user_id="USER-INBOX",csrf=csrf,expires_at=expiry))
+                insert(db,"leads",dict(id="LEAD-FORM",client_name="Fresh Form",email="form@example.invalid",phone="5145551001",
+                    move_date="2026-11-01",source="Website",lead_type="Form",stage="New Lead",archived_import=0,
+                    notifications_suppressed=0,raw_json="{}",version=1,created_at="2026-10-05T12:00:00+00:00",updated_at="2026-10-05T12:00:00+00:00"))
+                insert(db,"leads",dict(id="LEAD-VOICE",client_name="Older Client",email="voice@example.invalid",phone="5145551002",
+                    move_date="2026-10-20",source="Phone",lead_type="Moving",stage="Contacted",archived_import=0,
+                    notifications_suppressed=0,raw_json="{}",version=1,created_at="2026-09-20T12:00:00+00:00",updated_at="2026-09-20T12:00:00+00:00"))
+                insert(db,"client_accounts",dict(id="CLIENT-FORM",identity_key="e:form@example.invalid",client_name="Fresh Form",
+                    email="form@example.invalid",phone="5145551001",language="English",created_at="2026-10-05T12:00:00+00:00",updated_at="2026-10-05T12:00:00+00:00"))
+                insert(db,"client_accounts",dict(id="CLIENT-VOICE",identity_key="e:voice@example.invalid",client_name="Older Client",
+                    email="voice@example.invalid",phone="5145551002",language="English",created_at="2026-09-20T12:00:00+00:00",updated_at="2026-09-20T12:00:00+00:00"))
+                insert(db,"client_account_leads",dict(client_id="CLIENT-FORM",lead_id="LEAD-FORM",created_at="2026-10-05T12:00:00+00:00"))
+                insert(db,"client_account_leads",dict(client_id="CLIENT-VOICE",lead_id="LEAD-VOICE",created_at="2026-09-20T12:00:00+00:00"))
+                insert(db,"calls",dict(id="CALL-VOICE",legacy_id="phone-event-1",lead_id="LEAD-VOICE",
+                    payload_json=dumps({"source":"Phone system","phone":"5145551002","disposition":"Voicemail",
+                        "note":"Please call me back about my move.","occurred_at":"2026-10-06T13:00:00+00:00"}),
+                    created_at="2026-10-06T13:00:00+00:00"))
+
+            client=TestClient(app);client.cookies.set("crownops_session",token)
+            response=client.get("/api/crm/clients")
+            self.assertEqual(response.status_code,200,response.text)
+            clients=response.json()
+            self.assertEqual(clients[0]["id"],"CLIENT-VOICE")
+            self.assertEqual(clients[0]["latest_activity"]["label"],"Voicemail")
+            self.assertEqual(clients[0]["latest_activity"]["source"],"Phone system")
+            self.assertIn("call me back",clients[0]["latest_activity"]["summary"])
+            self.assertEqual(clients[1]["id"],"CLIENT-FORM")
+            self.assertEqual(clients[1]["latest_activity"]["label"],"Quote request")
+
     def test_launch_simulation_long_distance_quote_to_dispatch_and_invoice_draft(self):
         with tempfile.TemporaryDirectory() as td:
             db_path=Path(td)/"crownops.sqlite3"
