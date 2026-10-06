@@ -245,11 +245,14 @@ def client_latest_activity(db,client_id):
     candidates=[]
     lead=one(db,"""SELECT l.id,l.lead_type,l.source,l.stage,l.created_at,l.move_date,l.pickup
       FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
-      WHERE x.client_id=? AND l.archived_import=0 ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
+      WHERE x.client_id=? AND l.archived_import=0
+        AND lower(COALESCE(l.lead_type,'')) NOT IN ('missed call','voicemail')
+      ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
     if not lead:
         lead=one(db,"""SELECT l.id,l.lead_type,l.source,l.stage,l.created_at,l.move_date,l.pickup
           FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
-          WHERE x.client_id=? ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
+          WHERE x.client_id=? AND lower(COALESCE(l.lead_type,'')) NOT IN ('missed call','voicemail')
+          ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
     if lead:
         lt=str(lead.get("lead_type") or "Inquiry")
         source=str(lead.get("source") or "")
@@ -275,8 +278,9 @@ def client_latest_activity(db,client_id):
         is_voicemail=detail.get("voicemail") is True or "voice" in disposition.lower()
         label="Voicemail" if is_voicemail else ("Missed call" if not disposition or "miss" in disposition.lower() else "Phone call")
         summary=str(detail.get("note") or detail.get("subject") or detail.get("caller") or disposition or label).strip()
+        activity_at=call_activity_time(detail,call["created_at"])
         candidates.append({"type":"call","label":label,"source":str(detail.get("source") or "Phone"),
-          "at":call["created_at"],"occurred_at":detail.get("occurred_at") or detail.get("call_time") or call["created_at"],
+          "at":activity_at,"occurred_at":activity_at,
           "lead_id":call["lead_id"],"summary":summary[:180]})
 
     msg=one(db,"""SELECT m.* FROM messages m JOIN client_account_leads x ON x.lead_id=m.lead_id
@@ -287,7 +291,6 @@ def client_latest_activity(db,client_id):
           "lead_id":msg["lead_id"],"summary":str(msg.get("subject") or msg.get("body") or "")[:180]})
 
     if not candidates:return None
-    # created_at is CrownOps receipt time and is trusted for ordering. Provider occurred_at is display-only.
     candidates.sort(key=lambda x:str(x.get("at") or ""),reverse=True)
     return candidates[0]
 
