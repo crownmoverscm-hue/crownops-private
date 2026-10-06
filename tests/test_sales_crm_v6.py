@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from pathlib import Path
 
 from app.store import initialize, transaction, one
-from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours, minimum_trucks_for_movers
+from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours, minimum_trucks_for_movers, service_minimum_hours
 
 
 class SalesCrmV6Tests(unittest.TestCase):
@@ -70,6 +70,33 @@ class SalesCrmV6Tests(unittest.TestCase):
                         "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
                         "other_amount":0,"discount_amount":0})
                 self.assertIn("at least 3 truck",str(ctx.exception.detail))
+        finally:
+            td.cleanup()
+
+    def test_small_afternoon_minimum_is_limited_to_local_afternoon_jobs(self):
+        minimum,small=service_minimum_hours({"minimum_hours":1,"start_window":"morning","small_afternoon_job":False},"Moving")
+        self.assertEqual(float(minimum),3.0);self.assertFalse(small)
+
+        minimum,small=service_minimum_hours({"minimum_hours":3,"start_window":"afternoon","small_afternoon_job":True},"Moving")
+        self.assertEqual(float(minimum),1.5);self.assertTrue(small)
+
+        with self.assertRaises(HTTPException):
+            service_minimum_hours({"start_window":"morning","small_afternoon_job":True},"Moving")
+        with self.assertRaises(HTTPException):
+            service_minimum_hours({"start_window":"afternoon","small_afternoon_job":True},"Long Distance")
+
+    def test_afternoon_small_job_calculation_uses_one_point_five_hour_minimum(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                r=calculate(db,{"service_type":"Moving","language":"English","move_date":"2026-10-15",
+                    "start_window":"afternoon","small_afternoon_job":True,
+                    "movers":2,"trucks":1,"hours_low":1,"hours_high":2,"minimum_hours":3,
+                    "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
+                    "other_amount":0,"discount_amount":0})
+            self.assertEqual(r["minimum_hours"],1.5)
+            self.assertEqual(r["service_low"],1.5)
+            self.assertTrue(r["small_afternoon_job"])
         finally:
             td.cleanup()
 
