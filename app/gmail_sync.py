@@ -290,10 +290,47 @@ def _record_call_and_followup(db, lead_id, parsed, subject, actor, gmail_id, eve
     return cid
 
 
+def promote_pending_call_events(db, actor, new_lead, limit=120):
+    """Promote already-detected Gmail missed calls/voicemails into local CRM leads/calls without mutating Gmail."""
+    promoted=0
+    pending=rows(db,"""SELECT * FROM integration_events
+      WHERE event_type IN ('gmail_missed_call','gmail_voicemail') AND status='Needs review'
+      ORDER BY created_at ASC LIMIT ?""",(max(1,min(int(limit),300)),))
+    for ev in pending:
+        try:payload=json.loads(ev.get('payload_json') or '{}')
+        except Exception:payload={}
+        parsed=payload.get('parsed') if isinstance(payload,dict) else {}
+        if not isinstance(parsed,dict):parsed={}
+        if payload.get('lead_id') and payload.get('call_id'):
+            db.execute("UPDATE integration_events SET status='Imported' WHERE id=?",(ev['id'],));continue
+        matched=_match_lead_by_phone(db,parsed.get('phone'))
+        if matched:
+            lead_id=matched['id']
+        else:
+            call_name=_caller_name(parsed)
+            call_data={
+              'client_name':call_name,'phone':parsed.get('phone') or '','email':'','source':'UniFi',
+              'lead_type':'Voicemail' if ev['event_type']=='gmail_voicemail' else 'Missed Call',
+              'stage':'New Lead','priority':'High',
+              'notes':str(payload.get('subject') or payload.get('snippet') or '').strip(),
+              'language':'English'}
+            lead=new_lead(db,call_data,actor,external_id=ev['event_key'],suppressed=1)
+            lead_id=lead['id']
+            db.execute("DELETE FROM tasks WHERE lead_id=? AND title='Review new inquiry' AND status='Open'",(lead_id,))
+        call_id=_record_call_and_followup(db,lead_id,parsed,str(payload.get('subject') or ''),actor,str(payload.get('gmail_id') or ev['object_id']),ev['event_type'])
+        payload['call_id']=call_id;payload['lead_id']=lead_id
+        db.execute("UPDATE integration_events SET object_id=?,payload_json=?,status='Imported' WHERE id=?",(lead_id,dumps(payload),ev['id']))
+        promoted+=1
+    return promoted
+
+
 def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_feed=30, fluid=False):
     days = max(1, min(int(days), 60))
     max_per_feed = max(1, min(int(max_per_feed), 50))
-    summary = {'scanned': 0, 'new_events': 0, 'new_leads': 0, 'duplicates': 0, 'ignored': 0, 'feeds': {}, 'errors': [], 'fluid': bool(fluid)}
+    summary = {'scanned': 0, 'new_events': 0, 'new_leads': 0, 'duplicates': 0, 'ignored': 0, 'feeds': {}, 'errors': [], 'fluid': bool(fluid), 'promoted_existing_calls': 0}
+    if fluid:
+        with transaction(path) as db:
+            summary['promoted_existing_calls']=promote_pending_call_events(db,actor,new_lead)
     label_rows = _api(access_token, 'labels').get('labels') or []
     label_ids = {x.get('name'): x.get('id') for x in label_rows if x.get('name') and x.get('id')}
     for feed, label_name in FEEDS.items():
