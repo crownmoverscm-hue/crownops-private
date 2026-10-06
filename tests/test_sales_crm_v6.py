@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+
+from fastapi import HTTPException
 from pathlib import Path
 
 from app.store import initialize, transaction, one
@@ -42,6 +44,20 @@ class SalesCrmV6Tests(unittest.TestCase):
             self.assertEqual(r["fuel_cents"],7000)        # $35 x 2 trucks
             self.assertEqual(r["low_cents"],79500)
             self.assertEqual(r["high_cents"],97000)
+        finally:
+            td.cleanup()
+
+    def test_four_or_more_movers_requires_two_trucks(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                with self.assertRaises(HTTPException) as ctx:
+                    calculate(db,{"service_type":"Moving","language":"English","move_date":"2026-10-15",
+                        "movers":4,"trucks":1,"hours_low":3,"hours_high":4,"minimum_hours":3,
+                        "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
+                        "other_amount":0,"discount_amount":0})
+            self.assertEqual(ctx.exception.status_code,422)
+            self.assertIn("at least 2 trucks",str(ctx.exception.detail))
         finally:
             td.cleanup()
 
