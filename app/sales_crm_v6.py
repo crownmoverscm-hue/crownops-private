@@ -34,6 +34,21 @@ def minimum_trucks_for_movers(movers):
     if movers>=4:return 2
     return 1
 
+def service_minimum_hours(data,service):
+    """Apply Crown's standard minimum, with the reduced minimum reserved for small afternoon local jobs."""
+    requested=number(data.get("minimum_hours",3),"Minimum service hours",0,24)
+    small=bool(data.get("small_afternoon_job",False))
+    start_window=str(data.get("start_window") or "morning").strip().lower()
+    if small:
+        if service not in ("Moving","Packing"):
+            raise HTTPException(422,"The small-afternoon minimum is available only for local moving or packing services.")
+        if start_window!="afternoon":
+            raise HTTPException(422,"Small afternoon jobs must use the Afternoon arrival window.")
+        return Decimal("1.5"),True
+    if service in ("Moving","Packing"):
+        return max(requested,Decimal("3")),False
+    return requested,False
+
 def norm_email(v): return str(v or "").strip().lower()
 def norm_phone(v):
     d=re.sub(r"\D","",str(v or ""))
@@ -245,7 +260,7 @@ def calculate(db,data):
     override=data.get("hourly_rate");rate=number(override,"Hourly rate",1,5000) if override not in (None,"") else suggested
     low=number(data.get("hours_low",3),"Estimated low hours",.25,100);high=number(data.get("hours_high",low),"Estimated high hours",.25,120)
     if high<low:raise HTTPException(422,"Estimated high hours cannot be lower than low hours.")
-    minimum=number(data.get("minimum_hours",3),"Minimum service hours",0,24);low=max(low,minimum);high=max(high,minimum)
+    minimum,small_afternoon=service_minimum_hours(data,service);low=max(low,minimum);high=max(high,minimum)
     transport_hours=number(data.get("transport_hours",1),"Transportation hours",0,100)
     fixed=data.get("fixed_transport")
     transport=number(fixed,"Fixed transportation fee",0,100000) if fixed not in (None,"") else rate*transport_hours+EXTRA_TRUCK*max(0,trucks-1)
@@ -275,7 +290,7 @@ def calculate(db,data):
       "fuel_cents":money(fuel),"truck_fee_cents":money(EXTRA_TRUCK*max(0,trucks-1)),"distance_km":float(km),
       "distance_rate_cents":money(km_rate),"materials_cents":mat_total,"other_cents":money(other),"discount_cents":money(discount),
       "service_low_cents":money(slo),"service_high_cents":money(shi),"low_cents":money(tlo),"high_cents":money(thi),
-      "movers":movers,"trucks":trucks,"season":source,"line_items":lines,
+      "movers":movers,"trucks":trucks,"season":source,"line_items":lines,"small_afternoon_job":small_afternoon,
       "scope":"Service hours are an estimate unless a fixed-price line explicitly says otherwise.",
       "tax_note":"Before applicable taxes. Quebec tax treatment is handled in the reviewed accounting setup."}
 
