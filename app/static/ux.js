@@ -320,8 +320,7 @@ document.addEventListener('click',async e=>{
   if(a==='payroll-approve'){if(!confirm(`Approve all submitted employee hours from ${UX.payroll.start} through ${UX.payroll.end}?`))return;const r=await api('/ux/payroll-summary/approve',{method:'POST',data:{start:UX.payroll.start,end:UX.payroll.end}});toast(`${r.approved} time entr${r.approved===1?'y':'ies'} approved.`);return navigate('payroll');}
   if(a==='crew-copy-suggested'){document.querySelector('#ux-crew-hours-form [name=team_hours]').value=UX.crewHours.suggested_total_hours;return;}
   if(a==='crew-select-all'){document.querySelectorAll('#ux-crew-hours-form input[name^="common_"]').forEach(c=>{c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));});return;}
-  if(a==='gmail-sync'){const rr=await api('/gmail/sync-readonly',{method:'POST',data:{days:14,max_per_feed:30}});toast(`Gmail sync: ${rr.new_leads} new lead(s), ${rr.new_events} new item(s).`);return navigate('connections');}
-  if(a==='gmail-v8-test'){const rr=await api('/gmail/sync-v8-test',{method:'POST',data:{days:2,max_per_feed:20}});toast(`V8 test: ${rr.new_leads} new lead(s), ${rr.new_events} processed.`);return navigate('communications');}
+  if(a==='gmail-sync'){const rr=await api('/gmail/sync-readonly',{method:'POST',data:{days:14,max_per_feed:30}});toast(`Inquiry sync: ${rr.new_leads} new lead(s), ${rr.promoted_existing_calls||0} existing call notice(s) promoted, ${rr.new_events} new Gmail item(s).`);return navigate('connections');}
   if(a==='gmail-reviewed'){await api('/gmail/review/'+encodeURIComponent(id)+'/reviewed',{method:'POST'});toast('Marked reviewed.');return navigate('connections');}
   if(a==='qbo-test'){const q=await api('/quickbooks/test-connection');toast('QuickBooks '+q.environment+' connected: '+(q.company_name||q.realm_id));return navigate('connections');}
   if(a==='qbo-setup'){
