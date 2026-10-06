@@ -319,13 +319,19 @@ def promote_pending_call_events(db, actor, new_lead, limit=120):
     """Promote already-detected Gmail missed calls/voicemails into local CRM leads/calls without mutating Gmail."""
     promoted=0
     pending=rows(db,"""SELECT * FROM integration_events
-      WHERE event_type IN ('gmail_missed_call','gmail_voicemail') AND status='Needs review'
+      WHERE (event_type IN ('gmail_missed_call','gmail_voicemail') AND status='Needs review')
+         OR (event_type='gmail_duplicate_call' AND status='Ignored')
       ORDER BY created_at ASC LIMIT ?""",(max(1,min(int(limit),300)),))
     for ev in pending:
         try:payload=json.loads(ev.get('payload_json') or '{}')
         except Exception:payload={}
         parsed=payload.get('parsed') if isinstance(payload,dict) else {}
         if not isinstance(parsed,dict):parsed={}
+        effective_type=ev['event_type']
+        if effective_type=='gmail_duplicate_call':
+            if 'voice' not in str(parsed.get('kind') or '').lower():
+                continue
+            effective_type='gmail_voicemail'
         if payload.get('lead_id') and payload.get('call_id'):
             db.execute("UPDATE integration_events SET status='Imported' WHERE id=?",(ev['id'],));continue
         matched=_match_lead_by_phone(db,parsed.get('phone'))
@@ -335,16 +341,16 @@ def promote_pending_call_events(db, actor, new_lead, limit=120):
             call_name=_caller_name(parsed)
             call_data={
               'client_name':call_name,'phone':parsed.get('phone') or '','email':'','source':'UniFi',
-              'lead_type':'Voicemail' if ev['event_type']=='gmail_voicemail' else 'Missed Call',
+              'lead_type':'Voicemail' if effective_type=='gmail_voicemail' else 'Missed Call',
               'stage':'New Lead','priority':'High',
               'notes':str(payload.get('subject') or payload.get('snippet') or '').strip(),
               'language':'English'}
             lead=new_lead(db,call_data,actor,external_id=ev['event_key'],suppressed=1)
             lead_id=lead['id']
             db.execute("DELETE FROM tasks WHERE lead_id=? AND title='Review new inquiry' AND status='Open'",(lead_id,))
-        call_id=_record_call_and_followup(db,lead_id,parsed,str(payload.get('subject') or ''),actor,str(payload.get('gmail_id') or ev['object_id']),ev['event_type'])
+        call_id=_record_call_and_followup(db,lead_id,parsed,str(payload.get('subject') or ''),actor,str(payload.get('gmail_id') or ev['object_id']),effective_type)
         payload['call_id']=call_id;payload['lead_id']=lead_id
-        db.execute("UPDATE integration_events SET object_id=?,payload_json=?,status='Imported' WHERE id=?",(lead_id,dumps(payload),ev['id']))
+        db.execute("UPDATE integration_events SET event_type=?,object_id=?,payload_json=?,status='Imported' WHERE id=?",(effective_type,lead_id,dumps(payload),ev['id']))
         promoted+=1
     return promoted
 
