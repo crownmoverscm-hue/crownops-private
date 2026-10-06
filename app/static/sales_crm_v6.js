@@ -152,6 +152,8 @@ async function crmQuoteBuilder(leadId){
    select('service_type','Service type',[['Moving','Moving'],['Packing','Packing'],['Junk Removal','Junk removal'],['Long Distance','Long distance']],type,'required')+
    select('language','Quote language',[['English','English'],['French','Français']],lang,'required')+
    field('move_date','Service date',lead.move_date||'','date','required')+
+   select('start_window','Arrival / start window',[['morning','Morning · 9:00-9:30 AM'],['afternoon','Afternoon · 1:00-4:00 PM'],['custom','Custom exact time']],'morning','required')+
+   '<div id="crm-custom-start" style="display:none">'+field('start_time','Custom exact start time','','time')+'</div>'+
    select('template_key','Template',templates.filter(t=>t.service_type===type&&t.language===lang).map(t=>[t.template_key,t.name]),template?.template_key||'')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-moving-fields"><div class="eyebrow">2 · CREW & RATE</div><div class="grid2">'+
@@ -181,7 +183,7 @@ async function crmQuoteBuilder(leadId){
    '<div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3>'+h(lead.client_name)+'</h3><p class="small">'+h(lead.email)+'<br>'+h(lead.phone)+'</p><p class="tiny muted">'+h(lead.pickup||'Pickup needed')+' → '+h(lead.dropoff||'Destination needed')+'</p></div>'+
    '</div></div></form>',
    btn('close','Cancel')+'<button type="button" class="btn-soft" data-crm="quote-calc">Calculate</button><button type="submit" form="crm-quote-form" class="btn-primary">Save draft</button>',true);
- crmToggleServiceFields();
+ crmToggleServiceFields();crmToggleStartTime();
 }
 function crmQuoteData(){
  const f=document.getElementById('crm-quote-form');if(!f||!f.reportValidity())return null;
@@ -202,6 +204,11 @@ function crmRenderCalc(r){
  '<div class="quote-line"><span>Materials</span><strong>'+crmCash(r.materials_cents)+'</strong></div>'+
  '<div class="quote-line"><span>Other / discount</span><strong>'+crmCash((r.other_cents||0)-(r.discount_cents||0))+'</strong></div>'+
  '<div class="tiny" style="margin-top:12px">'+h(r.movers)+' movers · '+h(r.trucks)+' truck(s)'+(r.hourly_rate_cents?' · '+crmCash(r.hourly_rate_cents)+'/h':'')+'</div>';
+}
+function crmToggleStartTime(){
+ const f=document.getElementById('crm-quote-form');if(!f)return;const wrap=document.getElementById('crm-custom-start');if(!wrap)return;
+ const custom=f.elements.start_window.value==='custom';wrap.style.display=custom?'block':'none';
+ const input=f.elements.start_time;if(input){input.required=custom;if(!custom)input.value='';}
 }
 function crmToggleServiceFields(){
  const f=document.getElementById('crm-quote-form');if(!f)return;const type=f.elements.service_type.value;
@@ -227,13 +234,15 @@ async function crmOpenQuote(qid){
    status+'<div class="spacer"></div><div class="quote-layout"><div>'+
    '<div class="quote-summary"><div class="eyebrow">'+h(r.service_type||'Moving').toUpperCase()+'</div><div class="quote-price">'+crmCash(r.low_cents)+' – '+crmCash(r.high_cents)+'</div><p class="muted">Before applicable taxes · Revision '+h(q.revision)+'</p>'+
    '<div class="quote-line"><span>Service date</span><strong>'+h(q.inputs?.move_date||l.move_date||'Not set')+'</strong></div>'+
+   '<div class="quote-line"><span>Arrival / start</span><strong>'+h(q.inputs?.start_window_label||q.inputs?.start_time||'Not set')+'</strong></div>'+
+   '<div class="quote-line"><span>Client template</span><strong>'+h(q.inputs?.template_snapshot?.name||q.inputs?.template_key||'—')+'</strong></div>'+
    '<div class="quote-line"><span>Crew</span><strong>'+h(r.movers||'—')+' movers · '+h(r.trucks||'—')+' truck(s)</strong></div>'+
    (r.hourly_rate_cents?'<div class="quote-line"><span>Hourly rate</span><strong>'+crmCash(r.hourly_rate_cents)+'/h</strong></div>':'')+
    '<div class="quote-line"><span>Transportation</span><strong>'+crmCash(r.transport_cents)+'</strong></div>'+
    '<div class="quote-line"><span>Fuel / distance</span><strong>'+crmCash(r.fuel_cents)+'</strong></div></div>'+
    '<div class="spacer"></div><div class="panel panel-body">'+crmLineTable(r)+'</div></div>'+
    '<div class="stack"><div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3>'+h(l.client_name)+'</h3><p>'+h(l.email)+'<br>'+h(l.phone)+'</p><p class="small muted">'+h(l.pickup||'Pickup needed')+' → '+h(l.dropoff||'Destination needed')+'</p></div>'+
-   '<div class="callout teal"><strong>Included</strong>Free limited liability coverage: $0.60/lb per article. Furniture blanket wrapping and ordinary disassembly/reassembly are included as applicable. Special fragile protection and packing materials are additional when required.</div>'+
+   '<div class="callout teal"><strong>'+h(q.inputs?.template_snapshot?.title||'Included')+'</strong>'+h(q.inputs?.template_snapshot?.liability||'Free limited liability coverage: $0.60/lb per article.')+(q.inputs?.template_snapshot?.fragile?'<br><br>'+h(q.inputs.template_snapshot.fragile):'')+(q.inputs?.template_snapshot?.blank_notes?'<br><br>'+h(q.inputs.template_snapshot.blank_notes):'')+'</div>'+
    (d.job?'<div class="panel panel-body"><div class="eyebrow">SCHEDULE</div><strong>'+h(d.job.status)+'</strong><p class="small muted">'+h(localDay(d.job.start_at))+' · crew/truck assignment follows confirmation.</p></div>':'')+
    '</div></div>',actions.join(' ')+btn('close','Close'),true);
 }
@@ -298,6 +307,7 @@ document.addEventListener('change',async e=>{
    const f=document.getElementById('crm-quote-form');
    if(e.target.name==='service_type'){crmToggleServiceFields();const type=e.target.value,lang=f.elements.language.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
    if(e.target.name==='language'){const type=f.elements.service_type.value,lang=e.target.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
+   if(e.target.name==='start_window')crmToggleStartTime();
    if((e.target.name==='move_date'||e.target.name==='movers')&&f.elements.service_type.value!=='Junk Removal'){try{await crmRefreshRate();}catch(ex){toast(ex.message);}}
  }
 });
