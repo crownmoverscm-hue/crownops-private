@@ -15,6 +15,7 @@ MONTREAL=ZoneInfo("America/Toronto")
 LOCAL_FUEL=Decimal("35.00")
 EXTRA_TRUCK=Decimal("25.00")
 LONG_KM=Decimal("0.94")
+LONG_TRANSPORT_MULTIPLIER=Decimal("1.15")
 JUNK={
  "single":("Single Item Disposal",Decimal("175.00")),
  "quarter":("1/4 Truck - approx. 5 ft",Decimal("400.00")),
@@ -261,10 +262,20 @@ def calculate(db,data):
     low=number(data.get("hours_low",3),"Estimated low hours",.25,100);high=number(data.get("hours_high",low),"Estimated high hours",.25,120)
     if high<low:raise HTTPException(422,"Estimated high hours cannot be lower than low hours.")
     minimum,small_afternoon=service_minimum_hours(data,service);low=max(low,minimum);high=max(high,minimum)
-    transport_hours=number(data.get("transport_hours",1),"Transportation hours",0,100)
+    transport_hours=number(data.get("transport_hours",1),"True driving / transportation hours",0,100)
     fixed=data.get("fixed_transport")
-    transport=number(fixed,"Fixed transportation fee",0,100000) if fixed not in (None,"") else rate*transport_hours+EXTRA_TRUCK*max(0,trucks-1)
-    show_transport_hours=Decimal("0") if fixed not in (None,"") else transport_hours
+    if fixed not in (None,""):
+        transport=number(fixed,"Fixed transportation fee",0,100000)
+        billable_transport_hours=Decimal("0")
+        show_transport_hours=Decimal("0")
+    elif service=="Long Distance":
+        billable_transport_hours=transport_hours*LONG_TRANSPORT_MULTIPLIER if transport_hours>=1 else transport_hours
+        transport=rate*billable_transport_hours
+        show_transport_hours=transport_hours
+    else:
+        billable_transport_hours=transport_hours
+        transport=rate*transport_hours+EXTRA_TRUCK*max(0,trucks-1)
+        show_transport_hours=transport_hours
     km=number(data.get("distance_km",0),"Distance km",0,10000);km_rate=number(data.get("distance_rate",LONG_KM),"Distance rate",0,20)
     fuel=km*km_rate*trucks if service=="Long Distance" else LOCAL_FUEL*trucks
     mats,mat_total=materials(db,data.get("materials") or [])
@@ -275,7 +286,9 @@ def calculate(db,data):
     fr=language=="French"
     lines=[
       {"name":f"{movers} demenageurs + {trucks} camion(s)" if fr else f"{movers} movers + {trucks} truck(s)","qty":float(low),"unit_cents":money(rate),"total_cents":money(slo),"note":(f"Estimation : {float(low):g}-{float(high):g} heures de service. Minimum {float(minimum):g} h." if fr else f"Estimated {float(low):g}-{float(high):g} service hours. Minimum {float(minimum):g} h.")},
-      {"name":"Frais de transport" if fr else "Transportation fee","qty":1,"unit_cents":money(transport),"total_cents":money(transport),"note":"Montant de transport presente au client." if fr else "Fixed client-facing transportation amount."},
+      {"name":("Frais de transport longue distance" if fr else "Long Distance Transportation Fee") if service=="Long Distance" else ("Frais de transport" if fr else "Transportation Fee"),
+       "qty":1,"unit_cents":money(transport),"total_cents":money(transport),
+       "note":((f"{float(show_transport_hours):g} h de conduite reelle x 1,15 = {float(billable_transport_hours):g} h facturables au taux horaire de l'equipe." if fr else f"{float(show_transport_hours):g} true driving hours x 1.15 = {float(billable_transport_hours):g} billable transportation hours at the team hourly rate.") if service=="Long Distance" and fixed in (None,"") else ("Montant de transport longue distance fixe convenu." if fr else "Agreed fixed long-distance transportation amount.") if service=="Long Distance" else ("Montant de transport presente au client." if fr else "Client-facing transportation amount."))},
     ]
     if service=="Long Distance":
         lines.append({"name":"Carburant / distance longue distance" if fr else "Long-distance fuel / distance fee","qty":1,"unit_cents":money(fuel),"total_cents":money(fuel),"note":(f"{float(km):g} km a {float(km_rate):.2f} $ CA/km x {trucks} camion(s)." if fr else f"{float(km):g} km at CAD {float(km_rate):.2f}/km x {trucks} truck(s).")})
@@ -286,7 +299,8 @@ def calculate(db,data):
     if discount:lines.append({"name":"Rabais approuve" if fr else "Approved discount","qty":1,"unit_cents":-money(discount),"total_cents":-money(discount)})
     return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":money(rate),
       "suggested_hourly_rate_cents":money(suggested),"rate_source":source,"service_low":float(low),"service_high":float(high),
-      "minimum_hours":float(minimum),"transport_hours":float(show_transport_hours),"transport_cents":money(transport),
+      "minimum_hours":float(minimum),"transport_hours":float(show_transport_hours),"billable_transport_hours":float(billable_transport_hours),"transport_cents":money(transport),
+      "transport_multiplier":float(LONG_TRANSPORT_MULTIPLIER) if service=="Long Distance" and fixed in (None,"") and transport_hours>=1 else 1.0,
       "fuel_cents":money(fuel),"truck_fee_cents":money(EXTRA_TRUCK*max(0,trucks-1)),"distance_km":float(km),
       "distance_rate_cents":money(km_rate),"materials_cents":mat_total,"other_cents":money(other),"discount_cents":money(discount),
       "service_low_cents":money(slo),"service_high_cents":money(shi),"low_cents":money(tlo),"high_cents":money(thi),
