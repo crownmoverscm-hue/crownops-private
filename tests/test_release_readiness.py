@@ -1,17 +1,19 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
 
 from app.main import create_app
-from app.store import connect, initialize, transaction
+from app.store import connect, initialize, transaction, insert, dumps, now
 from app.platform_common import put_setting, quickbooks_gate, quickbooks_write_enabled, settings
 from app.providers import qbo_customer, qbo_invoice_payload, qbo_mapping, qbo_read
 from app.backups import make_backup, restore_archive
 from app.security import validate_deployment
+from app.operations import hos_dispatch_status, hos_cycle_capacity_errors
 
 
 class EnvMixin:
@@ -180,6 +182,65 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             validate_deployment("https://example.invalid", True)
         self.assertIn("malware scanning", str(ctx.exception))
+
+    def _make_hos_job(self, db_path):
+        initialize(db_path)
+        start=(datetime.now(timezone.utc)+timedelta(hours=12)).isoformat(timespec="seconds")
+        end=(datetime.now(timezone.utc)+timedelta(hours=39)).isoformat(timespec="seconds")
+        with transaction(db_path) as db:
+            insert(db,"leads",dict(id="LEAD-HOS",client_name="Long Distance Client",created_at=now(),updated_at=now()))
+            for eid,name in (("DRV-1","Driver One"),("DRV-2","Driver Two")):
+                insert(db,"employees",dict(id=eid,name=name,role="Mover",active=1,driver_verified=1))
+            for vid,name in (("TRUCK-1","Truck One"),("TRUCK-2","Truck Two")):
+                insert(db,"vehicles",dict(id=vid,name=name,active=1))
+                insert(db,"fleet_profiles",dict(vehicle_id=vid,gvwr_kg=7000,updated_at=now()))
+            insert(db,"pricing_versions",dict(id="PRICE-HOS",label="test",rates_json="{}",settings_json="{}",created_at=now()))
+            insert(db,"quotes",dict(id="QUOTE-HOS",lead_id="LEAD-HOS",revision=1,status="Accepted",
+                inputs_json=dumps({"service_type":"Long Distance","transport_hours":12,"deposit_required":300}),
+                result_json=dumps({"service_type":"Long Distance","service_high":5,"transport_hours":12,
+                    "hos_plan":{"estimated_on_duty_hours":17,"minimum_schedule_days":2}}),
+                pricing_id="PRICE-HOS",lead_snapshot_json="{}",lead_version=1,created_by="test",created_at=now()))
+            insert(db,"jobs",dict(id="JOB-HOS",lead_id="LEAD-HOS",quote_id="QUOTE-HOS",title="Toronto",
+                phase="Long Distance",start_at=start,end_at=end,status="Confirmed",created_by="test",created_at=now()))
+            for eid in ("DRV-1","DRV-2"):insert(db,"assignments",dict(job_id="JOB-HOS",resource_type="employee",resource_id=eid))
+            for vid in ("TRUCK-1","TRUCK-2"):insert(db,"assignments",dict(job_id="JOB-HOS",resource_type="vehicle",resource_id=vid))
+
+    def _add_hos_verification(self,db,driver,truck,job_version=1):
+        insert(db,"hos_dispatch_verifications",dict(id="HOS-"+driver+"-"+truck+"-"+str(job_version),job_id="JOB-HOS",
+            job_version=job_version,driver_id=driver,vehicle_id=truck,cycle=1,cycle_on_duty_hours=30,
+            on_duty_since_last_24h_off=30,consecutive_off_duty_before_shift=8,had_24h_off_in_prev_14d=1,
+            dce_log_checked=1,daily_off_duty_plan_checked=1,elapsed_window_checked=1,projected_on_duty_hours=17,
+            status="Verified",note="Current DCE reviewed for dispatch.",verified_by="dispatcher",verified_at=now()))
+
+    def test_hos_cycle_capacity_blocks_insufficient_cycle_hours(self):
+        self.assertEqual(hos_cycle_capacity_errors(1,50,50,17),[])
+        self.assertTrue(any("Cycle 1" in x for x in hos_cycle_capacity_errors(1,60,60,17)))
+        self.assertTrue(any("70 on-duty hours" in x for x in hos_cycle_capacity_errors(2,90,60,17)))
+        self.assertTrue(any("Cycle 2" in x for x in hos_cycle_capacity_errors(2,110,20,17)))
+
+    def test_long_distance_dispatch_requires_current_hos_record_per_heavy_truck(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            self._make_hos_job(db_path)
+            with transaction(db_path) as db:
+                status=hos_dispatch_status(db,"JOB-HOS")
+                self.assertTrue(status["required"]);self.assertFalse(status["ready"])
+                self._add_hos_verification(db,"DRV-1","TRUCK-1")
+                self.assertFalse(hos_dispatch_status(db,"JOB-HOS")["ready"])
+                self._add_hos_verification(db,"DRV-2","TRUCK-2")
+                self.assertTrue(hos_dispatch_status(db,"JOB-HOS")["ready"])
+                db.execute("UPDATE jobs SET version=version+1 WHERE id='JOB-HOS'")
+                self.assertFalse(hos_dispatch_status(db,"JOB-HOS")["ready"])
+
+    def test_missing_heavy_truck_gvwr_blocks_hos_readiness(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            self._make_hos_job(db_path)
+            with transaction(db_path) as db:
+                db.execute("UPDATE fleet_profiles SET gvwr_kg=NULL WHERE vehicle_id='TRUCK-2'")
+                status=hos_dispatch_status(db,"JOB-HOS")
+                self.assertFalse(status["ready"])
+                self.assertTrue(any("GVWR" in x and "Truck Two" in x for x in status["blockers"]))
 
     def test_read_only_qbo_call_does_not_need_global_external_switch(self):
         response = Mock()
