@@ -15,7 +15,23 @@ MONTREAL=ZoneInfo("America/Toronto")
 LOCAL_FUEL=Decimal("35.00")
 EXTRA_TRUCK=Decimal("25.00")
 LONG_KM=Decimal("0.94")
+LONG_DISTANCE_KM_BUFFER=Decimal("1.05")
 LONG_TRANSPORT_MULTIPLIER=Decimal("1.15")
+LONG_DISTANCE_CITY_PRESETS=[
+ ("Granby","QC",90),("Sherbrooke","QC",155),("Drummondville","QC",110),("Trois-Rivieres","QC",140),
+ ("Victoriaville","QC",165),("Quebec City","QC",255),("Gatineau","QC",205),("Saguenay","QC",460),
+ ("Rimouski","QC",545),("Rouyn-Noranda","QC",630),("Val-d'Or","QC",525),("Baie-Comeau","QC",680),
+ ("Cornwall","ON",115),("Brockville","ON",215),("Kingston","ON",290),("Ottawa","ON",200),
+ ("Belleville","ON",370),("Peterborough","ON",460),("Oshawa","ON",480),("Toronto","ON",541),
+ ("Mississauga","ON",560),("Brampton","ON",560),("Hamilton","ON",610),("St. Catharines","ON",660),
+ ("Niagara Falls","ON",670),("Kitchener","ON",645),("Waterloo","ON",650),("Guelph","ON",620),
+ ("London","ON",720),("Windsor","ON",910),("Barrie","ON",620),("North Bay","ON",570),
+ ("Sudbury","ON",690),("Sault Ste. Marie","ON",1000),("Thunder Bay","ON",1390),
+ ("Moncton","NB",1000),("Fredericton","NB",840),("Saint John","NB",890),("Halifax","NS",1250),
+ ("Sydney","NS",1460),("Charlottetown","PE",1140),("Winnipeg","MB",2300),("Regina","SK",2950),
+ ("Saskatoon","SK",3050),("Calgary","AB",3600),("Edmonton","AB",3800),("Lethbridge","AB",3500),
+ ("Kelowna","BC",4300),("Vancouver","BC",4550),("Prince George","BC",4400),
+]
 JUNK={
  "single":("Single Item Disposal",Decimal("175.00")),
  "quarter":("1/4 Truck - approx. 5 ft",Decimal("400.00")),
@@ -276,8 +292,9 @@ def calculate(db,data):
         billable_transport_hours=transport_hours
         transport=rate*transport_hours+EXTRA_TRUCK*max(0,trucks-1)
         show_transport_hours=transport_hours
-    km=number(data.get("distance_km",0),"Distance km",0,10000);km_rate=number(data.get("distance_rate",LONG_KM),"Distance rate",0,20)
-    fuel=km*km_rate*trucks if service=="Long Distance" else LOCAL_FUEL*trucks
+    km=number(data.get("distance_km",0),"Actual round-trip distance km",0,10000);km_rate=number(data.get("distance_rate",LONG_KM),"Distance rate",0,20)
+    adjusted_km=km*LONG_DISTANCE_KM_BUFFER if service=="Long Distance" else km
+    fuel=adjusted_km*km_rate*trucks if service=="Long Distance" else LOCAL_FUEL*trucks
     mats,mat_total=materials(db,data.get("materials") or [])
     other=number(data.get("other_amount",0),"Other agreed charges",0,100000);discount=number(data.get("discount_amount",0),"Discount",0,100000)
     slo=rate*low;shi=rate*high;fixed_total=transport+fuel+Decimal(mat_total)/100+other
@@ -291,7 +308,7 @@ def calculate(db,data):
        "note":((f"{float(show_transport_hours):g} h de conduite reelle x 1,15 = {float(billable_transport_hours):g} h facturables au taux horaire de l'equipe." if fr else f"{float(show_transport_hours):g} true driving hours x 1.15 = {float(billable_transport_hours):g} billable transportation hours at the team hourly rate.") if service=="Long Distance" and fixed in (None,"") else ("Montant de transport longue distance fixe convenu." if fr else "Agreed fixed long-distance transportation amount.") if service=="Long Distance" else ("Montant de transport presente au client." if fr else "Client-facing transportation amount."))},
     ]
     if service=="Long Distance":
-        lines.append({"name":"Carburant / distance longue distance" if fr else "Long-distance fuel / distance fee","qty":1,"unit_cents":money(fuel),"total_cents":money(fuel),"note":(f"{float(km):g} km a {float(km_rate):.2f} $ CA/km x {trucks} camion(s)." if fr else f"{float(km):g} km at CAD {float(km_rate):.2f}/km x {trucks} truck(s).")})
+        lines.append({"name":"Carburant / distance longue distance" if fr else "Long-distance fuel / distance fee","qty":1,"unit_cents":money(fuel),"total_cents":money(fuel),"note":(f"{float(km):g} km aller-retour + 5 % = {float(adjusted_km):g} km ajustes a {float(km_rate):.2f} $ CA/km x {trucks} camion(s)." if fr else f"{float(km):g} actual round-trip km + 5% = {float(adjusted_km):g} adjusted km at CAD {float(km_rate):.2f}/km x {trucks} truck(s).")})
     else:
         lines.append({"name":"Frais de carburant" if fr else "Fuel fee","qty":trucks,"unit_cents":money(LOCAL_FUEL),"total_cents":money(fuel),"note":"Frais de carburant local." if fr else "Local fuel charge."})
     lines.extend(mats)
@@ -302,6 +319,7 @@ def calculate(db,data):
       "minimum_hours":float(minimum),"transport_hours":float(show_transport_hours),"billable_transport_hours":float(billable_transport_hours),"transport_cents":money(transport),
       "transport_multiplier":float(LONG_TRANSPORT_MULTIPLIER) if service=="Long Distance" and fixed in (None,"") and transport_hours>=1 else 1.0,
       "fuel_cents":money(fuel),"truck_fee_cents":money(EXTRA_TRUCK*max(0,trucks-1)),"distance_km":float(km),
+      "adjusted_distance_km":float(adjusted_km),"distance_buffer_percent":5.0 if service=="Long Distance" else 0.0,
       "distance_rate_cents":money(km_rate),"materials_cents":mat_total,"other_cents":money(other),"discount_cents":money(discount),
       "service_low_cents":money(slo),"service_high_cents":money(shi),"low_cents":money(tlo),"high_cents":money(thi),
       "movers":movers,"trucks":trucks,"season":source,"line_items":lines,"small_afternoon_job":small_afternoon,
@@ -446,8 +464,16 @@ def register_sales_crm_v6(app,path,auth,public_url):
             if day:rate,source=rate_for(db,day,int(movers))
             mats=rows(db,"SELECT code,name,category,sell_cents FROM material_catalog WHERE active=1 ORDER BY category,name")
             a=account_for_lead(db,lead_id)
+        presets=[]
+        for city,province,one_way in LONG_DISTANCE_CITY_PRESETS:
+            round_trip=Decimal(str(one_way))*2;adjusted=round_trip*LONG_DISTANCE_KM_BUFFER
+            presets.append({"key":(city+"-"+province).lower().replace(" ","-").replace(".",""),"city":city,"province":province,
+              "one_way_km":float(one_way),"round_trip_km":float(round_trip),"adjusted_km":float(adjusted),
+              "gas_one_truck_cents":money(adjusted*LONG_KM)})
         return {"client":a,"lead":l,"suggested_hourly_rate":float(rate) if rate is not None else None,"rate_source":source or "",
-          "materials":mats,"defaults":{"local_fuel_per_truck":35.0,"extra_truck_transport":25.0,"long_distance_per_km":0.94,"deposit":300.0,"limited_liability":"$0.60/lb per article"}}
+          "materials":mats,"long_distance_presets":presets,
+          "defaults":{"local_fuel_per_truck":35.0,"extra_truck_transport":25.0,"long_distance_per_km":0.94,
+            "long_distance_km_buffer_percent":5.0,"deposit":300.0,"limited_liability":"$0.60/lb per article"}}
 
     @app.post("/api/crm/quotes/calculate")
     def calc(data:dict,u=Depends(auth)):
