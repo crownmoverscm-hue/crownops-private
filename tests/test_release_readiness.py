@@ -282,6 +282,13 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             staff.cookies.set("crownops_session",staff_token)
             sh={"x-csrf-token":staff_csrf}
 
+            readiness=staff.get("/api/readiness")
+            self.assertEqual(readiness.status_code,200,readiness.text)
+            self.assertIn("launch",readiness.json())
+            self.assertEqual(readiness.json()["launch"]["verified_driver_count"],1)
+            self.assertEqual(readiness.json()["launch"]["missing_gvwr"],[])
+            self.assertFalse(readiness.json()["launch"]["critical_ready"])  # test mode: Gmail/live actions intentionally off
+
             r=staff.post("/api/crm/clients",headers=sh,json={"client_name":"Launch Toronto Client",
                 "email":"launch-client@example.invalid","phone":"514-555-0142","language":"English"})
             self.assertEqual(r.status_code,200,r.text);cid=r.json()["id"]
