@@ -100,6 +100,23 @@ class SalesCrmV6Tests(unittest.TestCase):
         finally:
             td.cleanup()
 
+    def test_long_distance_transport_uses_true_drive_time_times_one_point_fifteen(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                r=calculate(db,{"service_type":"Long Distance","language":"English","move_date":"2026-10-15",
+                    "movers":3,"trucks":1,"hours_low":4,"hours_high":5,"minimum_hours":3,
+                    "transport_hours":12,"distance_km":1080,"distance_rate":0.94,
+                    "materials":[],"other_amount":0,"discount_amount":0})
+            self.assertEqual(r["transport_hours"],12.0)
+            self.assertEqual(r["billable_transport_hours"],13.8)
+            self.assertEqual(r["transport_multiplier"],1.15)
+            self.assertEqual(r["transport_cents"],241500)  # 13.8 x $175
+            self.assertEqual(r["fuel_cents"],101520)       # 1080 km x $0.94 x 1 truck
+            self.assertEqual(r["line_items"][1]["name"],"Long Distance Transportation Fee")
+        finally:
+            td.cleanup()
+
     def test_fixed_long_distance_transport_hides_transport_hours_and_uses_094_per_km_per_truck(self):
         td,path=self.make_db()
         try:
@@ -109,6 +126,7 @@ class SalesCrmV6Tests(unittest.TestCase):
                     "transport_hours":14,"fixed_transport":2450,"distance_km":540,"distance_rate":0.94,
                     "materials":[],"other_amount":0,"discount_amount":0})
             self.assertEqual(r["transport_hours"],0)
+            self.assertEqual(r["billable_transport_hours"],0)
             self.assertEqual(r["transport_cents"],245000)
             self.assertEqual(r["fuel_cents"],101520)
             self.assertEqual(r["distance_rate_cents"],94)
