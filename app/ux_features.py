@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 
 from .store import connect, transaction, rows, one, insert, audit, uid, now
 from .platform_common import require_role, OFFICE, MANAGERS, text, settings, put_setting, invoice_current
+from .operations import hos_dispatch_status
 
 TORONTO=ZoneInfo('America/Toronto')
 PRIVATE_HR={'owner','accounting'}
@@ -83,6 +84,9 @@ def _job_readiness(db,j):
             if required and paid<required:missing.append('deposit not verified')
     elif j.get('status')!='Cancelled':
         missing.append('quote not linked')
+    hos=hos_dispatch_status(db,j['id'])
+    if hos.get('required') and not hos.get('ready'):
+        missing.extend(['HOS: '+x for x in hos.get('blockers',[])[:3]])
     day=_local_date(j['start_at'])
     for r in rows(db,"""SELECT e.name FROM assignments a JOIN employees e ON e.id=a.resource_id
       JOIN time_off_requests o ON o.employee_id=e.id AND o.status='Approved'
