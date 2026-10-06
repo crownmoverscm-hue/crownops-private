@@ -8,13 +8,16 @@ import base64
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 import requests
 
 from .store import connect, transaction, one, rows, insert, audit, uid, now, dumps
 
+
+MONTREAL = ZoneInfo("America/Toronto")
 
 FEEDS = {
     'quote': 'New Quote Request',
@@ -208,7 +211,25 @@ def _call_payload(kind, subject, body, attachments):
 
 
 
-def _duplicate_call(db, parsed, seconds=90):
+
+def _call_occurred_iso(parsed):
+    raw=str((parsed or {}).get('call_time') or (parsed or {}).get('occurred_at') or '').strip()
+    if not raw:
+        return ''
+    try:
+        local=datetime.strptime(raw,'%m/%d/%Y %H:%M:%S').replace(tzinfo=MONTREAL)
+        return local.astimezone(timezone.utc).isoformat(timespec='seconds')
+    except ValueError:
+        pass
+    try:
+        dt=datetime.fromisoformat(raw.replace('Z','+00:00'))
+        if dt.tzinfo is None:
+            dt=dt.replace(tzinfo=MONTREAL)
+        return dt.astimezone(timezone.utc).isoformat(timespec='seconds')
+    except ValueError:
+        return ''
+
+def _duplicate_call(db, parsed, event_type, seconds=90):
     phone = parsed.get('phone') or ''
     caller = (parsed.get('caller') or '').lower()
     stamp = parsed.get('call_time') or ''
@@ -218,7 +239,7 @@ def _duplicate_call(db, parsed, seconds=90):
         current = datetime.strptime(stamp, '%m/%d/%Y %H:%M:%S')
     except ValueError:
         return False
-    recent = rows(db, "SELECT payload_json FROM integration_events WHERE event_type IN ('gmail_missed_call','gmail_voicemail') ORDER BY created_at DESC LIMIT 80")
+    recent = rows(db, "SELECT payload_json FROM integration_events WHERE event_type=? ORDER BY created_at DESC LIMIT 80",(event_type,))
     for item in recent:
         try:
             old = json.loads(item['payload_json']).get('parsed', {})
@@ -273,20 +294,24 @@ def _record_incoming_message(db, lead_id, actor, subject, body, created_at=None)
 def _record_call_and_followup(db, lead_id, parsed, subject, actor, gmail_id, event_type):
     cid = uid('CALL')
     title = 'Return missed call' if event_type == 'gmail_missed_call' else 'Review voicemail'
+    occurred_at=_call_occurred_iso(parsed) or now()
     details = {
         'phone': parsed.get('phone') or '',
         'caller': _caller_name(parsed),
         'call_time': parsed.get('call_time') or '',
+        'occurred_at': occurred_at,
         'subject': subject or '',
         'source': 'Gmail / UniFi',
         'gmail_id': gmail_id,
         'voicemail': event_type == 'gmail_voicemail',
         'attachments': parsed.get('attachments') or [],
     }
-    insert(db, 'calls', dict(id=cid, legacy_id=None, lead_id=lead_id, payload_json=dumps(details), created_at=now()))
-    open_task = one(db, "SELECT id FROM tasks WHERE lead_id=? AND title=? AND status!='Done' AND historical=0 ORDER BY created_at DESC LIMIT 1", (lead_id, title))
+    insert(db, 'calls', dict(id=cid, legacy_id=None, lead_id=lead_id, payload_json=dumps(details), created_at=occurred_at))
+    open_task = one(db, "SELECT id,title FROM tasks WHERE lead_id=? AND title IN ('Return missed call','Review voicemail') AND status='Open' AND historical=0 ORDER BY CASE WHEN title='Review voicemail' THEN 0 ELSE 1 END, created_at DESC LIMIT 1", (lead_id,))
     if not open_task:
-        insert(db, 'tasks', dict(id=uid('TASK'), legacy_id=None, lead_id=lead_id, title=title, due_date=now()[:10], owner='', status='Open', historical=0, raw_json=dumps({'call_id': cid, 'gmail_id': gmail_id}), created_at=now()))
+        insert(db, 'tasks', dict(id=uid('TASK'), legacy_id=None, lead_id=lead_id, title=title, due_date=occurred_at[:10], owner='', status='Open', historical=0, raw_json=dumps({'call_id': cid, 'gmail_id': gmail_id}), created_at=occurred_at))
+    elif title=='Review voicemail' and open_task.get('title')!='Review voicemail':
+        db.execute("UPDATE tasks SET title=?,raw_json=? WHERE id=?",('Review voicemail',dumps({'call_id':cid,'gmail_id':gmail_id}),open_task['id']))
     return cid
 
 
@@ -294,13 +319,19 @@ def promote_pending_call_events(db, actor, new_lead, limit=120):
     """Promote already-detected Gmail missed calls/voicemails into local CRM leads/calls without mutating Gmail."""
     promoted=0
     pending=rows(db,"""SELECT * FROM integration_events
-      WHERE event_type IN ('gmail_missed_call','gmail_voicemail') AND status='Needs review'
+      WHERE (event_type IN ('gmail_missed_call','gmail_voicemail') AND status='Needs review')
+         OR (event_type='gmail_duplicate_call' AND status='Ignored')
       ORDER BY created_at ASC LIMIT ?""",(max(1,min(int(limit),300)),))
     for ev in pending:
         try:payload=json.loads(ev.get('payload_json') or '{}')
         except Exception:payload={}
         parsed=payload.get('parsed') if isinstance(payload,dict) else {}
         if not isinstance(parsed,dict):parsed={}
+        effective_type=ev['event_type']
+        if effective_type=='gmail_duplicate_call':
+            if 'voice' not in str(parsed.get('kind') or '').lower():
+                continue
+            effective_type='gmail_voicemail'
         if payload.get('lead_id') and payload.get('call_id'):
             db.execute("UPDATE integration_events SET status='Imported' WHERE id=?",(ev['id'],));continue
         matched=_match_lead_by_phone(db,parsed.get('phone'))
@@ -310,16 +341,16 @@ def promote_pending_call_events(db, actor, new_lead, limit=120):
             call_name=_caller_name(parsed)
             call_data={
               'client_name':call_name,'phone':parsed.get('phone') or '','email':'','source':'UniFi',
-              'lead_type':'Voicemail' if ev['event_type']=='gmail_voicemail' else 'Missed Call',
+              'lead_type':'Voicemail' if effective_type=='gmail_voicemail' else 'Missed Call',
               'stage':'New Lead','priority':'High',
               'notes':str(payload.get('subject') or payload.get('snippet') or '').strip(),
               'language':'English'}
             lead=new_lead(db,call_data,actor,external_id=ev['event_key'],suppressed=1)
             lead_id=lead['id']
             db.execute("DELETE FROM tasks WHERE lead_id=? AND title='Review new inquiry' AND status='Open'",(lead_id,))
-        call_id=_record_call_and_followup(db,lead_id,parsed,str(payload.get('subject') or ''),actor,str(payload.get('gmail_id') or ev['object_id']),ev['event_type'])
+        call_id=_record_call_and_followup(db,lead_id,parsed,str(payload.get('subject') or ''),actor,str(payload.get('gmail_id') or ev['object_id']),effective_type)
         payload['call_id']=call_id;payload['lead_id']=lead_id
-        db.execute("UPDATE integration_events SET object_id=?,payload_json=?,status='Imported' WHERE id=?",(lead_id,dumps(payload),ev['id']))
+        db.execute("UPDATE integration_events SET event_type=?,object_id=?,payload_json=?,status='Imported' WHERE id=?",(effective_type,lead_id,dumps(payload),ev['id']))
         promoted+=1
     return promoted
 
@@ -398,7 +429,7 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                     parsed = _call_payload(feed, subject, body, attachments)
                     payload['parsed'] = parsed
                     event_type = 'gmail_missed_call' if feed == 'missed_call' else 'gmail_voicemail'
-                    if _duplicate_call(db, parsed):
+                    if _duplicate_call(db, parsed, event_type):
                         event_type = 'gmail_duplicate_call'
                         status = 'Ignored'
                         summary['ignored'] += 1

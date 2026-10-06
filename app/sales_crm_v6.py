@@ -198,16 +198,61 @@ def sync_unlinked_clients(db):
                     flag_duplicate(db,m["client"]["id"],cid,reason)
         insert(db,"client_account_leads",dict(client_id=cid,lead_id=l["id"],created_at=now()))
 
+def call_activity_time(detail,fallback=""):
+    raw=str((detail or {}).get("occurred_at") or (detail or {}).get("call_time") or "").strip()
+    if not raw:return fallback
+    try:
+        local=datetime.strptime(raw,"%m/%d/%Y %H:%M:%S").replace(tzinfo=MONTREAL)
+        return local.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except ValueError:
+        pass
+    try:
+        dt=datetime.fromisoformat(raw.replace("Z","+00:00"))
+        if dt.tzinfo is None:dt=dt.replace(tzinfo=MONTREAL)
+        return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except ValueError:
+        return fallback
+
+def repair_call_activity(db):
+    """Repair imported Gmail call times and collapse duplicate machine-generated callback tasks."""
+    for call in rows(db,"SELECT id,lead_id,payload_json,created_at FROM calls"):
+        try:detail=json.loads(call.get("payload_json") or "{}")
+        except Exception:detail={}
+        actual=call_activity_time(detail,call.get("created_at") or "")
+        if actual and actual!=call.get("created_at"):
+            db.execute("UPDATE calls SET created_at=? WHERE id=?",(actual,call["id"]))
+    lead_ids=rows(db,"""SELECT DISTINCT lead_id FROM tasks
+      WHERE title IN ('Return missed call','Review voicemail') AND status='Open' AND historical=0""")
+    for item in lead_ids:
+        tasks=rows(db,"""SELECT * FROM tasks WHERE lead_id=? AND title IN ('Return missed call','Review voicemail')
+          AND status='Open' AND historical=0 ORDER BY CASE WHEN title='Review voicemail' THEN 0 ELSE 1 END, created_at DESC""",(item["lead_id"],))
+        generated=[]
+        for task in tasks:
+            try:meta=json.loads(task.get("raw_json") or "{}")
+            except Exception:meta={}
+            if meta.get("call_id") or meta.get("gmail_id"):generated.append((task,meta))
+        if len(generated)<=1:continue
+        keep=generated[0][0]
+        if any(t[0].get("title")=="Review voicemail" for t in generated) and keep.get("title")!="Review voicemail":
+            db.execute("UPDATE tasks SET title='Review voicemail' WHERE id=?",(keep["id"],))
+        for task,meta in generated[1:]:
+            meta["auto_coalesced_into"]=keep["id"]
+            meta["auto_coalesced_reason"]="Duplicate call/voicemail follow-up"
+            db.execute("UPDATE tasks SET status='Done',historical=1,raw_json=? WHERE id=?",(dumps(meta),task["id"]))
+
 def client_latest_activity(db,client_id):
     """Return the newest real inbound/client inquiry signal for inbox ordering."""
     candidates=[]
     lead=one(db,"""SELECT l.id,l.lead_type,l.source,l.stage,l.created_at,l.move_date,l.pickup
       FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
-      WHERE x.client_id=? AND l.archived_import=0 ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
+      WHERE x.client_id=? AND l.archived_import=0
+        AND lower(COALESCE(l.lead_type,'')) NOT IN ('missed call','voicemail')
+      ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
     if not lead:
         lead=one(db,"""SELECT l.id,l.lead_type,l.source,l.stage,l.created_at,l.move_date,l.pickup
           FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
-          WHERE x.client_id=? ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
+          WHERE x.client_id=? AND lower(COALESCE(l.lead_type,'')) NOT IN ('missed call','voicemail')
+          ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
     if lead:
         lt=str(lead.get("lead_type") or "Inquiry")
         source=str(lead.get("source") or "")
@@ -233,8 +278,9 @@ def client_latest_activity(db,client_id):
         is_voicemail=detail.get("voicemail") is True or "voice" in disposition.lower()
         label="Voicemail" if is_voicemail else ("Missed call" if not disposition or "miss" in disposition.lower() else "Phone call")
         summary=str(detail.get("note") or detail.get("subject") or detail.get("caller") or disposition or label).strip()
+        activity_at=call_activity_time(detail,call["created_at"])
         candidates.append({"type":"call","label":label,"source":str(detail.get("source") or "Phone"),
-          "at":call["created_at"],"occurred_at":detail.get("occurred_at") or detail.get("call_time") or call["created_at"],
+          "at":activity_at,"occurred_at":activity_at,
           "lead_id":call["lead_id"],"summary":summary[:180]})
 
     msg=one(db,"""SELECT m.* FROM messages m JOIN client_account_leads x ON x.lead_id=m.lead_id
@@ -245,7 +291,6 @@ def client_latest_activity(db,client_id):
           "lead_id":msg["lead_id"],"summary":str(msg.get("subject") or msg.get("body") or "")[:180]})
 
     if not candidates:return None
-    # created_at is CrownOps receipt time and is trusted for ordering. Provider occurred_at is display-only.
     candidates.sort(key=lambda x:str(x.get("at") or ""),reverse=True)
     return candidates[0]
 
@@ -275,6 +320,7 @@ def schema(path):
           UNIQUE(client_id,candidate_client_id,reason));
         """)
         sync_unlinked_clients(db)
+        repair_call_activity(db)
         defaults=[
           ("moving-en","Moving","English","Local Moving - English",{"title":"Moving Service","liability":"Free limited liability coverage: $0.60/lb per article.","fragile":"TVs, large mirrors, glass, marble and other fragile items require appropriate protective packing or boxing. Added protection does not increase carrier liability unless separate replacement-value coverage is purchased and its conditions are met."}),
           ("moving-fr","Moving","French","Déménagement local - Français",{"title":"Service de déménagement","liability":"Responsabilité limitée gratuite : 0,60 $/lb par article.","fragile":"Les téléviseurs, grands miroirs, articles en verre, marbre et autres objets fragiles exigent un emballage ou une boîte de protection appropriée. La protection additionnelle n'augmente pas la responsabilité du transporteur à moins qu'une couverture de valeur de remplacement distincte soit achetée et que ses conditions soient respectées."}),
@@ -433,7 +479,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
         require_role(u,OFFICE);needle=(q or "").strip().lower();like="%"+needle+"%"
         activity_expr="""MAX(
           a.created_at,
-          COALESCE((SELECT MAX(l.created_at) FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=a.id),a.created_at),
+          COALESCE((SELECT MAX(l.created_at) FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
+            WHERE x.client_id=a.id AND lower(COALESCE(l.lead_type,'')) NOT IN ('missed call','voicemail')),a.created_at),
           COALESCE((SELECT MAX(c.created_at) FROM calls c JOIN client_account_leads x ON x.lead_id=c.lead_id WHERE x.client_id=a.id),a.created_at),
           COALESCE((SELECT MAX(m.created_at) FROM messages m JOIN client_account_leads x ON x.lead_id=m.lead_id WHERE x.client_id=a.id AND lower(m.kind) LIKE 'incoming %'),a.created_at)
         )"""
