@@ -36,17 +36,41 @@ def identity(lead):
     e=norm_email(lead.get("email"));p=norm_phone(lead.get("phone"))
     return "e:"+e if e else ("p:"+p if p else "l:"+lead["id"])
 
+def duplicate_candidates(db,email="",phone="",exclude_id=""):
+    """Return exact contact matches without ever merging records by fuzzy name/address."""
+    found={}
+    email=norm_email(email);phone_key=norm_phone(phone)
+    if email:
+        for a in rows(db,"SELECT * FROM client_accounts WHERE email=? COLLATE NOCASE",(email,)):
+            if a["id"]!=exclude_id:found.setdefault(a["id"],{"client":a,"reasons":[]})["reasons"].append("Same email")
+    if phone_key:
+        for a in rows(db,"SELECT * FROM client_accounts WHERE phone!=''"):
+            if a["id"]!=exclude_id and norm_phone(a.get("phone"))==phone_key:
+                found.setdefault(a["id"],{"client":a,"reasons":[]})["reasons"].append("Same phone")
+    return list(found.values())
+
+def flag_duplicate(db,client_id,candidate_id,reason):
+    if not client_id or not candidate_id or client_id==candidate_id:return
+    if not one(db,"SELECT id FROM crm_duplicate_flags WHERE client_id=? AND candidate_client_id=? AND reason=?",
+               (client_id,candidate_id,reason)):
+        insert(db,"crm_duplicate_flags",dict(id=uid("DUP"),client_id=client_id,candidate_client_id=candidate_id,
+          reason=reason,status="Open",created_at=now()))
+
 def sync_unlinked_clients(db):
-    """Attach newly arrived form/Gmail/manual leads to the persistent client directory."""
+    """Attach new leads safely: exact email wins; conflicting phone matches are flagged, never silently merged."""
     for l in rows(db,"""SELECT l.* FROM leads l LEFT JOIN client_account_leads x ON x.lead_id=l.id
                         WHERE x.lead_id IS NULL ORDER BY l.created_at"""):
         email=norm_email(l.get("email"));phone=norm_phone(l.get("phone"));acct=None
-        # Prefer an exact email match. If email is unavailable, reuse a normalized phone match.
-        if email:acct=one(db,"SELECT * FROM client_accounts WHERE email=? COLLATE NOCASE",(email,))
-        if not acct and phone:
-            for candidate in rows(db,"SELECT * FROM client_accounts WHERE phone!=''"):
-                if norm_phone(candidate.get("phone"))==phone:
-                    acct=candidate;break
+        matches=duplicate_candidates(db,email,l.get("phone"))
+        email_matches=[m for m in matches if "Same email" in m["reasons"]]
+        phone_matches=[m for m in matches if "Same phone" in m["reasons"]]
+        # Exact email is the strongest identity signal. Phone-only matches are reused only when
+        # the incoming record does not contradict an existing email address.
+        if len(email_matches)==1:
+            acct=email_matches[0]["client"]
+        elif not email_matches and len(phone_matches)==1:
+            candidate=phone_matches[0]["client"];candidate_email=norm_email(candidate.get("email"))
+            if not email or not candidate_email or email==candidate_email:acct=candidate
         if not acct:
             key=identity(l);base=key;n=2
             while one(db,"SELECT id FROM client_accounts WHERE identity_key=?",(key,)):
@@ -55,6 +79,11 @@ def sync_unlinked_clients(db):
             insert(db,"client_accounts",dict(id=cid,identity_key=key,client_name=l["client_name"] or "Client",
                 email=email,phone=l["phone"] or "",language=l["language"] or "English",
                 created_at=l["created_at"],updated_at=now()))
+            # Keep conflicting phone/email records separate and surface them for human review.
+            for m in matches:
+                reason=", ".join(m["reasons"])+"; contact details require review"
+                flag_duplicate(db,cid,m["client"]["id"],reason)
+                flag_duplicate(db,m["client"]["id"],cid,reason)
         else:
             cid=acct["id"]
             db.execute("""UPDATE client_accounts SET
@@ -62,6 +91,11 @@ def sync_unlinked_clients(db):
               email=CASE WHEN email='' THEN ? ELSE email END,
               phone=CASE WHEN phone='' THEN ? ELSE phone END,
               updated_at=? WHERE id=?""",(l["client_name"],email,l["phone"],now(),cid))
+            for m in matches:
+                if m["client"]["id"]!=cid:
+                    reason=", ".join(m["reasons"])+"; exact email matched another client"
+                    flag_duplicate(db,cid,m["client"]["id"],reason)
+                    flag_duplicate(db,m["client"]["id"],cid,reason)
         insert(db,"client_account_leads",dict(client_id=cid,lead_id=l["id"],created_at=now()))
 
 def schema(path):
@@ -80,6 +114,14 @@ def schema(path):
           id TEXT PRIMARY KEY, template_key TEXT UNIQUE NOT NULL, service_type TEXT NOT NULL,
           language TEXT NOT NULL, name TEXT NOT NULL, body_json TEXT NOT NULL,
           active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS crm_duplicate_flags(
+          id TEXT PRIMARY KEY,
+          client_id TEXT NOT NULL REFERENCES client_accounts(id),
+          candidate_client_id TEXT NOT NULL REFERENCES client_accounts(id),
+          reason TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'Open',
+          created_at TEXT NOT NULL,
+          UNIQUE(client_id,candidate_client_id,reason));
         """)
         sync_unlinked_clients(db)
         defaults=[
@@ -223,9 +265,17 @@ def register_sales_crm_v6(app,path,auth,public_url):
         require_role(u,OFFICE);needle=(q or "").strip().lower();like="%"+needle+"%"
         with transaction(path) as db:
             sync_unlinked_clients(db)
-            accts=rows(db,"SELECT * FROM client_accounts WHERE lower(client_name||' '||email||' '||phone) LIKE ? ORDER BY updated_at DESC LIMIT 40",(like,)) if needle else rows(db,"SELECT * FROM client_accounts ORDER BY updated_at DESC LIMIT 40")
+            if needle:
+                accts=rows(db,"""SELECT a.* FROM client_accounts a
+                  WHERE lower(a.client_name||' '||a.email||' '||a.phone) LIKE ?
+                     OR EXISTS (
+                       SELECT 1 FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
+                       WHERE x.client_id=a.id AND lower(COALESCE(l.pickup,'')||' '||COALESCE(l.dropoff,'')) LIKE ?)
+                  ORDER BY a.updated_at DESC LIMIT 40""",(like,like))
+            else:
+                accts=rows(db,"SELECT * FROM client_accounts ORDER BY updated_at DESC LIMIT 40")
             for a in accts:
-                a["services"]=rows(db,"""SELECT l.id,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.created_at,
+                a["services"]=rows(db,"""SELECT l.id,l.lead_type,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.created_at,
                   (SELECT status FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_status
                   FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=?
                   ORDER BY COALESCE(l.move_date,l.created_at) DESC LIMIT 12""",(a["id"],))
@@ -238,6 +288,9 @@ def register_sales_crm_v6(app,path,auth,public_url):
             a=one(db,"SELECT * FROM client_accounts WHERE id=?",(cid,))
             if not a:raise HTTPException(404,"Client not found.")
             a["services"]=rows(db,"SELECT l.* FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=? ORDER BY COALESCE(l.move_date,l.created_at) DESC",(cid,))
+            a["possible_duplicates"]=rows(db,"""SELECT f.id,f.reason,c.id candidate_id,c.client_name,c.email,c.phone
+              FROM crm_duplicate_flags f JOIN client_accounts c ON c.id=f.candidate_client_id
+              WHERE f.client_id=? AND f.status='Open' ORDER BY f.created_at DESC""",(cid,))
         return a
 
     @app.post("/api/crm/clients")
@@ -248,8 +301,10 @@ def register_sales_crm_v6(app,path,auth,public_url):
         if not email and not norm_phone(phone):raise HTTPException(422,"Enter an email or phone number.")
         key="e:"+email if email else "p:"+norm_phone(phone)
         with transaction(path) as db:
-            old=one(db,"SELECT * FROM client_accounts WHERE identity_key=?",(key,))
-            if old:return old
+            matches=duplicate_candidates(db,email,phone)
+            if matches:
+                return {"duplicate":True,"candidates":[{"id":m["client"]["id"],"client_name":m["client"]["client_name"],
+                  "email":m["client"]["email"],"phone":m["client"]["phone"],"reasons":m["reasons"]} for m in matches]}
             cid=uid("CLIENT");insert(db,"client_accounts",dict(id=cid,identity_key=key,client_name=name,email=email,phone=phone,
               language=data.get("language") or "English",created_at=now(),updated_at=now()));audit(db,u["id"],"Client account created","client_accounts",cid)
             return one(db,"SELECT * FROM client_accounts WHERE id=?",(cid,))
@@ -272,6 +327,16 @@ def register_sales_crm_v6(app,path,auth,public_url):
                        (new_key,name,email,phone,language,now(),cid))
             audit(db,u["id"],"Client contact profile updated","client_accounts",cid)
         return {"ok":True,"id":cid}
+
+    @app.post("/api/crm/duplicates/{fid}/dismiss")
+    def dismiss_duplicate(fid:str,u=Depends(auth)):
+        require_role(u,SALES)
+        with transaction(path) as db:
+            f=one(db,"SELECT * FROM crm_duplicate_flags WHERE id=?",(fid,))
+            if not f:raise HTTPException(404,"Duplicate warning not found.")
+            db.execute("UPDATE crm_duplicate_flags SET status='Dismissed' WHERE id=?",(fid,))
+            audit(db,u["id"],"Possible duplicate warning dismissed","crm_duplicate_flags",fid,{"client_id":f["client_id"],"candidate_client_id":f["candidate_client_id"]})
+        return {"ok":True}
 
     @app.post("/api/crm/clients/{cid}/services")
     def new_service(cid:str,data:dict,u=Depends(auth)):
