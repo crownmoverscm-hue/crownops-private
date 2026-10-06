@@ -2,6 +2,7 @@
 from contextlib import closing
 from datetime import datetime, timezone, timedelta, date
 from decimal import Decimal, ROUND_HALF_UP
+from math import ceil
 from zoneinfo import ZoneInfo
 import json, re, secrets
 
@@ -17,6 +18,10 @@ EXTRA_TRUCK=Decimal("25.00")
 LONG_KM=Decimal("0.94")
 LONG_DISTANCE_KM_BUFFER=Decimal("1.05")
 LONG_TRANSPORT_MULTIPLIER=Decimal("1.15")
+HOS_MAX_DRIVING_HOURS=Decimal("13")
+HOS_MAX_ON_DUTY_HOURS=Decimal("14")
+HOS_MAX_ELAPSED_HOURS=Decimal("16")
+HOS_DAILY_OFF_DUTY_HOURS=Decimal("10")
 LONG_DISTANCE_CITY_PRESETS=[
  ("Granby","QC",90),("Sherbrooke","QC",155),("Drummondville","QC",110),("Trois-Rivieres","QC",140),
  ("Victoriaville","QC",165),("Quebec City","QC",255),("Gatineau","QC",205),("Saguenay","QC",460),
@@ -50,6 +55,21 @@ def minimum_trucks_for_movers(movers):
     if movers>=6:return 3
     if movers>=4:return 2
     return 1
+
+def long_distance_hos_plan(true_drive_hours,service_high_hours):
+    """Preliminary Quebec heavy-vehicle HOS planning screen; final dispatch requires driver-specific log/cycle verification."""
+    drive=Decimal(str(true_drive_hours or 0));service=Decimal(str(service_high_hours or 0));on_duty=drive+service
+    days=max(1,ceil(float(drive/HOS_MAX_DRIVING_HOURS)) if drive else 1,ceil(float(on_duty/HOS_MAX_ON_DUTY_HOURS)) if on_duty else 1)
+    one_day=drive<=HOS_MAX_DRIVING_HOURS and on_duty<=HOS_MAX_ON_DUTY_HOURS
+    return {
+      "heavy_vehicle_threshold_kg":4500,
+      "true_driving_hours":float(drive),"estimated_service_hours":float(service),"estimated_on_duty_hours":float(on_duty),
+      "max_driving_hours":float(HOS_MAX_DRIVING_HOURS),"max_on_duty_hours":float(HOS_MAX_ON_DUTY_HOURS),
+      "max_elapsed_hours":float(HOS_MAX_ELAPSED_HOURS),"daily_off_duty_hours":float(HOS_DAILY_OFF_DUTY_HOURS),
+      "minimum_schedule_days":days,"one_day_possible":one_day,
+      "status":"Potential 1-day - driver HOS verification required" if one_day else f"{days}-day minimum recommended - exceeds a one-day HOS planning limit",
+      "dispatch_verification_required":True
+    }
 
 def service_minimum_hours(data,service):
     """Apply Crown's standard minimum, with the reduced minimum reserved for small afternoon local jobs."""
@@ -93,7 +113,11 @@ def quoted_block_hours(inputs):
         return max(1.5,Decimal("1.5")+Decimal("0.5")*Decimal(str(inputs.get("junk_extra_half_hours",0) or 0)))
     high=Decimal(str(inputs.get("hours_high",3) or 3));minimum=Decimal(str(inputs.get("minimum_hours",0) or 0))
     transport=Decimal(str(inputs.get("transport_hours",0) or 0))
-    return max(Decimal("1"),max(high,minimum)+transport)
+    work=max(high,minimum)+transport
+    if service=="Long Distance":
+        plan=long_distance_hos_plan(transport,max(high,minimum))
+        return max(Decimal("1"),work+HOS_DAILY_OFF_DUTY_HOURS*Decimal(str(max(0,plan["minimum_schedule_days"]-1))))
+    return max(Decimal("1"),work)
 
 def ensure_tentative_job(db,q,lead,actor):
     """Create the accepted-estimate schedule hold using the sold arrival window."""
@@ -296,6 +320,7 @@ def calculate(db,data):
     adjusted_km=km*LONG_DISTANCE_KM_BUFFER if service=="Long Distance" else km
     fuel=adjusted_km*km_rate*trucks if service=="Long Distance" else LOCAL_FUEL*trucks
     mats,mat_total=materials(db,data.get("materials") or [])
+    hos_plan=long_distance_hos_plan(transport_hours,high) if service=="Long Distance" else None
     other=number(data.get("other_amount",0),"Other agreed charges",0,100000);discount=number(data.get("discount_amount",0),"Discount",0,100000)
     slo=rate*low;shi=rate*high;fixed_total=transport+fuel+Decimal(mat_total)/100+other
     if discount>slo+fixed_total:raise HTTPException(422,"Discount exceeds the low estimate.")
@@ -323,6 +348,7 @@ def calculate(db,data):
       "distance_rate_cents":money(km_rate),"materials_cents":mat_total,"other_cents":money(other),"discount_cents":money(discount),
       "service_low_cents":money(slo),"service_high_cents":money(shi),"low_cents":money(tlo),"high_cents":money(thi),
       "movers":movers,"trucks":trucks,"season":source,"line_items":lines,"small_afternoon_job":small_afternoon,
+      "hos_plan":hos_plan,
       "scope":"Service hours are an estimate unless a fixed-price line explicitly says otherwise.",
       "tax_note":"Before applicable taxes. Quebec tax treatment is handled in the reviewed accounting setup."}
 
