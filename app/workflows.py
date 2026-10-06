@@ -57,13 +57,16 @@ def ingest_event(db,data,actor,new_lead):
         if not target:
             fields={k:v for k,v in lead_data.items() if k in {'client_name','email','phone','move_date','pickup','dropoff','home_size','boxes','pickup_access','dropoff_access','pickup_walk','dropoff_walk','inventory','heavy_items','language','photo_link'}}
             fields.setdefault('client_name','Unknown caller' if kind=='call' else 'New inquiry')
-            fields.update(source=text(data.get('source','Connected intake'),'Source',100),lead_type={'form':'Form','call':'Missed Call','email':'Email'}[kind],stage='New Lead')
+            call_disposition=str(data.get('disposition') or '').strip().lower()
+            intake_type={'form':'Form','call':('Voicemail' if 'voice' in call_disposition else 'Missed Call'),'email':'Email'}[kind]
+            fields.update(source=text(data.get('source','Connected intake'),'Source',100),lead_type=intake_type,stage='New Lead')
             target=new_lead(db,fields,actor,external_id='bridge:'+eid,suppressed=0 if data.get('permission_to_contact') is True else 1)
         lid=target['id'];result['lead_id']=lid
         body=text(data.get('body',''),'Message',20000)
         if kind=='call':
             call_data={'source':data.get('source'),'phone':lead_data.get('phone'),'disposition':data.get('disposition','Missed'),'duration_seconds':data.get('duration_seconds'), 'note':body,'event_id':eid,'occurred_at':data.get('occurred_at',now())}
-            insert(db,'calls',dict(id=uid('CALL'),legacy_id=eid,lead_id=lid,payload_json=dumps(call_data),created_at=now()));add_task(db,lid,'Return / review client call',key='call:'+eid)
+            insert(db,'calls',dict(id=uid('CALL'),legacy_id=eid,lead_id=lid,payload_json=dumps(call_data),created_at=now()))
+            add_task(db,lid,'Return / review voicemail' if 'voice' in str(call_data['disposition']).lower() else 'Return / review client call',key='call:'+eid)
         if body:
             insert(db,'messages',dict(id=uid('MSG'),lead_id=lid,kind='Incoming '+kind,subject=text(data.get('subject',''),'Subject',300),body=body,language=target.get('language','English'),author=actor,created_at=now()))
         if kind in ('call','email'):
