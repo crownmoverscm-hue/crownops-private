@@ -8,13 +8,16 @@ import base64
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 import requests
 
 from .store import connect, transaction, one, rows, insert, audit, uid, now, dumps
 
+
+MONTREAL = ZoneInfo("America/Toronto")
 
 FEEDS = {
     'quote': 'New Quote Request',
@@ -208,7 +211,25 @@ def _call_payload(kind, subject, body, attachments):
 
 
 
-def _duplicate_call(db, parsed, seconds=90):
+
+def _call_occurred_iso(parsed):
+    raw=str((parsed or {}).get('call_time') or (parsed or {}).get('occurred_at') or '').strip()
+    if not raw:
+        return ''
+    try:
+        local=datetime.strptime(raw,'%m/%d/%Y %H:%M:%S').replace(tzinfo=MONTREAL)
+        return local.astimezone(timezone.utc).isoformat(timespec='seconds')
+    except ValueError:
+        pass
+    try:
+        dt=datetime.fromisoformat(raw.replace('Z','+00:00'))
+        if dt.tzinfo is None:
+            dt=dt.replace(tzinfo=MONTREAL)
+        return dt.astimezone(timezone.utc).isoformat(timespec='seconds')
+    except ValueError:
+        return ''
+
+def _duplicate_call(db, parsed, event_type, seconds=90):
     phone = parsed.get('phone') or ''
     caller = (parsed.get('caller') or '').lower()
     stamp = parsed.get('call_time') or ''
@@ -218,7 +239,7 @@ def _duplicate_call(db, parsed, seconds=90):
         current = datetime.strptime(stamp, '%m/%d/%Y %H:%M:%S')
     except ValueError:
         return False
-    recent = rows(db, "SELECT payload_json FROM integration_events WHERE event_type IN ('gmail_missed_call','gmail_voicemail') ORDER BY created_at DESC LIMIT 80")
+    recent = rows(db, "SELECT payload_json FROM integration_events WHERE event_type=? ORDER BY created_at DESC LIMIT 80",(event_type,))
     for item in recent:
         try:
             old = json.loads(item['payload_json']).get('parsed', {})
@@ -398,7 +419,7 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                     parsed = _call_payload(feed, subject, body, attachments)
                     payload['parsed'] = parsed
                     event_type = 'gmail_missed_call' if feed == 'missed_call' else 'gmail_voicemail'
-                    if _duplicate_call(db, parsed):
+                    if _duplicate_call(db, parsed, event_type):
                         event_type = 'gmail_duplicate_call'
                         status = 'Ignored'
                         summary['ignored'] += 1
