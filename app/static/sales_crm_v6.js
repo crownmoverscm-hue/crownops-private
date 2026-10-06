@@ -138,7 +138,7 @@ async function crmNewService(cid){
 }
 async function crmQuoteBuilder(leadId){
  const templates=await api('/crm/templates');CRM.templates=templates;
- const firstSetup=await api('/crm/quote-setup?lead_id='+encodeURIComponent(leadId)+'&movers=2');CRM.currentLead=firstSetup.lead;
+ const firstSetup=await api('/crm/quote-setup?lead_id='+encodeURIComponent(leadId)+'&movers=2');CRM.currentLead=firstSetup.lead;CRM.longDistancePresets=firstSetup.long_distance_presets||[];
  const lead=firstSetup.lead;const lang=String(lead.language||'English').toLowerCase().startsWith('fr')?'French':'English';
  const type=['Moving','Packing','Junk Removal','Long Distance'].includes(lead.lead_type)?lead.lead_type:'Moving';
  const template=templates.find(t=>t.service_type===type&&t.language===lang)||templates[0];
@@ -166,10 +166,11 @@ async function crmQuoteBuilder(leadId){
    '<label id="crm-small-afternoon-wrap" class="checkbox-label full"><input type="checkbox" name="small_afternoon_job"><span><strong>Small afternoon job</strong><br><span class="tiny muted">Use only for a small local Moving/Packing job. Sets Afternoon 1:00-4:00 PM and a 1.5-hour service minimum.</span></span></label>'+
    field('deposit_required','Deposit required',300,'number','step="0.01" min="0"')+
    '</div></div>'+
-   '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted">Local: transportation hours × team rate, plus $25 per extra truck. Long distance: enter the true total driving time for the route from the 700 Rue Hodge base through the job and back to base; when it is 1 hour or more, CrownOps bills that driving time at 1.15× before multiplying by the team hourly rate. Distance remains $0.94/km per truck.</p><div class="grid2">'+
+   '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted">Local: transportation hours × team rate, plus $25 per extra truck. Long distance: enter true total driving time from 700 Rue Hodge through the route and back to base. Driving time of 1 hour+ is billed at 1.15×. Gas/distance uses actual round-trip road KM + 5%, then $0.94/km per truck.</p><div class="grid2">'+
+   select('distance_preset','Long-distance city preset',[['','Manual / exact route']].concat((firstSetup.long_distance_presets||[]).map(p=>[p.key,p.city+', '+p.province+' · '+p.round_trip_km+' km round trip'])),'')+
    field('transport_hours','True driving / transportation hours',1,'number','step="0.25" min="0"')+
    field('fixed_transport','OR fixed transportation fee','','number','step="0.01" min="0"')+
-   field('distance_km','Long-distance km',0,'number','step="1" min="0"')+
+   field('distance_km','Actual round-trip road km',0,'number','step="1" min="0"')+
    field('distance_rate','Long-distance rate / km',0.94,'number','step="0.01" min="0"')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-junk-fields" style="display:none"><div class="eyebrow">JUNK REMOVAL</div><div class="grid2">'+
@@ -204,6 +205,7 @@ function crmRenderCalc(r){
  '<div class="quote-line"><span>'+(r.service_type==='Long Distance'?'Long Distance Transportation Fee':'Transportation Fee')+'</span><strong>'+crmCash(r.transport_cents)+'</strong></div>'+
  (r.service_type==='Long Distance'&&r.transport_hours?'<div class="quote-line"><span>True / billable driving hours</span><strong>'+h(r.transport_hours)+' h → '+h(r.billable_transport_hours)+' h</strong></div>':'')+
  '<div class="quote-line"><span>Fuel / distance</span><strong>'+crmCash(r.fuel_cents)+'</strong></div>'+
+ (r.service_type==='Long Distance'&&r.distance_km?'<div class="quote-line"><span>Actual / adjusted distance</span><strong>'+h(r.distance_km)+' km → '+h(r.adjusted_distance_km)+' km</strong></div>':'')+
  '<div class="quote-line"><span>Materials</span><strong>'+crmCash(r.materials_cents)+'</strong></div>'+
  '<div class="quote-line"><span>Other / discount</span><strong>'+crmCash((r.other_cents||0)-(r.discount_cents||0))+'</strong></div>'+
  '<div class="tiny" style="margin-top:12px">'+h(r.movers)+' movers · '+h(r.trucks)+' truck(s)'+(r.hourly_rate_cents?' · '+crmCash(r.hourly_rate_cents)+'/h':'')+'</div>';
@@ -315,6 +317,10 @@ document.addEventListener('change',async e=>{
    const f=document.getElementById('crm-quote-form');
    if(e.target.name==='service_type'){crmToggleServiceFields();const type=e.target.value,lang=f.elements.language.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
    if(e.target.name==='language'){const type=f.elements.service_type.value,lang=e.target.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
+   if(e.target.name==='distance_preset'){
+     const p=(CRM.longDistancePresets||[]).find(x=>x.key===e.target.value);
+     if(p){f.elements.distance_km.value=String(p.round_trip_km);toast(p.city+' preset loaded: '+p.round_trip_km+' km actual round trip; CrownOps adds the 5% distance buffer automatically.');}
+   }
    if(e.target.name==='start_window'){
      crmToggleStartTime();
      if(e.target.value!=='afternoon'&&f.elements.small_afternoon_job?.checked){f.elements.small_afternoon_job.checked=false;f.elements.minimum_hours.value='3';toast('Small afternoon job was turned off because the arrival window changed.');}
