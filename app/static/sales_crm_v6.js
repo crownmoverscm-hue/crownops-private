@@ -208,7 +208,8 @@ function crmRenderCalc(r){
  (r.service_type==='Long Distance'&&r.distance_km?'<div class="quote-line"><span>Actual / adjusted distance</span><strong>'+h(r.distance_km)+' km → '+h(r.adjusted_distance_km)+' km</strong></div>':'')+
  '<div class="quote-line"><span>Materials</span><strong>'+crmCash(r.materials_cents)+'</strong></div>'+
  '<div class="quote-line"><span>Other / discount</span><strong>'+crmCash((r.other_cents||0)-(r.discount_cents||0))+'</strong></div>'+
- '<div class="tiny" style="margin-top:12px">'+h(r.movers)+' movers · '+h(r.trucks)+' truck(s)'+(r.hourly_rate_cents?' · '+crmCash(r.hourly_rate_cents)+'/h':'')+'</div>';
+ '<div class="tiny" style="margin-top:12px">'+h(r.movers)+' movers · '+h(r.trucks)+' truck(s)'+(r.hourly_rate_cents?' · '+crmCash(r.hourly_rate_cents)+'/h':'')+'</div>'+
+ (r.hos_plan?'<div class="spacer"></div><div class="callout '+(r.hos_plan.one_day_possible?'teal':'orange')+'"><strong>Quebec heavy-vehicle HOS planning</strong><div class="small">'+h(r.hos_plan.status)+'</div><div class="tiny" style="margin-top:6px">'+h(r.hos_plan.true_driving_hours)+' h driving · '+h(r.hos_plan.estimated_on_duty_hours)+' h estimated on-duty · '+h(r.hos_plan.minimum_schedule_days)+' day(s) minimum. Final dispatch must verify the assigned driver\'s rest, 16-hour elapsed window and cycle availability.</div></div>':'');
 }
 function crmToggleStartTime(){
  const f=document.getElementById('crm-quote-form');if(!f)return;const wrap=document.getElementById('crm-custom-start');if(!wrap)return;
@@ -250,6 +251,7 @@ async function crmOpenQuote(qid){
    '<div class="quote-line"><span>'+(r.service_type==='Long Distance'?'Long Distance Transportation Fee':'Transportation Fee')+'</span><strong>'+crmCash(r.transport_cents)+'</strong></div>'+
    (r.service_type==='Long Distance'&&r.transport_hours?'<div class="quote-line"><span>True / billable driving hours</span><strong>'+h(r.transport_hours)+' h → '+h(r.billable_transport_hours)+' h</strong></div>':'')+
    '<div class="quote-line"><span>Fuel / distance</span><strong>'+crmCash(r.fuel_cents)+'</strong></div></div>'+
+   (r.hos_plan?'<div class="spacer"></div><div class="callout '+(r.hos_plan.one_day_possible?'teal':'orange')+'"><strong>Quebec HOS plan</strong>'+h(r.hos_plan.status)+'<br><span class="tiny">'+h(r.hos_plan.true_driving_hours)+' h driving · '+h(r.hos_plan.estimated_on_duty_hours)+' h estimated on-duty · final driver log/cycle verification required.</span></div>':'')+
    '<div class="spacer"></div><div class="panel panel-body">'+crmLineTable(r)+'</div></div>'+
    '<div class="stack"><div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3>'+h(l.client_name)+'</h3><p>'+h(l.email)+'<br>'+h(l.phone)+'</p><p class="small muted">'+h(l.pickup||'Pickup needed')+' → '+h(l.dropoff||'Destination needed')+'</p></div>'+
    '<div class="callout teal"><strong>'+h(q.inputs?.template_snapshot?.title||'Included')+'</strong>'+h(q.inputs?.template_snapshot?.liability||'Free limited liability coverage: $0.60/lb per article.')+(q.inputs?.template_snapshot?.fragile?'<br><br>'+h(q.inputs.template_snapshot.fragile):'')+(q.inputs?.template_snapshot?.blank_notes?'<br><br>'+h(q.inputs.template_snapshot.blank_notes):'')+'</div>'+
