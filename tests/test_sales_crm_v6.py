@@ -106,13 +106,15 @@ class SalesCrmV6Tests(unittest.TestCase):
             with transaction(path) as db:
                 r=calculate(db,{"service_type":"Long Distance","language":"English","move_date":"2026-10-15",
                     "movers":3,"trucks":1,"hours_low":4,"hours_high":5,"minimum_hours":3,
-                    "transport_hours":12,"distance_km":1080,"distance_rate":0.94,
+                    "transport_hours":12,"distance_km":1082,"distance_rate":0.94,
                     "materials":[],"other_amount":0,"discount_amount":0})
             self.assertEqual(r["transport_hours"],12.0)
             self.assertEqual(r["billable_transport_hours"],13.8)
             self.assertEqual(r["transport_multiplier"],1.15)
             self.assertEqual(r["transport_cents"],241500)  # 13.8 x $175
-            self.assertEqual(r["fuel_cents"],101520)       # 1080 km x $0.94 x 1 truck
+            self.assertEqual(r["distance_km"],1082.0)
+            self.assertAlmostEqual(r["adjusted_distance_km"],1136.1,places=1)
+            self.assertEqual(r["fuel_cents"],106793)       # 1082 km x 1.05 x $0.94 x 1 truck
             self.assertEqual(r["line_items"][1]["name"],"Long Distance Transportation Fee")
         finally:
             td.cleanup()
@@ -128,10 +130,17 @@ class SalesCrmV6Tests(unittest.TestCase):
             self.assertEqual(r["transport_hours"],0)
             self.assertEqual(r["billable_transport_hours"],0)
             self.assertEqual(r["transport_cents"],245000)
-            self.assertEqual(r["fuel_cents"],101520)
+            self.assertAlmostEqual(r["adjusted_distance_km"],567.0,places=1)
+            self.assertEqual(r["fuel_cents"],106596)
             self.assertEqual(r["distance_rate_cents"],94)
         finally:
             td.cleanup()
+
+    def test_toronto_distance_rule_matches_crown_example(self):
+        actual=1082
+        adjusted=actual*1.05
+        self.assertAlmostEqual(adjusted,1136.1,places=1)
+        self.assertEqual(round(adjusted*0.94,2),1067.93)
 
     def test_junk_removal_tiers_and_extra_labour(self):
         td,path=self.make_db()
