@@ -28,6 +28,7 @@ class EnvMixin:
         "CROWNOPS_SECRET_KEY",
         "CROWNOPS_SCAN_COMMAND",
         "CROWNOPS_UPLOADS_ENABLED",
+        "CROWNOPS_UPLOADS",
     )
 
     def setUp(self):
@@ -212,6 +213,62 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             on_duty_since_last_24h_off=30,consecutive_off_duty_before_shift=8,had_24h_off_in_prev_14d=1,
             dce_log_checked=1,daily_off_duty_plan_checked=1,elapsed_window_checked=1,projected_on_duty_hours=17,
             status="Verified",note="Current DCE reviewed for dispatch.",verified_by="dispatcher",verified_at=now()))
+
+    def test_crown_tax_defaults_and_deferred_fleet_document_setup(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            os.environ["CROWNOPS_UPLOADS"]=str(root/"uploads")
+            db_path=root/"crownops.sqlite3"
+            app=create_app(db_path)
+            token="fleet-owner-session";csrf="fleet-owner-csrf"
+            expiry=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(timespec="seconds")
+            with transaction(db_path) as db:
+                insert(db,"users",dict(id="USER-FLEET",email="fleet-owner@example.invalid",name="Fleet Owner",role="owner",
+                    password_hash="unused-test-hash",active=1,created_at=now()))
+                insert(db,"sessions",dict(token_hash=sha(token),user_id="USER-FLEET",csrf=csrf,expires_at=expiry))
+                insert(db,"vehicles",dict(id="TRUCK-DEFERRED",name="Deferred Fleet Truck",active=1))
+                insert(db,"fleet_profiles",dict(vehicle_id="TRUCK-DEFERRED",inspection_interval_hours=24,
+                    check_required=0,updated_at=now()))
+
+            client=TestClient(app);client.cookies.set("crownops_session",token)
+            headers={"x-csrf-token":csrf}
+
+            settings_response=client.get("/api/platform/settings")
+            self.assertEqual(settings_response.status_code,200,settings_response.text)
+            billing=settings_response.json()["billing_policy"]
+            self.assertFalse(bool(billing.get("approved")))
+            taxes=billing["terms"]["taxes"]
+            self.assertEqual(taxes[0],{"name":"GST","rate_percent":5.0,"registration":"737446534RT001"})
+            self.assertEqual(taxes[1],{"name":"QST","rate_percent":9.975,"registration":"1227197265TQ001"})
+
+            readiness=client.get("/api/readiness")
+            self.assertEqual(readiness.status_code,200,readiness.text)
+            fleet_item=next(x for x in readiness.json()["launch"]["items"] if x["key"]=="fleet_gvwr")
+            self.assertFalse(fleet_item["ready"])
+            self.assertFalse(fleet_item["critical"])
+            self.assertIn("TRUCK-DEFERRED",[x["id"] for x in readiness.json()["launch"]["missing_gvwr"]])
+
+            pdf=b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n"
+            uploaded=client.post("/api/fleet/TRUCK-DEFERRED/documents",headers=headers,
+                files={"file":("registration.pdf",pdf,"application/pdf")},
+                data={"category":"Registration"})
+            self.assertEqual(uploaded.status_code,200,uploaded.text)
+            doc=uploaded.json();self.assertEqual(doc["scan_status"],"Quarantined")
+
+            fleet=client.get("/api/fleet")
+            self.assertEqual(fleet.status_code,200,fleet.text)
+            truck=next(x for x in fleet.json() if x["id"]=="TRUCK-DEFERRED")
+            self.assertEqual(len(truck["documents"]),1)
+            self.assertEqual(truck["documents"][0]["id"],doc["id"])
+
+            blocked=client.get("/api/fleet-documents/"+doc["id"])
+            self.assertEqual(blocked.status_code,409)
+            reviewed=client.post("/api/fleet-documents/"+doc["id"]+"/review",headers=headers,
+                json={"decision":"Clean","note":"Test-only safety review for fleet document."})
+            self.assertEqual(reviewed.status_code,200,reviewed.text)
+            downloaded=client.get("/api/fleet-documents/"+doc["id"])
+            self.assertEqual(downloaded.status_code,200,downloaded.text)
+            self.assertEqual(downloaded.content,pdf)
 
     def test_hos_cycle_capacity_blocks_insufficient_cycle_hours(self):
         self.assertEqual(hos_cycle_capacity_errors(1,50,50,17),[])
