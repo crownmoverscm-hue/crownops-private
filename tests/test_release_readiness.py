@@ -1,5 +1,6 @@
 import os
 import tempfile
+import json
 import unittest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -15,6 +16,7 @@ from app.providers import qbo_customer, qbo_invoice_payload, qbo_mapping, qbo_re
 from app.backups import make_backup, restore_archive
 from app.security import validate_deployment
 from app.operations import hos_dispatch_status, hos_cycle_capacity_errors
+from app.gmail_sync import promote_pending_call_events
 
 
 class EnvMixin:
@@ -325,8 +327,9 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 insert(db,"client_account_leads",dict(client_id="CLIENT-FORM",lead_id="LEAD-FORM",created_at="2026-10-05T12:00:00+00:00"))
                 insert(db,"client_account_leads",dict(client_id="CLIENT-VOICE",lead_id="LEAD-VOICE",created_at="2026-09-20T12:00:00+00:00"))
                 insert(db,"calls",dict(id="CALL-VOICE",legacy_id="phone-event-1",lead_id="LEAD-VOICE",
-                    payload_json=dumps({"source":"Phone system","phone":"5145551002","disposition":"Voicemail",
-                        "note":"Please call me back about my move.","occurred_at":"2026-10-06T13:00:00+00:00"}),
+                    payload_json=dumps({"source":"Gmail / UniFi","phone":"5145551002","caller":"Older Client",
+                        "voicemail":True,"subject":"You Have a New Voicemail from Older Client",
+                        "call_time":"10/06/2026 09:00:00"}),
                     created_at="2026-10-06T13:00:00+00:00"))
 
             client=TestClient(app);client.cookies.set("crownops_session",token)
@@ -335,10 +338,48 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             clients=response.json()
             self.assertEqual(clients[0]["id"],"CLIENT-VOICE")
             self.assertEqual(clients[0]["latest_activity"]["label"],"Voicemail")
-            self.assertEqual(clients[0]["latest_activity"]["source"],"Phone system")
-            self.assertIn("call me back",clients[0]["latest_activity"]["summary"])
+            self.assertEqual(clients[0]["latest_activity"]["source"],"Gmail / UniFi")
+            self.assertIn("New Voicemail",clients[0]["latest_activity"]["summary"])
             self.assertEqual(clients[1]["id"],"CLIENT-FORM")
             self.assertEqual(clients[1]["latest_activity"]["label"],"Quote request")
+
+    def test_existing_gmail_voicemail_review_item_promotes_into_sales_locally(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            initialize(db_path)
+            from app.sales_crm_v6 import schema as crm_schema
+            crm_schema(db_path)
+            with transaction(db_path) as db:
+                insert(db,"leads",dict(id="LEAD-GMAIL-VOICE",client_name="Existing Caller",email="",phone="5145552200",
+                    move_date="",source="Manual",lead_type="Moving",stage="Contacted",archived_import=0,
+                    notifications_suppressed=1,raw_json="{}",version=1,created_at="2026-09-01T12:00:00+00:00",updated_at="2026-09-01T12:00:00+00:00"))
+                insert(db,"client_accounts",dict(id="CLIENT-GMAIL-VOICE",identity_key="p:5145552200",client_name="Existing Caller",
+                    email="",phone="5145552200",language="English",created_at="2026-09-01T12:00:00+00:00",updated_at="2026-09-01T12:00:00+00:00"))
+                insert(db,"client_account_leads",dict(client_id="CLIENT-GMAIL-VOICE",lead_id="LEAD-GMAIL-VOICE",created_at="2026-09-01T12:00:00+00:00"))
+                insert(db,"integration_events",dict(id="GMAIL-VOICE-1",event_key="gmail:message-voice-1",
+                    event_type="gmail_voicemail",object_id="message-voice-1",
+                    payload_json=dumps({"gmail_id":"message-voice-1","subject":"You Have a New Voicemail from Existing Caller",
+                        "snippet":"Please call back","parsed":{"kind":"Voicemail","caller":"Existing Caller","phone":"5145552200",
+                        "call_time":"10/06/2026 09:15:00","attachments":[]}}),
+                    status="Needs review",created_at="2026-10-06T13:15:00+00:00"))
+
+                def should_not_create_lead(*args,**kwargs):
+                    raise AssertionError("Existing caller should match by phone instead of creating a duplicate lead.")
+
+                promoted=promote_pending_call_events(db,"USER-INBOX",should_not_create_lead)
+                self.assertEqual(promoted,1)
+                event=one(db,"SELECT * FROM integration_events WHERE id='GMAIL-VOICE-1'")
+                self.assertEqual(event["status"],"Imported")
+                payload=json.loads(event["payload_json"])
+                self.assertEqual(payload["lead_id"],"LEAD-GMAIL-VOICE")
+                self.assertTrue(payload["call_id"])
+                call=one(db,"SELECT * FROM calls WHERE id=?",(payload["call_id"],))
+                self.assertIsNotNone(call)
+                details=json.loads(call["payload_json"])
+                self.assertTrue(details["voicemail"])
+                self.assertEqual(details["source"],"Gmail / UniFi")
+                task=one(db,"SELECT * FROM tasks WHERE lead_id='LEAD-GMAIL-VOICE' AND title='Review voicemail' AND status='Open'")
+                self.assertIsNotNone(task)
 
     def test_launch_simulation_long_distance_quote_to_dispatch_and_invoice_draft(self):
         with tempfile.TemporaryDirectory() as td:
