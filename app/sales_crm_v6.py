@@ -542,9 +542,19 @@ def register_sales_crm_v6(app,path,auth,public_url):
             q=one(db,"SELECT * FROM quotes WHERE id=? AND status='Accepted'",(qid,))
             if not q:raise HTTPException(409,"Only an accepted estimate can receive a deposit reminder.")
             l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],));qin=json.loads(q["inputs_json"]);amount=float(qin.get("deposit_required",300));fr=str(qin.get("language") or l["language"]).lower().startswith("fr")
+            dep=settings(db,"deposit_policy",{}) or {};interac=""
+            if dep.get("approved") and dep.get("enabled") and dep.get("recipient_email"):
+                if fr:
+                    interac=f"\n\nVirement Interac : {dep.get('recipient_email')} ({dep.get('recipient_name') or 'Crown Movers'})."
+                    if dep.get("auto_deposit",True):interac+=" Le depot automatique est active; aucun mot de passe n'est requis."
+                    if dep.get("reference_note"):interac+=" "+str(dep.get("reference_note"))
+                else:
+                    interac=f"\n\nInterac e-Transfer: {dep.get('recipient_email')} ({dep.get('recipient_name') or 'Crown Movers'})."
+                    if dep.get("auto_deposit",True):interac+=" Auto-deposit is enabled; no password is required."
+                    if dep.get("reference_note"):interac+=" "+str(dep.get("reference_note"))
             subject="Rappel amical - dépôt Crown Movers" if fr else "Friendly reminder - Crown Movers deposit"
-            body=(f"Bonjour {l['client_name']},\n\nPetit rappel amical : le dépôt de {amount:.2f} $ CA lié à votre réservation est toujours en attente. Si vous l'avez déjà envoyé, vous pouvez ignorer ce message. Sinon, répondez-nous si vous avez besoin des instructions de paiement.\n\nMerci,\nCrown Movers" if fr else
-              f"Hi {l['client_name']},\n\nA friendly reminder that the CAD {amount:.2f} deposit for your booking is still pending. If you already sent it, please disregard this message. Otherwise, reply if you need the payment instructions.\n\nThank you,\nCrown Movers")
+            body=(f"Bonjour {l['client_name']},\n\nPetit rappel amical : le dépôt de {amount:.2f} $ CA lié à votre réservation est toujours en attente. Si vous l'avez déjà envoyé, vous pouvez ignorer ce message.{interac}\n\nMerci,\nCrown Movers" if fr else
+              f"Hi {l['client_name']},\n\nA friendly reminder that the CAD {amount:.2f} deposit for your booking is still pending. If you already sent it, please disregard this message.{interac}\n\nThank you,\nCrown Movers")
             m=queue_message(db,l["id"],subject,body,"Follow-up",u["id"],"deposit-reminder:"+qid+":"+now()[:10])
         return {"id":m["id"],"status":m["status"]}
 
