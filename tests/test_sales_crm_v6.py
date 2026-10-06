@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from pathlib import Path
 
 from app.store import initialize, transaction, one
-from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours
+from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours, minimum_trucks_for_movers
 
 
 class SalesCrmV6Tests(unittest.TestCase):
@@ -47,17 +47,29 @@ class SalesCrmV6Tests(unittest.TestCase):
         finally:
             td.cleanup()
 
-    def test_four_or_more_movers_requires_two_trucks(self):
+    def test_minimum_trucks_follow_crown_crew_rules(self):
+        self.assertEqual(minimum_trucks_for_movers(2),1)
+        self.assertEqual(minimum_trucks_for_movers(3),1)
+        self.assertEqual(minimum_trucks_for_movers(4),2)
+        self.assertEqual(minimum_trucks_for_movers(5),2)
+        self.assertEqual(minimum_trucks_for_movers(6),3)
+
         td,path=self.make_db()
         try:
             with transaction(path) as db:
                 with self.assertRaises(HTTPException) as ctx:
                     calculate(db,{"service_type":"Moving","language":"English","move_date":"2026-10-15",
-                        "movers":4,"trucks":1,"hours_low":3,"hours_high":4,"minimum_hours":3,
+                        "movers":5,"trucks":1,"hours_low":3,"hours_high":4,"minimum_hours":3,
                         "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
                         "other_amount":0,"discount_amount":0})
-            self.assertEqual(ctx.exception.status_code,422)
-            self.assertIn("at least 2 trucks",str(ctx.exception.detail))
+                self.assertIn("at least 2 truck",str(ctx.exception.detail))
+
+                with self.assertRaises(HTTPException) as ctx:
+                    calculate(db,{"service_type":"Moving","language":"English","move_date":"2026-10-15",
+                        "movers":6,"trucks":2,"hours_low":3,"hours_high":4,"minimum_hours":3,
+                        "transport_hours":1,"distance_km":0,"distance_rate":0.94,"materials":[],
+                        "other_amount":0,"discount_amount":0})
+                self.assertIn("at least 3 truck",str(ctx.exception.detail))
         finally:
             td.cleanup()
 
