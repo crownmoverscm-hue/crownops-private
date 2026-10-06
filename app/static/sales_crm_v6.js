@@ -166,8 +166,8 @@ async function crmQuoteBuilder(leadId){
    '<label id="crm-small-afternoon-wrap" class="checkbox-label full"><input type="checkbox" name="small_afternoon_job"><span><strong>Small afternoon job</strong><br><span class="tiny muted">Use only for a small local Moving/Packing job. Sets Afternoon 1:00-4:00 PM and a 1.5-hour service minimum.</span></span></label>'+
    field('deposit_required','Deposit required',300,'number','step="0.01" min="0"')+
    '</div></div>'+
-   '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted">Local default: 1 × hourly rate. Extra trucks add $35 fuel each and $25 transportation each. Long distance defaults to $0.94/km per truck. Every amount can be reviewed.</p><div class="grid2">'+
-   field('transport_hours','Transportation hours used internally',1,'number','step="0.25" min="0"')+
+   '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted">Local: transportation hours × team rate, plus $25 per extra truck. Long distance: enter the true total driving time for the route from the 700 Rue Hodge base through the job and back to base; when it is 1 hour or more, CrownOps bills that driving time at 1.15× before multiplying by the team hourly rate. Distance remains $0.94/km per truck.</p><div class="grid2">'+
+   field('transport_hours','True driving / transportation hours',1,'number','step="0.25" min="0"')+
    field('fixed_transport','OR fixed transportation fee','','number','step="0.01" min="0"')+
    field('distance_km','Long-distance km',0,'number','step="1" min="0"')+
    field('distance_rate','Long-distance rate / km',0.94,'number','step="0.01" min="0"')+
@@ -201,7 +201,8 @@ function crmRenderCalc(r){
  CRM.lastCalc=r;const el=document.getElementById('crm-quote-result');if(!el)return;
  el.innerHTML='<div class="eyebrow">ESTIMATED RANGE · CAD</div><div class="quote-price">'+crmCash(r.low_cents)+' – '+crmCash(r.high_cents)+'</div>'+
  '<p class="muted">Before applicable taxes</p><div class="quote-line"><span>Service</span><strong>'+crmCash(r.service_low_cents)+' – '+crmCash(r.service_high_cents)+'</strong></div>'+
- '<div class="quote-line"><span>Transportation</span><strong>'+crmCash(r.transport_cents)+'</strong></div>'+
+ '<div class="quote-line"><span>'+(r.service_type==='Long Distance'?'Long Distance Transportation Fee':'Transportation Fee')+'</span><strong>'+crmCash(r.transport_cents)+'</strong></div>'+
+ (r.service_type==='Long Distance'&&r.transport_hours?'<div class="quote-line"><span>True / billable driving hours</span><strong>'+h(r.transport_hours)+' h → '+h(r.billable_transport_hours)+' h</strong></div>':'')+
  '<div class="quote-line"><span>Fuel / distance</span><strong>'+crmCash(r.fuel_cents)+'</strong></div>'+
  '<div class="quote-line"><span>Materials</span><strong>'+crmCash(r.materials_cents)+'</strong></div>'+
  '<div class="quote-line"><span>Other / discount</span><strong>'+crmCash((r.other_cents||0)-(r.discount_cents||0))+'</strong></div>'+
@@ -244,7 +245,8 @@ async function crmOpenQuote(qid){
    '<div class="quote-line"><span>Client template</span><strong>'+h(q.inputs?.template_snapshot?.name||q.inputs?.template_key||'—')+'</strong></div>'+
    '<div class="quote-line"><span>Crew</span><strong>'+h(r.movers||'—')+' movers · '+h(r.trucks||'—')+' truck(s)</strong></div>'+
    (r.hourly_rate_cents?'<div class="quote-line"><span>Hourly rate</span><strong>'+crmCash(r.hourly_rate_cents)+'/h</strong></div>':'')+
-   '<div class="quote-line"><span>Transportation</span><strong>'+crmCash(r.transport_cents)+'</strong></div>'+
+   '<div class="quote-line"><span>'+(r.service_type==='Long Distance'?'Long Distance Transportation Fee':'Transportation Fee')+'</span><strong>'+crmCash(r.transport_cents)+'</strong></div>'+
+   (r.service_type==='Long Distance'&&r.transport_hours?'<div class="quote-line"><span>True / billable driving hours</span><strong>'+h(r.transport_hours)+' h → '+h(r.billable_transport_hours)+' h</strong></div>':'')+
    '<div class="quote-line"><span>Fuel / distance</span><strong>'+crmCash(r.fuel_cents)+'</strong></div></div>'+
    '<div class="spacer"></div><div class="panel panel-body">'+crmLineTable(r)+'</div></div>'+
    '<div class="stack"><div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3>'+h(l.client_name)+'</h3><p>'+h(l.email)+'<br>'+h(l.phone)+'</p><p class="small muted">'+h(l.pickup||'Pickup needed')+' → '+h(l.dropoff||'Destination needed')+'</p></div>'+
