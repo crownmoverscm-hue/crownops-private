@@ -307,9 +307,11 @@ def _record_call_and_followup(db, lead_id, parsed, subject, actor, gmail_id, eve
         'attachments': parsed.get('attachments') or [],
     }
     insert(db, 'calls', dict(id=cid, legacy_id=None, lead_id=lead_id, payload_json=dumps(details), created_at=occurred_at))
-    open_task = one(db, "SELECT id FROM tasks WHERE lead_id=? AND title=? AND status!='Done' AND historical=0 ORDER BY created_at DESC LIMIT 1", (lead_id, title))
+    open_task = one(db, "SELECT id,title FROM tasks WHERE lead_id=? AND title IN ('Return missed call','Review voicemail') AND status='Open' AND historical=0 ORDER BY CASE WHEN title='Review voicemail' THEN 0 ELSE 1 END, created_at DESC LIMIT 1", (lead_id,))
     if not open_task:
-        insert(db, 'tasks', dict(id=uid('TASK'), legacy_id=None, lead_id=lead_id, title=title, due_date=now()[:10], owner='', status='Open', historical=0, raw_json=dumps({'call_id': cid, 'gmail_id': gmail_id}), created_at=now()))
+        insert(db, 'tasks', dict(id=uid('TASK'), legacy_id=None, lead_id=lead_id, title=title, due_date=occurred_at[:10], owner='', status='Open', historical=0, raw_json=dumps({'call_id': cid, 'gmail_id': gmail_id}), created_at=occurred_at))
+    elif title=='Review voicemail' and open_task.get('title')!='Review voicemail':
+        db.execute("UPDATE tasks SET title=?,raw_json=? WHERE id=?",('Review voicemail',dumps({'call_id':cid,'gmail_id':gmail_id}),open_task['id']))
     return cid
 
 
