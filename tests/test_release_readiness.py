@@ -69,6 +69,63 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             ):
                 self.assertIn(required, paths)
 
+    def test_today_action_center_filters_current_work_by_owner_and_groups_gmail_payments(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            app=create_app(db_path)
+            now_utc=datetime.now(timezone.utc)
+            today_local=datetime.now().date().isoformat()
+            tomorrow=(datetime.now().date()+timedelta(days=1)).isoformat()
+            expiry=(now_utc+timedelta(days=1)).isoformat(timespec="seconds")
+            with transaction(db_path) as db:
+                insert(db,"users",dict(id="USER-OWNER-TODAY",email="owner.today@example.invalid",name="Owner Today",role="owner",
+                    password_hash="unused-test-hash",active=1,created_at=now()))
+                insert(db,"users",dict(id="USER-SALES-TODAY",email="sales.today@example.invalid",name="Sales Today",role="sales",
+                    password_hash="unused-test-hash",active=1,created_at=now()))
+                insert(db,"sessions",dict(token_hash=sha("owner-today-session"),user_id="USER-OWNER-TODAY",csrf="csrf-owner",expires_at=expiry))
+                insert(db,"sessions",dict(token_hash=sha("sales-today-session"),user_id="USER-SALES-TODAY",csrf="csrf-sales",expires_at=expiry))
+                insert(db,"leads",dict(id="LEAD-TODAY-ASSIGNED",client_name="Assigned Client",assigned_to="USER-SALES-TODAY",
+                    created_at=now(),updated_at=now()))
+                insert(db,"leads",dict(id="LEAD-TODAY-OPEN",client_name="Open Client",
+                    created_at=now(),updated_at=now()))
+                insert(db,"tasks",dict(id="TASK-TODAY-MINE",lead_id="LEAD-TODAY-ASSIGNED",title="Call assigned client",
+                    due_date=today_local,owner="USER-SALES-TODAY",status="Open",historical=0,created_at=now()))
+                insert(db,"tasks",dict(id="TASK-TODAY-OPEN",lead_id="LEAD-TODAY-OPEN",title="Call unclaimed client",
+                    due_date=today_local,owner="",status="Open",historical=0,created_at=now()))
+                insert(db,"tasks",dict(id="TASK-TODAY-FUTURE",lead_id="LEAD-TODAY-OPEN",title="Future follow-up",
+                    due_date=tomorrow,owner="",status="Open",historical=0,created_at=now()))
+                insert(db,"tasks",dict(id="TASK-TODAY-HISTORY",lead_id="LEAD-TODAY-OPEN",title="Imported history",
+                    due_date=today_local,owner="",status="Open",historical=1,created_at=now()))
+                insert(db,"tasks",dict(id="TASK-TODAY-DONE",lead_id="LEAD-TODAY-OPEN",title="Already done",
+                    due_date=today_local,owner="",status="Done",historical=0,created_at=now()))
+                for n in (1,2):
+                    insert(db,"integration_events",dict(id=f"GMAIL-PAY-TODAY-{n}",event_key=f"gmail:pay:today:{n}",
+                        event_type="gmail_bank_payment",object_id=f"gmail-pay-{n}",
+                        payload_json=dumps({"parsed":{"payer":f"Payer {n}","amount":"300.00"}}),
+                        status="Needs review",created_at=now()))
+            owner=TestClient(app);owner.cookies.set("crownops_session","owner-today-session")
+            team=owner.get("/api/ux/today?view=team")
+            self.assertEqual(team.status_code,200,team.text)
+            team_body=team.json()
+            self.assertEqual(team_body["view_counts"],{"unclaimed":2,"mine":0,"team":3})
+            self.assertEqual(team_body["stats"]["attention"],3)
+            self.assertEqual(team_body["stats"]["open_followups"],2)
+            self.assertEqual(team_body["stats"]["unverified_payments"],1)
+            self.assertEqual(len([x for x in team_body["attention"] if x["type"]=="gmail-payment-batch"]),1)
+            self.assertFalse(any(x["id"] in ("TASK-TODAY-FUTURE","TASK-TODAY-HISTORY","TASK-TODAY-DONE") for x in team_body["attention"]))
+
+            unclaimed=owner.get("/api/ux/today?view=unclaimed").json()
+            self.assertEqual(unclaimed["stats"]["attention"],2)
+            self.assertTrue(all(x["ownership"]=="unclaimed" for x in unclaimed["attention"]))
+
+            sales=TestClient(app);sales.cookies.set("crownops_session","sales-today-session")
+            mine=sales.get("/api/ux/today?view=mine")
+            self.assertEqual(mine.status_code,200,mine.text)
+            mine_body=mine.json()
+            self.assertEqual(mine_body["stats"]["attention"],1)
+            self.assertEqual(mine_body["attention"][0]["id"],"TASK-TODAY-MINE")
+            self.assertEqual(mine_body["attention"][0]["owner_name"],"Sales Today")
+
     def test_gmail_readonly_diagnostic_reports_actual_account_and_required_labels(self):
         with tempfile.TemporaryDirectory() as td:
             db_path=Path(td)/"crownops.sqlite3"
