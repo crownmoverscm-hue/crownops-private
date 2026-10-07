@@ -64,6 +64,9 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 "/api/quickbooks/setup",
                 "/api/quickbooks/test-connection",
                 "/api/gmail/test-readonly",
+                "/api/ux/action-assignees",
+                "/api/ux/actions/{kind}/{action_id}/claim",
+                "/api/ux/actions/{kind}/{action_id}/assign",
                 "/api/invoices/{iid}/quickbooks",
                 "/api/quotes/{qid}/quickbooks",
                 "/api/payments/{pid}/quickbooks",
@@ -127,6 +130,89 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             self.assertEqual(mine_body["stats"]["attention"],1)
             self.assertEqual(mine_body["attention"][0]["id"],"TASK-TODAY-MINE")
             self.assertEqual(mine_body["attention"][0]["owner_name"],"Sales Today")
+
+    def test_action_claim_and_manager_reassignment_keep_client_work_together(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            app=create_app(db_path)
+            expiry=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(timespec="seconds")
+            local_day=datetime.now(timezone.utc).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+            with transaction(db_path) as db:
+                for user_id,email,name,role,active in (
+                    ("USER-ACTION-OWNER","action.owner@example.invalid","Action Owner","owner",1),
+                    ("USER-ACTION-A","action.a@example.invalid","Agent A","sales",1),
+                    ("USER-ACTION-B","action.b@example.invalid","Agent B","sales",1),
+                    ("USER-ACTION-CREW","action.crew@example.invalid","Crew User","crew",1),
+                    ("USER-ACTION-OFF","action.off@example.invalid","Inactive Agent","sales",0),
+                ):
+                    insert(db,"users",dict(id=user_id,email=email,name=name,role=role,password_hash="unused-test-hash",active=active,created_at=now()))
+                for token,user_id,csrf in (
+                    ("action-owner-session","USER-ACTION-OWNER","csrf-owner"),
+                    ("action-a-session","USER-ACTION-A","csrf-a"),
+                    ("action-b-session","USER-ACTION-B","csrf-b"),
+                ):
+                    insert(db,"sessions",dict(token_hash=sha(token),user_id=user_id,csrf=csrf,expires_at=expiry))
+                insert(db,"leads",dict(id="LEAD-ACTION",client_name="Action Client",assigned_to="",created_at=now(),updated_at=now()))
+                insert(db,"tasks",dict(id="TASK-ACTION-1",lead_id="LEAD-ACTION",title="Return client call",
+                    due_date=local_day,owner="",status="Open",historical=0,created_at=now()))
+                insert(db,"tasks",dict(id="TASK-ACTION-2",lead_id="LEAD-ACTION",title="Send estimate",
+                    due_date=local_day,owner="",status="Open",historical=0,created_at=now()))
+                insert(db,"messages",dict(id="MSG-ACTION",lead_id="LEAD-ACTION",kind="Incoming email",
+                    subject="Client reply",body="Please call me.",language="English",author="sync",created_at=now()))
+                insert(db,"integration_events",dict(id="GMAIL-PAY-ACTION",event_key="gmail:pay:action",
+                    event_type="gmail_bank_payment",object_id="gmail-pay-action",
+                    payload_json=dumps({"parsed":{"payer":"Action Payer","amount":"300.00"}}),
+                    status="Needs review",created_at=now()))
+
+            agent_a=TestClient(app);agent_a.cookies.set("crownops_session","action-a-session")
+            claimed=agent_a.post("/api/ux/actions/task/TASK-ACTION-1/claim")
+            self.assertEqual(claimed.status_code,200,claimed.text)
+            with transaction(db_path) as db:
+                lead=one(db,"SELECT assigned_to FROM leads WHERE id='LEAD-ACTION'")
+                self.assertEqual(lead["assigned_to"],"USER-ACTION-A")
+                task_owners={r[0] for r in db.execute("SELECT owner FROM tasks WHERE lead_id='LEAD-ACTION' AND status!='Done'").fetchall()}
+                self.assertEqual(task_owners,{"USER-ACTION-A"})
+                inbox=one(db,"SELECT claimed_by,resolved_at FROM inbox_claims WHERE message_id='MSG-ACTION'")
+                self.assertEqual(inbox["claimed_by"],"USER-ACTION-A")
+                self.assertIsNone(inbox["resolved_at"])
+
+            agent_b=TestClient(app);agent_b.cookies.set("crownops_session","action-b-session")
+            conflict=agent_b.post("/api/ux/actions/task/TASK-ACTION-1/claim")
+            self.assertEqual(conflict.status_code,409,conflict.text)
+            forbidden=agent_a.post("/api/ux/actions/task/TASK-ACTION-1/assign",json={"user_id":"USER-ACTION-B"})
+            self.assertEqual(forbidden.status_code,403,forbidden.text)
+
+            owner=TestClient(app);owner.cookies.set("crownops_session","action-owner-session")
+            reassigned=owner.post("/api/ux/actions/task/TASK-ACTION-1/assign",json={"user_id":"USER-ACTION-B"})
+            self.assertEqual(reassigned.status_code,200,reassigned.text)
+            with transaction(db_path) as db:
+                self.assertEqual(one(db,"SELECT assigned_to FROM leads WHERE id='LEAD-ACTION'")["assigned_to"],"USER-ACTION-B")
+                task_owners={r[0] for r in db.execute("SELECT owner FROM tasks WHERE lead_id='LEAD-ACTION' AND status!='Done'").fetchall()}
+                self.assertEqual(task_owners,{"USER-ACTION-B"})
+                self.assertEqual(one(db,"SELECT claimed_by FROM inbox_claims WHERE message_id='MSG-ACTION'")["claimed_by"],"USER-ACTION-B")
+                audit_count=db.execute("SELECT count(*) FROM audit WHERE action='Action reassigned'").fetchone()[0]
+                self.assertGreaterEqual(audit_count,1)
+
+            batch_claim=agent_a.post("/api/ux/actions/gmail-payment-batch/gmail-payment-review/claim")
+            self.assertEqual(batch_claim.status_code,200,batch_claim.text)
+            batch_conflict=agent_b.post("/api/ux/actions/gmail-payment-batch/gmail-payment-review/claim")
+            self.assertEqual(batch_conflict.status_code,409,batch_conflict.text)
+            batch_assign=owner.post("/api/ux/actions/gmail-payment-batch/gmail-payment-review/assign",json={"user_id":"USER-ACTION-B"})
+            self.assertEqual(batch_assign.status_code,200,batch_assign.text)
+            mine=agent_b.get("/api/ux/today?view=mine")
+            self.assertEqual(mine.status_code,200,mine.text)
+            ids={x["id"] for x in mine.json()["attention"]}
+            self.assertIn("TASK-ACTION-1",ids)
+            self.assertIn("TASK-ACTION-2",ids)
+            self.assertIn("gmail-payment-review",ids)
+
+            assignees=owner.get("/api/ux/action-assignees")
+            self.assertEqual(assignees.status_code,200,assignees.text)
+            assignee_ids={x["id"] for x in assignees.json()}
+            self.assertIn("USER-ACTION-A",assignee_ids)
+            self.assertIn("USER-ACTION-B",assignee_ids)
+            self.assertNotIn("USER-ACTION-CREW",assignee_ids)
+            self.assertNotIn("USER-ACTION-OFF",assignee_ids)
 
     def test_gmail_readonly_diagnostic_reports_actual_account_and_required_labels(self):
         with tempfile.TemporaryDirectory() as td:
