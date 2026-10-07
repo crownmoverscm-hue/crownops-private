@@ -370,9 +370,11 @@ document.addEventListener('click',async e=>{
     modal.close();toast(userId?'Assignment updated.':'Action returned to Unclaimed.');
     return navigate(S.page);
   }
+  if(a==='action-workspace')return uxOpenActionWorkspace(el.dataset.kind,id);
+  if(a==='action-outcome-open')return uxActionOutcomeForm(el.dataset.kind,id,el.dataset.outcome);
   if(a==='attention'){
     const k=el.dataset.kind,lid=el.dataset.lead;
-    if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='task'&&lid)return openLead(lid);if(k==='payment')return navigate('payments');if(k==='gmail'||k==='gmail-payment-batch')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
+    if(k==='task'&&lid)return uxOpenActionWorkspace('task',id);if(k==='email'&&lid)return uxOpenActionWorkspace('email',id);if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='payment')return navigate('payments');if(k==='gmail'||k==='gmail-payment-batch')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
   }
   if(a==='search-open'){modal.close();if(el.dataset.type==='client')return openLead(id);if(el.dataset.type==='job')return openJob(id);if(el.dataset.type==='invoice')return openInvoice(id);}
   if(a==='estimate-open')return openQuote(id);
