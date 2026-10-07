@@ -1,6 +1,6 @@
 /* CrownOps v5.4 simplified job review pass: simple defaults, useful exceptions, clean role-based UX. */
 'use strict';
-const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
+const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,actionAssignees:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
 
 // ---------- Navigation: show the things people actually use ----------
 ensureNav(['communications','mail','Communications']);
@@ -51,9 +51,23 @@ dashboard=async function(){
  `<div class="grid3">${panel('Sales',`<p class="small muted">New inquiries, quotes and client conversations.</p>${btn('go-sales','Open sales','btn-soft')}`)}${panel('Operations',`<p class="small muted">Schedule, invoices, time off and field work.</p>${btn('go-schedule','Open schedule','btn-soft')}`)}${panel('Company setup',`<p class="small muted">Rates, materials, documents, fleet and connections.</p><button data-page="settings" class="btn-soft">Open setup</button>`)}</div>`;
 };
 
+function uxActionAssignmentButtons(kind,id,owner){
+ const attrs=`data-kind="${h(kind)}" data-id="${h(id||'')}"`;
+ const claim=!owner?`<button class="btn-small" data-ux="action-claim" ${attrs}>Claim</button>`:'';
+ const assign=S.user.role==='owner'?`<button class="btn-small" data-ux="action-assign" ${attrs} data-owner="${h(owner||'')}">${owner?'Reassign':'Assign'}</button>`:'';
+ return claim+assign;
+}
 function uxAttentionButton(a){
  const attrs=`data-ux="attention" data-kind="${h(a.type)}" data-id="${h(a.id||'')}" data-lead="${h(a.lead_id||'')}"`;
- return `<button class="btn-small" ${attrs}>Open</button>`;
+ return `<div class="row">${uxActionAssignmentButtons(a.type,a.id,a.owner)}<button class="btn-small" ${attrs}>Open</button></div>`;
+}
+async function uxAssignAction(kind,id,currentOwner){
+ if(!UX.actionAssignees)UX.actionAssignees=await api('/ux/action-assignees');
+ const opts=[['','Unassigned'],...UX.actionAssignees.map(u=>[u.id,u.name+' · '+(u.role==='owner'?'manager':u.role)])];
+ const options=opts.map(([v,label])=>`<option value="${h(v)}" ${v===currentOwner?'selected':''}>${h(label)}</option>`).join('');
+ showModal(currentOwner?'Reassign action':'Assign action',
+   `<div class="callout teal"><strong>One owner, one next action.</strong><div class="small muted" style="margin-top:6px">For client follow-ups and email, CrownOps keeps the client and their open follow-ups with the same owner. Operational/payment actions stay separately assigned.</div></div><div class="spacer"></div><label class="field-label">Assign to</label><select id="ux-action-assignee" class="input">${options}</select>`,
+   `${btn('close','Cancel')}<button class="btn-primary" data-ux="action-assign-save" data-kind="${h(kind)}" data-id="${h(id)}">Save assignment</button>`,true);
 }
 
 // ---------- Communications: calls, follow-ups and outgoing email in one place ----------
@@ -61,7 +75,7 @@ X.pageRenderers.communications=async()=>{
  const [tasks,calls,mail,inbox]=await Promise.all([api('/tasks?scope=active'),api('/calls'),api('/outbound'),api('/ux/inbox')]);
  const due=tasks.slice(0,30),recentCalls=calls.slice(0,25),out=mail.slice(0,25);
  const openInbox=inbox.filter(m=>!m.resolved_at),answered=inbox.filter(m=>m.resolved_at);
- const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(m.created_at)}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}${m.claimed_by?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:`<button class="btn-small" data-ux="inbox-claim" data-id="${h(m.id)}">Claim</button>`}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');
+ const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(m.created_at)}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name===S.user.name?'You':m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}<div class="row">${uxActionAssignmentButtons('email',m.id,m.claimed_by)}${m.claimed_by&&(m.claimed_by===S.user.id||S.user.role==='owner')?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:''}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');
  return head('Communications','One shared place for client email, follow-ups and calls.',xbtn('new-email','Prepare email','','btn-primary'))+
  `<div class="grid3"><div class="panel metric"><div class="label"><span>Unanswered email</span>${icon('mail')}</div><div class="value">${openInbox.length}</div></div><div class="panel metric"><div class="label"><span>Open follow-ups</span>${icon('check')}</div><div class="value">${tasks.filter(x=>x.status!=='Done').length}</div></div><div class="panel metric"><div class="label"><span>Recent calls</span>${icon('phone')}</div><div class="value">${calls.length}</div></div></div><div class="spacer"></div>`+
  panel('Shared client inbox',inboxHtml)+
@@ -200,7 +214,9 @@ X.pageRenderers.quotes=async()=>{
 };
 
 X.pageRenderers.followups=async()=>{
- const all=await api('/tasks?scope='+encodeURIComponent(UX.followupScope));
+ const [all,assignees]=await Promise.all([api('/tasks?scope='+encodeURIComponent(UX.followupScope)),api('/ux/action-assignees')]);
+ UX.actionAssignees=assignees;
+ const ownerNames=Object.fromEntries(assignees.map(u=>[u.id,u.name]));
  const nowDay=today();
  const state=t=>{
    if(t.status==='Done')return 'completed';
@@ -223,9 +239,9 @@ X.pageRenderers.followups=async()=>{
    `<div class="client-name">${h(t.client_name||'Internal / unmatched')}</div><div class="tiny muted">${h(t.phone||t.email||'')}</div>`,
    `<div class="strong">${h(t.title)}</div>`,
    h(t.due_date||'No date'),
-   t.owner?(t.owner===S.user.id?'<span class="pill blue">You</span>':'<span class="pill gray">Assigned</span>'):'<span class="pill orange">Unassigned</span>',
+   t.owner?(t.owner===S.user.id?'<span class="pill blue">You</span>':`<span class="pill gray">${h(ownerNames[t.owner]||t.owner)}</span>`):'<span class="pill orange">Unassigned</span>',
    pill(state(t)==='completed'?'Done':state(t)==='overdue'?'Overdue':state(t)==='today'?'Due today':'Upcoming'),
-   `<div class="row">${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
+   `<div class="row">${t.status!=='Done'?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
  ]);
  const overview=`<div class="ux-overview-grid">${[
    uxOverviewMetric('Open',counts.open),
@@ -305,6 +321,18 @@ document.addEventListener('click',async e=>{
   if(a==='open-job')return openJob(id);
   if(a==='open-client')return openLead(id);
   if(a==='today-view'){UX.todayView=el.dataset.value||'team';return navigate('dashboard');}
+  if(a==='action-claim'){
+    await api('/ux/actions/'+encodeURIComponent(el.dataset.kind) + '/' + encodeURIComponent(id) + '/claim',{method:'POST'});
+    toast('Action claimed. Related client work is now aligned to you.');
+    return navigate(S.page);
+  }
+  if(a==='action-assign')return uxAssignAction(el.dataset.kind,id,el.dataset.owner||'');
+  if(a==='action-assign-save'){
+    const userId=document.getElementById('ux-action-assignee')?.value||'';
+    await api('/ux/actions/'+encodeURIComponent(el.dataset.kind) + '/' + encodeURIComponent(id) + '/assign',{method:'POST',data:{user_id:userId}});
+    modal.close();toast(userId?'Assignment updated.':'Action returned to Unclaimed.');
+    return navigate(S.page);
+  }
   if(a==='attention'){
     const k=el.dataset.kind,lid=el.dataset.lead;
     if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='task'&&lid)return openLead(lid);if(k==='payment')return navigate('payments');if(k==='gmail'||k==='gmail-payment-batch')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');

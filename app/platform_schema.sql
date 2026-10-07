@@ -238,3 +238,11 @@ CREATE TABLE IF NOT EXISTS employee_directory_profiles (
 CREATE TABLE IF NOT EXISTS inbox_claims (
  message_id TEXT PRIMARY KEY REFERENCES messages(id), claimed_by TEXT NOT NULL REFERENCES users(id), claimed_at TEXT NOT NULL, resolved_at TEXT
 );
+CREATE TABLE IF NOT EXISTS action_assignments (
+ action_type TEXT NOT NULL,
+ action_id TEXT NOT NULL,
+ assigned_to TEXT NOT NULL REFERENCES users(id),
+ assigned_by TEXT NOT NULL REFERENCES users(id),
+ assigned_at TEXT NOT NULL,
+ PRIMARY KEY(action_type,action_id)
+);
