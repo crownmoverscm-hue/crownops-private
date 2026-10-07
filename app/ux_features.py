@@ -299,6 +299,30 @@ def register_ux_features(app,path,auth):
             }
         return {'date':today,'view':selected,'view_counts':view_counts,'stats':stats,'jobs':jobs,'attention':filtered}
 
+    @app.get('/api/ux/action-assignees')
+    def action_assignees(u=Depends(auth)):
+        require_role(u,OFFICE)
+        with closing(connect(path)) as db:
+            return rows(db,"SELECT id,name,email,role FROM users WHERE active=1 AND role IN ('owner','sales','dispatch','accounting') ORDER BY name")
+
+    @app.post('/api/ux/actions/{kind}/{action_id}/claim')
+    def action_claim(kind:str,action_id:str,u=Depends(auth)):
+        require_role(u,OFFICE)
+        with transaction(path) as db:
+            ref=_action_reference(db,kind,action_id)
+            if ref.get('lead_id'):
+                return {'ok':True,**_sync_client_owner(db,ref['lead_id'],u['id'],u['id'],'Action claimed',strict=True)}
+            return {'ok':True,**_assign_generic_action(db,ref,u['id'],u['id'],'Action claimed',strict=True)}
+
+    @app.post('/api/ux/actions/{kind}/{action_id}/assign')
+    def action_assign(kind:str,action_id:str,data:dict,u=Depends(auth)):
+        require_role(u,MANAGERS)
+        target_id=str(data.get('user_id') or '').strip()
+        with transaction(path) as db:
+            ref=_action_reference(db,kind,action_id)
+            if ref.get('lead_id'):
+                return {'ok':True,**_sync_client_owner(db,ref['lead_id'],target_id,u['id'],'Action reassigned')}
+            return {'ok':True,**_assign_generic_action(db,ref,target_id,u['id'],'Action reassigned')}
     @app.get('/api/ux/search')
     def global_search(q:str='',u=Depends(auth)):
         require_role(u,OFFICE)
