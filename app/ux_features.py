@@ -266,12 +266,12 @@ def register_ux_features(app,path,auth):
               WHERE c.status='Pending' ORDER BY c.created_at""")
             for r in pending_changes:
                 add_item({'type':'client-change','id':r['id'],'lead_id':r['lead_id'],'title':r['client_name']+' updated their portal',
-                  'detail':'Review before changing accepted scope.','priority':'Normal'},r.get('assigned_to'))
+                  'detail':'Review before changing accepted scope.','priority':'Normal'})
             unverified=rows(db,"""SELECT p.*,l.client_name,l.assigned_to FROM payments p JOIN leads l ON l.id=p.lead_id
               WHERE p.verified=0 AND p.amount_cents>0 ORDER BY p.created_at""")
             for r in unverified:
                 add_item({'type':'payment','id':r['id'],'lead_id':r['lead_id'],'title':'Payment needs verification',
-                  'detail':f"{r['client_name']} - CA${r['amount_cents']/100:,.2f}",'priority':'High'},r.get('assigned_to'))
+                  'detail':f"{r['client_name']} - CA${r['amount_cents']/100:,.2f}",'priority':'High'})
             gmail_payment=rows(db,"""SELECT * FROM integration_events
               WHERE event_type IN ('gmail_bank_payment','gmail_wix_payment') AND status='Needs review'
               ORDER BY created_at DESC""")
