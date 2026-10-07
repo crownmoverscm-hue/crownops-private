@@ -2,6 +2,7 @@
 from contextlib import closing
 from datetime import datetime, timezone, timedelta, date
 from decimal import Decimal, ROUND_HALF_UP
+from email.utils import parsedate_to_datetime
 from math import ceil
 from zoneinfo import ZoneInfo
 import json, re, secrets
@@ -198,6 +199,31 @@ def sync_unlinked_clients(db):
                     flag_duplicate(db,m["client"]["id"],cid,reason)
         insert(db,"client_account_leads",dict(client_id=cid,lead_id=l["id"],created_at=now()))
 
+def provider_message_time(value,fallback=""):
+    raw=str(value or "").strip()
+    if not raw:return fallback
+    try:
+        dt=parsedate_to_datetime(raw)
+        if dt.tzinfo is None:dt=dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except Exception:
+        pass
+    try:
+        dt=datetime.fromisoformat(raw.replace("Z","+00:00"))
+        if dt.tzinfo is None:dt=dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except ValueError:
+        return fallback
+
+def gmail_quote_activity_time(db,lead_id,fallback=""):
+    ev=one(db,"""SELECT payload_json,created_at FROM integration_events
+      WHERE event_type='gmail_quote' AND object_id=?
+      ORDER BY created_at DESC LIMIT 1""",(lead_id,))
+    if not ev:return fallback
+    try:payload=json.loads(ev.get("payload_json") or "{}")
+    except Exception:payload={}
+    return provider_message_time(payload.get("received_at") or payload.get("date"),fallback)
+
 def call_activity_time(detail,fallback=""):
     raw=str((detail or {}).get("occurred_at") or (detail or {}).get("call_time") or "").strip()
     if not raw:return fallback
@@ -243,17 +269,11 @@ def repair_call_activity(db):
 def client_latest_activity(db,client_id):
     """Return the newest real inbound/client inquiry signal for inbox ordering."""
     candidates=[]
-    lead=one(db,"""SELECT l.id,l.lead_type,l.source,l.stage,l.created_at,l.move_date,l.pickup
+    lead_rows=rows(db,"""SELECT l.id,l.lead_type,l.source,l.stage,l.created_at,l.move_date,l.pickup
       FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
-      WHERE x.client_id=? AND l.archived_import=0
-        AND lower(COALESCE(l.lead_type,'')) NOT IN ('missed call','voicemail')
-      ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
-    if not lead:
-        lead=one(db,"""SELECT l.id,l.lead_type,l.source,l.stage,l.created_at,l.move_date,l.pickup
-          FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
-          WHERE x.client_id=? AND lower(COALESCE(l.lead_type,'')) NOT IN ('missed call','voicemail')
-          ORDER BY l.created_at DESC LIMIT 1""",(client_id,))
-    if lead:
+      WHERE x.client_id=? AND lower(COALESCE(l.lead_type,'')) NOT IN ('missed call','voicemail')
+      ORDER BY l.created_at DESC LIMIT 20""",(client_id,))
+    for lead in lead_rows:
         lt=str(lead.get("lead_type") or "Inquiry")
         source=str(lead.get("source") or "")
         if lt=="Form":
@@ -264,7 +284,8 @@ def client_latest_activity(db,client_id):
             label="Manual service"
         else:
             label=lt
-        candidates.append({"type":"lead","label":label,"source":source or lt,"at":lead["created_at"],
+        activity_at=gmail_quote_activity_time(db,lead["id"],lead["created_at"]) if source=="Gmail" and lt in ("Form","Instant estimate") else lead["created_at"]
+        candidates.append({"type":"lead","label":label,"source":source or lt,"at":activity_at,
           "lead_id":lead["id"],"summary":lead.get("pickup") or lead.get("move_date") or "New inquiry"})
 
     call=one(db,"""SELECT c.*,l.id lead_ref FROM calls c
@@ -492,9 +513,9 @@ def register_sales_crm_v6(app,path,auth,public_url):
                      OR EXISTS (
                        SELECT 1 FROM client_account_leads x JOIN leads l ON l.id=x.lead_id
                        WHERE x.client_id=a.id AND lower(COALESCE(l.pickup,'')||' '||COALESCE(l.dropoff,'')) LIKE ?)
-                  ORDER BY activity_at DESC LIMIT 80""",(like,like))
+                  ORDER BY activity_at DESC LIMIT 200""",(like,like))
             else:
-                accts=rows(db,f"SELECT a.*, {activity_expr} activity_at FROM client_accounts a ORDER BY activity_at DESC LIMIT 80")
+                accts=rows(db,f"SELECT a.*, {activity_expr} activity_at FROM client_accounts a ORDER BY activity_at DESC LIMIT 200")
             for a in accts:
                 a["services"]=rows(db,"""SELECT l.id,l.lead_type,l.source,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.created_at,
                   (SELECT status FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_status
