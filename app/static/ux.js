@@ -1,6 +1,6 @@
 /* CrownOps v5.4 simplified job review pass: simple defaults, useful exceptions, clean role-based UX. */
 'use strict';
-const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
+const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
 
 // ---------- Navigation: show the things people actually use ----------
 ensureNav(['communications','mail','Communications']);
@@ -34,15 +34,23 @@ shell=function(){
 const uxOldDashboard=dashboard;
 dashboard=async function(){
  if(S.user.role==='crew')return uxOldDashboard();
- const d=await api('/ux/today');
- const metrics=[['Jobs today',d.stats.jobs_today,'calendar'],['Needs attention',d.stats.attention,'shield'],['Follow-ups',d.stats.open_followups,'phone'],['Payments to verify',d.stats.unverified_payments,'wallet']];
- const attention=d.attention.length?d.attention.slice(0,12).map(a=>`<div class="attention-row"><div class="attention-dot ${a.priority==='High'?'high':''}"></div><div class="grow"><div class="small strong">${h(a.title)}</div><div class="tiny muted">${h(a.detail||'')}</div></div>${uxAttentionButton(a)}</div>`).join(''):empty('Nothing urgent right now','CrownOps will surface exceptions here instead of making you hunt through every section.');
+ if(!UX.todayView)UX.todayView=S.user.role==='owner'?'team':'mine';
+ const d=await api('/ux/today?view='+encodeURIComponent(UX.todayView));UX.todayView=d.view||UX.todayView;
+ const metrics=[['Jobs today',d.stats.jobs_today,'calendar','All scheduled today'],['Needs attention',d.stats.attention,'shield','Action items in this view'],['Follow-ups',d.stats.open_followups,'phone','Due now in this view'],['Payments to verify',d.stats.unverified_payments,'wallet','Payment actions in this view']];
+ const filters=`<div class="ux-browser-toolbar"><div class="ux-filter-chips">${[
+   uxStatusButton('today-view','unclaimed','Unclaimed',d.view_counts?.unclaimed||0,UX.todayView),
+   uxStatusButton('today-view','mine','Mine',d.view_counts?.mine||0,UX.todayView),
+   uxStatusButton('today-view','team','Team',d.view_counts?.team||0,UX.todayView)
+ ].join('')}</div><div class="tiny muted">One current queue. Historical imports and completed work stay out.</div></div>`;
+ const attention=d.attention.length?d.attention.map(a=>`<div class="attention-row"><div class="attention-dot ${a.priority==='High'?'high':''}"></div><div class="grow"><div class="small strong">${h(a.title)}</div><div class="tiny muted">${h(a.detail||'')}</div></div>${a.owner_name?'<span class="pill blue">'+h(a.owner_name===S.user.name?'You':a.owner_name)+'</span>':'<span class="pill orange">Unclaimed</span>'}${uxAttentionButton(a)}</div>`).join(''):empty('Nothing needs action in this view','Switch to Unclaimed or Team if you want to check the wider office queue.');
  const jobs=d.jobs.length?d.jobs.map(j=>`<button class="today-job" data-ux="open-job" data-id="${h(j.id)}"><div><div class="strong">${h(j.title)}</div><div class="tiny muted">${h(j.phase)} &middot; ${timeLabel(j.start_at)} &middot; ${h(j.crew_names.join(', ')||'Crew needed')}</div></div><div>${j.readiness.ready?'<span class="pill teal">Ready</span>':`<span class="pill orange">${j.readiness.missing.length} item${j.readiness.missing.length===1?'':'s'}</span>`}</div></button>`).join(''):empty('No jobs today','Upcoming services will appear here automatically.');
- return head('Today','The things that need your attention, without checking five screens.',btn('new-lead',icon('plus')+'New inquiry','btn-primary')+btn('new-job','New job'))+
- `<div class="metric-grid">${metrics.map(m=>`<div class="panel metric"><div class="label"><span>${m[0]}</span><span class="ico">${icon(m[2])}</span></div><div class="value">${Number(m[1]||0).toLocaleString()}</div><div class="foot">Current review workspace</div></div>`).join('')}</div>`+
- `<div class="split">${panel('Needs attention',attention)}${panel("Today's jobs",jobs)}</div><div class="spacer"></div>`+
+ return head('Today','Your action center: see what matters now, who owns it, and what is still unclaimed.',btn('new-lead',icon('plus')+'New inquiry','btn-primary')+btn('new-job','New job'))+
+ filters+
+ `<div class="metric-grid">${metrics.map(m=>`<div class="panel metric"><div class="label"><span>${m[0]}</span><span class="ico">${icon(m[2])}</span></div><div class="value">${Number(m[1]||0).toLocaleString()}</div><div class="foot">${h(m[3])}</div></div>`).join('')}</div>`+
+ `<div class="split">${panel('Action queue',attention)}${panel("Today's jobs",jobs)}</div><div class="spacer"></div>`+
  `<div class="grid3">${panel('Sales',`<p class="small muted">New inquiries, quotes and client conversations.</p>${btn('go-sales','Open sales','btn-soft')}`)}${panel('Operations',`<p class="small muted">Schedule, invoices, time off and field work.</p>${btn('go-schedule','Open schedule','btn-soft')}`)}${panel('Company setup',`<p class="small muted">Rates, materials, documents, fleet and connections.</p><button data-page="settings" class="btn-soft">Open setup</button>`)}</div>`;
 };
+
 function uxAttentionButton(a){
  const attrs=`data-ux="attention" data-kind="${h(a.type)}" data-id="${h(a.id||'')}" data-lead="${h(a.lead_id||'')}"`;
  return `<button class="btn-small" ${attrs}>Open</button>`;
@@ -296,9 +304,10 @@ document.addEventListener('click',async e=>{
  try{
   if(a==='open-job')return openJob(id);
   if(a==='open-client')return openLead(id);
+  if(a==='today-view'){UX.todayView=el.dataset.value||'team';return navigate('dashboard');}
   if(a==='attention'){
     const k=el.dataset.kind,lid=el.dataset.lead;
-    if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='task'&&lid)return openLead(lid);if(k==='payment')return navigate('payments');if(k==='gmail')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
+    if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='task'&&lid)return openLead(lid);if(k==='payment')return navigate('payments');if(k==='gmail'||k==='gmail-payment-batch')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
   }
   if(a==='search-open'){modal.close();if(el.dataset.type==='client')return openLead(id);if(el.dataset.type==='job')return openJob(id);if(el.dataset.type==='invoice')return openInvoice(id);}
   if(a==='estimate-open')return openQuote(id);
