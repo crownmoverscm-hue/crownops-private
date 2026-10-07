@@ -394,6 +394,65 @@ def register_ux_features(app,path,auth):
             if ref.get('lead_id'):
                 return {'ok':True,**_sync_client_owner(db,ref['lead_id'],target_id,u['id'],'Action reassigned')}
             return {'ok':True,**_assign_generic_action(db,ref,target_id,u['id'],'Action reassigned')}
+    @app.get('/api/ux/actions/{kind}/{action_id}/workspace')
+    def action_workspace(kind:str,action_id:str,u=Depends(auth)):
+        require_role(u,OFFICE)
+        with closing(connect(path)) as db:
+            ref=_action_reference(db,kind,action_id)
+            return _action_workspace_data(db,ref)
+
+    @app.post('/api/ux/actions/{kind}/{action_id}/outcome')
+    def action_outcome(kind:str,action_id:str,data:dict,u=Depends(auth)):
+        require_role(u,{'owner','sales','dispatch'})
+        outcome=str(data.get('outcome') or '').strip().lower()
+        allowed={'done','waiting','followup','quote_sent','lost'}
+        if outcome not in allowed:raise HTTPException(422,'Choose a valid action outcome.')
+        note=str(data.get('note') or '').strip()
+        if len(note)>3000:raise HTTPException(422,'Keep the outcome note under 3,000 characters.')
+        followup_date=str(data.get('followup_date') or '').strip()
+        followup_title=str(data.get('followup_title') or '').strip()
+        if len(followup_title)>300:raise HTTPException(422,'Keep the follow-up title under 300 characters.')
+        with transaction(path) as db:
+            ref=_action_reference(db,kind,action_id)
+            if not ref.get('lead_id'):raise HTTPException(422,'Use the dedicated operational screen for this action.')
+            lead=one(db,'SELECT * FROM leads WHERE id=?',(ref['lead_id'],))
+            if not lead:raise HTTPException(404,'Client project not found.')
+            current=str(lead.get('assigned_to') or '')
+            if current:
+                current_user=one(db,'SELECT id,name FROM users WHERE id=? OR name=? LIMIT 1',(current,current))
+                current_id=current_user.get('id') if current_user else current
+                if current_id!=u['id'] and u['role'] not in MANAGERS:
+                    raise HTTPException(403,'This client is assigned to another team member.')
+            else:
+                _sync_client_owner(db,lead['id'],u['id'],u['id'],'Action claimed during outcome',strict=True)
+            next_task_id=None
+            if outcome=='followup':
+                if not followup_date:raise HTTPException(422,'Choose the follow-up date.')
+                due=_date_arg(followup_date,'follow-up date')
+                today_local=datetime.now(TORONTO).date()
+                if due<today_local:raise HTTPException(422,'Follow-up date cannot be in the past.')
+                next_task_id=uid('TASK')
+                title=followup_title or ('Follow up with '+(lead.get('client_name') or 'client'))
+                owner=lead.get('assigned_to') or u['id']
+                if owner not in (u['id'],u.get('name')) and u['role'] not in MANAGERS:
+                    owner=u['id']
+                insert(db,'tasks',dict(id=next_task_id,legacy_id=None,lead_id=lead['id'],title=title,
+                  due_date=followup_date,owner=owner,status='Open',historical=0,raw_json='{}',created_at=now()))
+            _complete_source_action(db,ref,u['id'])
+            if outcome=='waiting':
+                db.execute("UPDATE leads SET stage='Waiting on client',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
+            elif outcome=='quote_sent':
+                db.execute("UPDATE leads SET stage='Quote Sent',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
+            elif outcome=='lost':
+                db.execute("UPDATE leads SET stage='Lost',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
+                db.execute("UPDATE tasks SET status='Done' WHERE lead_id=? AND status!='Done' AND historical=0",(lead['id'],))
+                db.execute("""UPDATE inbox_claims SET resolved_at=? WHERE message_id IN
+                  (SELECT id FROM messages WHERE lead_id=?) AND resolved_at IS NULL""",(now(),lead['id']))
+            _record_action_outcome(db,ref,lead['id'],outcome,note,next_task_id,followup_date,u['id'])
+            audit(db,u['id'],'Action outcome recorded','action_outcomes',ref['kind']+':'+ref['id'],
+              {'outcome':outcome,'lead_id':lead['id'],'followup_task_id':next_task_id,'followup_date':followup_date,'note':note})
+        return {'ok':True,'outcome':outcome,'followup_task_id':next_task_id}
+
     @app.get('/api/ux/search')
     def global_search(q:str='',u=Depends(auth)):
         require_role(u,OFFICE)
