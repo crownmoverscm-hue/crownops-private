@@ -82,7 +82,7 @@ function uxActionDetailHtml(d){
  return `<div class="grid2">${exact}${client}</div><div class="spacer"></div><div class="grid2"><div class="panel panel-body"><div class="eyebrow">OPEN FOLLOW-UPS</div><div class="spacer"></div>${tasks}</div><div class="panel panel-body"><div class="eyebrow">RECENT HISTORY</div><div class="spacer"></div>${history}</div></div>`;
 }
 async function uxOpenActionWorkspace(kind,id){
- const d=await api('/ux/actions/'+encodeURIComponent(kind)+'/'+encodeURIComponent(id)+'/workspace');UX.currentAction={kind,id,data:d};
+ const d=await api('/ux/actions/'+encodeURIComponent(kind)+'/'+encodeURIComponent(id)+'/workspace');UX.currentAction={kind,id,data:d,page:S.page};
  const owner=d.owner?.name||'Unclaimed';
  const outcomeButtons=(d.outcomes||[]).map(o=>`<button class="${o==='lost'?'btn-soft':'btn-small'}" data-ux="action-outcome-open" data-kind="${h(kind)}" data-id="${h(id)}" data-outcome="${h(o)}">${h(uxActionOutcomeLabel(o))}</button>`).join('');
  showModal(d.action?.title||'Action workspace',
@@ -112,7 +112,7 @@ X.pageRenderers.communications=async()=>{
  const [tasks,calls,mail,inbox]=await Promise.all([api('/tasks?scope=active'),api('/calls'),api('/outbound'),api('/ux/inbox')]);
  const due=tasks.slice(0,30),recentCalls=calls.slice(0,25),out=mail.slice(0,25);
  const openInbox=inbox.filter(m=>!m.resolved_at),answered=inbox.filter(m=>m.resolved_at);
- const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(m.created_at)}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name===S.user.name?'You':m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}<div class="row">${uxActionAssignmentButtons('email',m.id,m.claimed_by)}${m.claimed_by&&(m.claimed_by===S.user.id||S.user.role==='owner')?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:''}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');
+ const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(m.created_at)}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name===S.user.name?'You':m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}<div class="row">${uxActionAssignmentButtons('email',m.id,m.claimed_by)}<button class="btn-small" data-ux="action-workspace" data-kind="email" data-id="${h(m.id)}">Open</button>${m.claimed_by&&(m.claimed_by===S.user.id||S.user.role==='owner')?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:''}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');
  return head('Communications','One shared place for client email, follow-ups and calls.',xbtn('new-email','Prepare email','','btn-primary'))+
  `<div class="grid3"><div class="panel metric"><div class="label"><span>Unanswered email</span>${icon('mail')}</div><div class="value">${openInbox.length}</div></div><div class="panel metric"><div class="label"><span>Open follow-ups</span>${icon('check')}</div><div class="value">${tasks.filter(x=>x.status!=='Done').length}</div></div><div class="panel metric"><div class="label"><span>Recent calls</span>${icon('phone')}</div><div class="value">${calls.length}</div></div></div><div class="spacer"></div>`+
  panel('Shared client inbox',inboxHtml)+
@@ -278,7 +278,7 @@ X.pageRenderers.followups=async()=>{
    h(t.due_date||'No date'),
    t.owner?(t.owner===S.user.id?'<span class="pill blue">You</span>':`<span class="pill gray">${h(ownerNames[t.owner]||t.owner)}</span>`):'<span class="pill orange">Unassigned</span>',
    pill(state(t)==='completed'?'Done':state(t)==='overdue'?'Overdue':state(t)==='today'?'Due today':'Upcoming'),
-   `<div class="row">${t.status!=='Done'?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
+   `<div class="row">${t.status!=='Done'?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.status!=='Done'&&t.lead_id?`<button class="btn-small" data-ux="action-workspace" data-kind="task" data-id="${h(t.id)}">Open</button>`:''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
  ]);
  const overview=`<div class="ux-overview-grid">${[
    uxOverviewMetric('Open',counts.open),
