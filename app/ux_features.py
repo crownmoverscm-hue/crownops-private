@@ -226,6 +226,77 @@ def _assign_generic_action(db,ref,target_id,actor,reason,strict=False):
       {'from':current.get('assigned_to') if current else '','to':target_id,'label':ref.get('label') or ''})
     return {'assigned_to':target_id,'assigned_name':target.get('name') if target else ''}
 
+
+def _json_dict(value):
+    try:
+        data=json.loads(value or '{}')
+        return data if isinstance(data,dict) else {}
+    except Exception:
+        return {}
+
+def _action_workspace_data(db,ref):
+    lead_id=str(ref.get('lead_id') or '')
+    if not lead_id:raise HTTPException(422,'This action uses its dedicated operational screen.')
+    lead=one(db,'SELECT * FROM leads WHERE id=?',(lead_id,))
+    if not lead:raise HTTPException(404,'Client project not found.')
+    owner=None
+    if lead.get('assigned_to'):
+        owner=one(db,'SELECT id,name,email,role FROM users WHERE id=? OR name=? LIMIT 1',(lead['assigned_to'],lead['assigned_to']))
+    action={}
+    if ref['kind']=='task':
+        task=one(db,'SELECT * FROM tasks WHERE id=?',(ref['id'],))
+        if not task:raise HTTPException(404,'Follow-up not found.')
+        meta=_json_dict(task.get('raw_json'))
+        action={'kind':'task','id':task['id'],'title':task['title'],'status':task['status'],
+          'due_date':task.get('due_date') or '','created_at':task['created_at'],'detail':''}
+        call_id=str(meta.get('call_id') or '')
+        if call_id:
+            call=one(db,'SELECT * FROM calls WHERE id=?',(call_id,))
+            if call:
+                detail=_json_dict(call.get('payload_json'))
+                action['call']={
+                  'id':call['id'],'phone':detail.get('phone') or detail.get('Phone') or '',
+                  'caller':detail.get('caller') or detail.get('Caller') or lead.get('client_name') or '',
+                  'occurred_at':detail.get('occurred_at') or detail.get('call_time') or call['created_at'],
+                  'subject':detail.get('subject') or '',
+                  'voicemail':bool(detail.get('voicemail')),
+                  'attachments':detail.get('attachments') or []
+                }
+                action['detail']='Voicemail' if action['call']['voicemail'] else 'Missed call'
+    elif ref['kind']=='email':
+        msg=one(db,'SELECT * FROM messages WHERE id=?',(ref['id'],))
+        if not msg:raise HTTPException(404,'Email not found.')
+        claim=one(db,'SELECT * FROM inbox_claims WHERE message_id=?',(msg['id'],))
+        action={'kind':'email','id':msg['id'],'title':msg.get('subject') or 'Client email',
+          'status':'Answered' if claim and claim.get('resolved_at') else 'Unanswered',
+          'created_at':msg['created_at'],'body':msg.get('body') or '','message_kind':msg.get('kind') or '',
+          'claimed_by':claim.get('claimed_by') if claim else '','resolved_at':claim.get('resolved_at') if claim else ''}
+    else:
+        raise HTTPException(422,'Open this action from its dedicated operational screen.')
+    open_tasks=rows(db,"""SELECT id,title,due_date,owner,status,created_at FROM tasks
+      WHERE lead_id=? AND status!='Done' AND historical=0 ORDER BY CASE WHEN due_date='' THEN 1 ELSE 0 END,due_date,created_at""",(lead_id,))
+    latest_quote=one(db,'SELECT id,revision,status,created_at FROM quotes WHERE lead_id=? ORDER BY revision DESC LIMIT 1',(lead_id,))
+    history=_timeline(db,lead_id)[:12]
+    client={k:lead.get(k,'') for k in ('id','client_name','email','phone','move_date','pickup','dropoff','stage','assigned_to','priority','language')}
+    return {'action':action,'client':client,'owner':owner,'open_tasks':open_tasks,
+      'latest_quote':latest_quote,'history':history,
+      'outcomes':['done','waiting','followup','quote_sent','lost']}
+
+def _complete_source_action(db,ref,actor):
+    if ref['kind']=='task':
+        db.execute("UPDATE tasks SET status='Done' WHERE id=?",(ref['id'],))
+    elif ref['kind']=='email':
+        claim=one(db,'SELECT * FROM inbox_claims WHERE message_id=?',(ref['id'],))
+        if claim:
+            db.execute('UPDATE inbox_claims SET resolved_at=?,claimed_by=? WHERE message_id=?',(now(),actor,ref['id']))
+        else:
+            insert(db,'inbox_claims',dict(message_id=ref['id'],claimed_by=actor,claimed_at=now(),resolved_at=now()))
+
+def _record_action_outcome(db,ref,lead_id,outcome,note,followup_task_id,followup_date,actor):
+    insert(db,'action_outcomes',dict(id=uid('OUTCOME'),action_type=ref['kind'],action_id=ref['id'],
+      lead_id=lead_id,outcome=outcome,note=note,followup_task_id=followup_task_id or None,
+      followup_date=followup_date or '',actor=actor,created_at=now()))
+
 def register_ux_features(app,path,auth):
     @app.get('/api/ux/today')
     def today_view(view:str='',u=Depends(auth)):
