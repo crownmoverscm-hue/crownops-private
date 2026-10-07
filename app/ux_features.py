@@ -136,52 +136,75 @@ def _timeline(db,lid):
 
 def register_ux_features(app,path,auth):
     @app.get('/api/ux/today')
-    def today_view(u=Depends(auth)):
+    def today_view(view:str='',u=Depends(auth)):
         require_role(u,OFFICE)
         today=datetime.now(TORONTO).date().isoformat()
+        selected=(view or ('team' if u.get('role') in MANAGERS else 'mine')).strip().lower()
+        if selected not in ('unclaimed','mine','team'):raise HTTPException(422,'Choose Unclaimed, Mine or Team.')
         with closing(connect(path)) as db:
+            people={r['id']:r['name'] for r in rows(db,"SELECT id,name FROM users WHERE active=1")}
             jobs_all=rows(db,'SELECT * FROM jobs WHERE status!=\'Cancelled\' ORDER BY start_at')
             jobs=[];attention=[]
+            def add_item(item,owner=''):
+                owner=str(owner or '').strip()
+                item['owner']=owner
+                item['owner_name']=people.get(owner,owner) if owner else ''
+                item['ownership']='mine' if owner and owner in (u.get('id'),u.get('name')) else ('unclaimed' if not owner else 'other')
+                attention.append(item)
             for j in jobs_all:
                 if _local_date(j['start_at'])==today:
                     ready=_job_readiness(db,j);j['readiness']=ready
                     j['crew_names']=[r['name'] for r in rows(db,"SELECT e.name FROM assignments a JOIN employees e ON e.id=a.resource_id WHERE a.job_id=? AND a.resource_type='employee' ORDER BY e.name",(j['id'],))]
                     jobs.append(j)
-                    if not ready['ready']:attention.append({'type':'job','id':j['id'],'title':j['title']+' needs attention','detail':', '.join(ready['missing']),'priority':'High'})
+                    if not ready['ready']:
+                        add_item({'type':'job','id':j['id'],'title':j['title']+' needs attention','detail':', '.join(ready['missing']),'priority':'High'})
             pending_off=rows(db,"""SELECT o.id,o.start_date,o.end_date,e.name employee_name FROM time_off_requests o JOIN employees e ON e.id=o.employee_id WHERE o.status='Pending' ORDER BY o.requested_at""")
-            for r in pending_off:attention.append({'type':'timeoff','id':r['id'],'title':r['employee_name']+' requested time off','detail':r['start_date']+' to '+r['end_date'],'priority':'Normal'})
-            due=rows(db,"SELECT t.*,l.client_name FROM tasks t LEFT JOIN leads l ON l.id=t.lead_id WHERE t.status!='Done' AND t.historical=0 AND (t.due_date='' OR t.due_date<=?) ORDER BY t.due_date",(today,))
-            for r in due[:20]:attention.append({'type':'task','id':r['id'],'lead_id':r['lead_id'],'title':r['title'],'detail':r.get('client_name') or 'Internal task','priority':'Normal'})
-            pending_changes=rows(db,"SELECT c.id,c.lead_id,l.client_name,c.created_at FROM client_changes c JOIN leads l ON l.id=c.lead_id WHERE c.status='Pending' ORDER BY c.created_at")
-            for r in pending_changes:attention.append({'type':'client-change','id':r['id'],'lead_id':r['lead_id'],'title':r['client_name']+' updated their portal','detail':'Review before changing accepted scope.','priority':'Normal'})
-            unverified=rows(db,"SELECT p.*,l.client_name FROM payments p JOIN leads l ON l.id=p.lead_id WHERE p.verified=0 AND p.amount_cents>0 ORDER BY p.created_at")
-            for r in unverified:attention.append({'type':'payment','id':r['id'],'lead_id':r['lead_id'],'title':'Payment needs verification','detail':f"{r['client_name']} - CA${r['amount_cents']/100:,.2f}",'priority':'High'})
-            gmail_review=rows(db,"SELECT * FROM integration_events WHERE event_type LIKE 'gmail_%' AND status='Needs review' ORDER BY created_at DESC")
-            gmail_payment=[r for r in gmail_review if r['event_type'] in ('gmail_bank_payment','gmail_wix_payment')]
-            gmail_calls=[r for r in gmail_review if r['event_type'] in ('gmail_missed_call','gmail_voicemail')]
-            for r in gmail_review[:30]:
-                p=json.loads(r['payload_json']).get('parsed',{})
-                if r['event_type'] in ('gmail_bank_payment','gmail_wix_payment'):
-                    title='Gmail payment notice needs review'
-                    detail=(p.get('payer','')+' - $'+str(p.get('amount',''))).strip(' -')
-                    priority='High'
-                elif r['event_type']=='gmail_voicemail':
-                    title='New voicemail needs review'
-                    detail=p.get('caller') or p.get('phone') or 'Gmail voicemail'
-                    priority='Normal'
-                else:
-                    title='Missed call needs review'
-                    detail=p.get('caller') or p.get('phone') or 'Gmail missed call'
-                    priority='Normal'
-                attention.append({'type':'gmail','id':r['id'],'title':title,'detail':detail,'priority':priority})
+            for r in pending_off:
+                add_item({'type':'timeoff','id':r['id'],'title':r['employee_name']+' requested time off','detail':r['start_date']+' to '+r['end_date'],'priority':'Normal'})
+            due=rows(db,"""SELECT t.*,l.client_name,l.assigned_to FROM tasks t
+              LEFT JOIN leads l ON l.id=t.lead_id
+              WHERE t.status!='Done' AND t.historical=0 AND (t.due_date='' OR t.due_date<=?)
+              ORDER BY CASE WHEN t.due_date='' THEN 1 ELSE 0 END,t.due_date,t.created_at""",(today,))
+            for r in due:
+                add_item({'type':'task','id':r['id'],'lead_id':r['lead_id'],'title':r['title'],
+                  'detail':r.get('client_name') or 'Internal task','priority':'Normal'},r.get('owner') or r.get('assigned_to'))
+            pending_changes=rows(db,"""SELECT c.id,c.lead_id,l.client_name,l.assigned_to,c.created_at
+              FROM client_changes c JOIN leads l ON l.id=c.lead_id
+              WHERE c.status='Pending' ORDER BY c.created_at""")
+            for r in pending_changes:
+                add_item({'type':'client-change','id':r['id'],'lead_id':r['lead_id'],'title':r['client_name']+' updated their portal',
+                  'detail':'Review before changing accepted scope.','priority':'Normal'},r.get('assigned_to'))
+            unverified=rows(db,"""SELECT p.*,l.client_name,l.assigned_to FROM payments p JOIN leads l ON l.id=p.lead_id
+              WHERE p.verified=0 AND p.amount_cents>0 ORDER BY p.created_at""")
+            for r in unverified:
+                add_item({'type':'payment','id':r['id'],'lead_id':r['lead_id'],'title':'Payment needs verification',
+                  'detail':f"{r['client_name']} - CA${r['amount_cents']/100:,.2f}",'priority':'High'},r.get('assigned_to'))
+            gmail_payment=rows(db,"""SELECT * FROM integration_events
+              WHERE event_type IN ('gmail_bank_payment','gmail_wix_payment') AND status='Needs review'
+              ORDER BY created_at DESC""")
+            if gmail_payment:
+                add_item({'type':'gmail-payment-batch','id':'gmail-payment-review','title':'Review Gmail payment notices',
+                  'detail':f"{len(gmail_payment)} notice{'s' if len(gmail_payment)!=1 else ''} waiting in Connections",
+                  'priority':'High'})
             maint=rows(db,"SELECT m.*,v.name vehicle_name FROM maintenance m JOIN vehicles v ON v.id=m.vehicle_id WHERE m.status='Open' AND m.due_date!='' AND m.due_date<=? ORDER BY m.due_date",(today,))
-            for r in maint:attention.append({'type':'fleet','id':r['id'],'title':r['vehicle_name']+' maintenance due','detail':r['title']+' - '+r['due_date'],'priority':'High'})
+            for r in maint:
+                add_item({'type':'fleet','id':r['id'],'title':r['vehicle_name']+' maintenance due','detail':r['title']+' - '+r['due_date'],'priority':'High'})
+
+            def matches(item,scope):
+                if scope=='team':return True
+                if scope=='unclaimed':return item['ownership']=='unclaimed'
+                return item['ownership']=='mine'
+
+            view_counts={scope:sum(1 for item in attention if matches(item,scope)) for scope in ('unclaimed','mine','team')}
+            filtered=[item for item in attention if matches(item,selected)]
+            filtered.sort(key=lambda x:(0 if x['priority']=='High' else 1,0 if x['ownership']=='mine' else 1,x['title']))
             stats={
-              'jobs_today':len(jobs),'attention':len(attention),'pending_time_off':len(pending_off),
-              'unverified_payments':len(unverified)+len(gmail_payment),'open_followups':len(due)+len(gmail_calls),'pending_client_changes':len(pending_changes)
+              'jobs_today':len(jobs),'attention':len(filtered),'pending_time_off':sum(1 for x in filtered if x['type']=='timeoff'),
+              'unverified_payments':sum(1 for x in filtered if x['type'] in ('payment','gmail-payment-batch')),
+              'open_followups':sum(1 for x in filtered if x['type']=='task'),
+              'pending_client_changes':sum(1 for x in filtered if x['type']=='client-change')
             }
-        attention.sort(key=lambda x:(0 if x['priority']=='High' else 1,x['title']))
-        return {'date':today,'stats':stats,'jobs':jobs,'attention':attention[:60]}
+        return {'date':today,'view':selected,'view_counts':view_counts,'stats':stats,'jobs':jobs,'attention':filtered[:60]}
 
     @app.get('/api/ux/search')
     def global_search(q:str='',u=Depends(auth)):
