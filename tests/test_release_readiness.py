@@ -67,6 +67,8 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 "/api/ux/action-assignees",
                 "/api/ux/actions/{kind}/{action_id}/claim",
                 "/api/ux/actions/{kind}/{action_id}/assign",
+                "/api/ux/actions/{kind}/{action_id}/workspace",
+                "/api/ux/actions/{kind}/{action_id}/outcome",
                 "/api/invoices/{iid}/quickbooks",
                 "/api/quotes/{qid}/quickbooks",
                 "/api/payments/{pid}/quickbooks",
@@ -213,6 +215,91 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             self.assertIn("USER-ACTION-B",assignee_ids)
             self.assertNotIn("USER-ACTION-CREW",assignee_ids)
             self.assertNotIn("USER-ACTION-OFF",assignee_ids)
+
+    def test_action_workspace_shows_call_context_and_records_next_outcomes(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            app=create_app(db_path)
+            expiry=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(timespec="seconds")
+            local_day=datetime.now(timezone.utc).astimezone(ZoneInfo('America/Toronto')).date()
+            follow_day=(local_day+timedelta(days=2)).isoformat()
+            with transaction(db_path) as db:
+                insert(db,"users",dict(id="USER-WORKSPACE",email="workspace@example.invalid",name="Workspace Agent",role="sales",
+                    password_hash="unused-test-hash",active=1,created_at=now()))
+                insert(db,"sessions",dict(token_hash=sha("workspace-session"),user_id="USER-WORKSPACE",csrf="csrf-workspace",expires_at=expiry))
+                insert(db,"leads",dict(id="LEAD-WORKSPACE",client_name="Workspace Client",email="client@example.invalid",
+                    phone="5145557788",move_date="2026-11-15",pickup="100 Test Street",dropoff="200 Test Street",
+                    stage="New Lead",assigned_to="USER-WORKSPACE",created_at=now(),updated_at=now()))
+                insert(db,"calls",dict(id="CALL-WORKSPACE",legacy_id=None,lead_id="LEAD-WORKSPACE",
+                    payload_json=dumps({"phone":"5145557788","caller":"Workspace Client","call_time":"10/06/2026 13:15:44",
+                        "occurred_at":"2026-10-06T17:15:44+00:00","subject":"Missed call from Workspace Client","voicemail":False,"attachments":[]}),
+                    created_at="2026-10-06T17:15:44+00:00"))
+                insert(db,"tasks",dict(id="TASK-WORKSPACE",legacy_id=None,lead_id="LEAD-WORKSPACE",title="Return missed call",
+                    due_date=local_day.isoformat(),owner="USER-WORKSPACE",status="Open",historical=0,
+                    raw_json=dumps({"call_id":"CALL-WORKSPACE"}),created_at=now()))
+                insert(db,"tasks",dict(id="TASK-WORKSPACE-OTHER",legacy_id=None,lead_id="LEAD-WORKSPACE",title="Confirm inventory",
+                    due_date=local_day.isoformat(),owner="USER-WORKSPACE",status="Open",historical=0,raw_json="{}",created_at=now()))
+            client=TestClient(app);client.cookies.set("crownops_session","workspace-session");client.headers.update({"x-csrf-token":"csrf-workspace"})
+
+            workspace=client.get("/api/ux/actions/task/TASK-WORKSPACE/workspace")
+            self.assertEqual(workspace.status_code,200,workspace.text)
+            body=workspace.json()
+            self.assertEqual(body["client"]["client_name"],"Workspace Client")
+            self.assertEqual(body["owner"]["name"],"Workspace Agent")
+            self.assertEqual(body["action"]["call"]["phone"],"5145557788")
+            self.assertEqual(body["action"]["call"]["occurred_at"],"2026-10-06T17:15:44+00:00")
+            self.assertFalse(body["action"]["call"]["voicemail"])
+            self.assertEqual(len(body["open_tasks"]),2)
+
+            later=client.post("/api/ux/actions/task/TASK-WORKSPACE/outcome",json={
+                "outcome":"followup","followup_date":follow_day,"followup_title":"Call client after review","note":"Client asked for time."
+            })
+            self.assertEqual(later.status_code,200,later.text)
+            next_task=later.json()["followup_task_id"]
+            self.assertTrue(next_task)
+            with transaction(db_path) as db:
+                self.assertEqual(one(db,"SELECT status FROM tasks WHERE id='TASK-WORKSPACE'")["status"],"Done")
+                follow=one(db,"SELECT * FROM tasks WHERE id=?",(next_task,))
+                self.assertEqual(follow["due_date"],follow_day)
+                self.assertEqual(follow["owner"],"USER-WORKSPACE")
+                self.assertEqual(follow["title"],"Call client after review")
+                recorded=one(db,"SELECT * FROM action_outcomes WHERE action_id='TASK-WORKSPACE' ORDER BY created_at DESC LIMIT 1")
+                self.assertEqual(recorded["outcome"],"followup")
+                self.assertEqual(recorded["followup_task_id"],next_task)
+
+            lost=client.post(f"/api/ux/actions/task/{next_task}/outcome",json={"outcome":"lost","note":"Client is no longer moving."})
+            self.assertEqual(lost.status_code,200,lost.text)
+            with transaction(db_path) as db:
+                self.assertEqual(one(db,"SELECT stage FROM leads WHERE id='LEAD-WORKSPACE'")["stage"],"Lost")
+                remaining=db.execute("SELECT count(*) FROM tasks WHERE lead_id='LEAD-WORKSPACE' AND status!='Done' AND historical=0").fetchone()[0]
+                self.assertEqual(remaining,0)
+                outcomes=db.execute("SELECT count(*) FROM action_outcomes WHERE lead_id='LEAD-WORKSPACE'").fetchone()[0]
+                self.assertEqual(outcomes,2)
+
+    def test_action_workspace_email_outcomes_resolve_email_and_update_stage(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path=Path(td)/"crownops.sqlite3"
+            app=create_app(db_path)
+            expiry=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(timespec="seconds")
+            with transaction(db_path) as db:
+                insert(db,"users",dict(id="USER-EMAIL-OUTCOME",email="email.outcome@example.invalid",name="Email Agent",role="sales",
+                    password_hash="unused-test-hash",active=1,created_at=now()))
+                insert(db,"sessions",dict(token_hash=sha("email-outcome-session"),user_id="USER-EMAIL-OUTCOME",csrf="csrf-email-outcome",expires_at=expiry))
+                insert(db,"leads",dict(id="LEAD-EMAIL-OUTCOME",client_name="Email Client",email="emailclient@example.invalid",
+                    assigned_to="USER-EMAIL-OUTCOME",stage="New Lead",created_at=now(),updated_at=now()))
+                insert(db,"messages",dict(id="MSG-EMAIL-OUTCOME",lead_id="LEAD-EMAIL-OUTCOME",kind="Incoming email",
+                    subject="Question about my move",body="Can you send me the estimate again?",language="English",author="sync",created_at=now()))
+                insert(db,"inbox_claims",dict(message_id="MSG-EMAIL-OUTCOME",claimed_by="USER-EMAIL-OUTCOME",claimed_at=now(),resolved_at=None))
+            client=TestClient(app);client.cookies.set("crownops_session","email-outcome-session");client.headers.update({"x-csrf-token":"csrf-email-outcome"})
+            workspace=client.get("/api/ux/actions/email/MSG-EMAIL-OUTCOME/workspace")
+            self.assertEqual(workspace.status_code,200,workspace.text)
+            self.assertIn("estimate again",workspace.json()["action"]["body"])
+            sent=client.post("/api/ux/actions/email/MSG-EMAIL-OUTCOME/outcome",json={"outcome":"quote_sent","note":"Resent estimate manually."})
+            self.assertEqual(sent.status_code,200,sent.text)
+            with transaction(db_path) as db:
+                self.assertEqual(one(db,"SELECT stage FROM leads WHERE id='LEAD-EMAIL-OUTCOME'")["stage"],"Quote Sent")
+                self.assertIsNotNone(one(db,"SELECT resolved_at FROM inbox_claims WHERE message_id='MSG-EMAIL-OUTCOME'")["resolved_at"])
+                self.assertEqual(one(db,"SELECT outcome FROM action_outcomes WHERE action_id='MSG-EMAIL-OUTCOME'")["outcome"],"quote_sent")
 
     def test_gmail_readonly_diagnostic_reports_actual_account_and_required_labels(self):
         with tempfile.TemporaryDirectory() as td:

@@ -226,6 +226,77 @@ def _assign_generic_action(db,ref,target_id,actor,reason,strict=False):
       {'from':current.get('assigned_to') if current else '','to':target_id,'label':ref.get('label') or ''})
     return {'assigned_to':target_id,'assigned_name':target.get('name') if target else ''}
 
+
+def _json_dict(value):
+    try:
+        data=json.loads(value or '{}')
+        return data if isinstance(data,dict) else {}
+    except Exception:
+        return {}
+
+def _action_workspace_data(db,ref):
+    lead_id=str(ref.get('lead_id') or '')
+    if not lead_id:raise HTTPException(422,'This action uses its dedicated operational screen.')
+    lead=one(db,'SELECT * FROM leads WHERE id=?',(lead_id,))
+    if not lead:raise HTTPException(404,'Client project not found.')
+    owner=None
+    if lead.get('assigned_to'):
+        owner=one(db,'SELECT id,name,email,role FROM users WHERE id=? OR name=? LIMIT 1',(lead['assigned_to'],lead['assigned_to']))
+    action={}
+    if ref['kind']=='task':
+        task=one(db,'SELECT * FROM tasks WHERE id=?',(ref['id'],))
+        if not task:raise HTTPException(404,'Follow-up not found.')
+        meta=_json_dict(task.get('raw_json'))
+        action={'kind':'task','id':task['id'],'title':task['title'],'status':task['status'],
+          'due_date':task.get('due_date') or '','created_at':task['created_at'],'detail':''}
+        call_id=str(meta.get('call_id') or '')
+        if call_id:
+            call=one(db,'SELECT * FROM calls WHERE id=?',(call_id,))
+            if call:
+                detail=_json_dict(call.get('payload_json'))
+                action['call']={
+                  'id':call['id'],'phone':detail.get('phone') or detail.get('Phone') or '',
+                  'caller':detail.get('caller') or detail.get('Caller') or lead.get('client_name') or '',
+                  'occurred_at':detail.get('occurred_at') or detail.get('call_time') or call['created_at'],
+                  'subject':detail.get('subject') or '',
+                  'voicemail':bool(detail.get('voicemail')),
+                  'attachments':detail.get('attachments') or []
+                }
+                action['detail']='Voicemail' if action['call']['voicemail'] else 'Missed call'
+    elif ref['kind']=='email':
+        msg=one(db,'SELECT * FROM messages WHERE id=?',(ref['id'],))
+        if not msg:raise HTTPException(404,'Email not found.')
+        claim=one(db,'SELECT * FROM inbox_claims WHERE message_id=?',(msg['id'],))
+        action={'kind':'email','id':msg['id'],'title':msg.get('subject') or 'Client email',
+          'status':'Answered' if claim and claim.get('resolved_at') else 'Unanswered',
+          'created_at':msg['created_at'],'body':msg.get('body') or '','message_kind':msg.get('kind') or '',
+          'claimed_by':claim.get('claimed_by') if claim else '','resolved_at':claim.get('resolved_at') if claim else ''}
+    else:
+        raise HTTPException(422,'Open this action from its dedicated operational screen.')
+    open_tasks=rows(db,"""SELECT id,title,due_date,owner,status,created_at FROM tasks
+      WHERE lead_id=? AND status!='Done' AND historical=0 ORDER BY CASE WHEN due_date='' THEN 1 ELSE 0 END,due_date,created_at""",(lead_id,))
+    latest_quote=one(db,'SELECT id,revision,status,created_at FROM quotes WHERE lead_id=? ORDER BY revision DESC LIMIT 1',(lead_id,))
+    history=_timeline(db,lead_id)[:12]
+    client={k:lead.get(k,'') for k in ('id','client_name','email','phone','move_date','pickup','dropoff','stage','assigned_to','priority','language')}
+    return {'action':action,'client':client,'owner':owner,'open_tasks':open_tasks,
+      'latest_quote':latest_quote,'history':history,
+      'outcomes':['done','waiting','followup','quote_sent','lost']}
+
+def _complete_source_action(db,ref,actor):
+    if ref['kind']=='task':
+        db.execute("UPDATE tasks SET status='Done' WHERE id=?",(ref['id'],))
+    elif ref['kind']=='email':
+        claim=one(db,'SELECT * FROM inbox_claims WHERE message_id=?',(ref['id'],))
+        if claim:
+            db.execute('UPDATE inbox_claims SET resolved_at=?,claimed_by=? WHERE message_id=?',(now(),actor,ref['id']))
+        else:
+            insert(db,'inbox_claims',dict(message_id=ref['id'],claimed_by=actor,claimed_at=now(),resolved_at=now()))
+
+def _record_action_outcome(db,ref,lead_id,outcome,note,followup_task_id,followup_date,actor):
+    insert(db,'action_outcomes',dict(id=uid('OUTCOME'),action_type=ref['kind'],action_id=ref['id'],
+      lead_id=lead_id,outcome=outcome,note=note,followup_task_id=followup_task_id or None,
+      followup_date=followup_date or '',actor=actor,created_at=now()))
+
 def register_ux_features(app,path,auth):
     @app.get('/api/ux/today')
     def today_view(view:str='',u=Depends(auth)):
@@ -323,6 +394,65 @@ def register_ux_features(app,path,auth):
             if ref.get('lead_id'):
                 return {'ok':True,**_sync_client_owner(db,ref['lead_id'],target_id,u['id'],'Action reassigned')}
             return {'ok':True,**_assign_generic_action(db,ref,target_id,u['id'],'Action reassigned')}
+    @app.get('/api/ux/actions/{kind}/{action_id}/workspace')
+    def action_workspace(kind:str,action_id:str,u=Depends(auth)):
+        require_role(u,OFFICE)
+        with closing(connect(path)) as db:
+            ref=_action_reference(db,kind,action_id)
+            return _action_workspace_data(db,ref)
+
+    @app.post('/api/ux/actions/{kind}/{action_id}/outcome')
+    def action_outcome(kind:str,action_id:str,data:dict,u=Depends(auth)):
+        require_role(u,{'owner','sales','dispatch'})
+        outcome=str(data.get('outcome') or '').strip().lower()
+        allowed={'done','waiting','followup','quote_sent','lost'}
+        if outcome not in allowed:raise HTTPException(422,'Choose a valid action outcome.')
+        note=str(data.get('note') or '').strip()
+        if len(note)>3000:raise HTTPException(422,'Keep the outcome note under 3,000 characters.')
+        followup_date=str(data.get('followup_date') or '').strip()
+        followup_title=str(data.get('followup_title') or '').strip()
+        if len(followup_title)>300:raise HTTPException(422,'Keep the follow-up title under 300 characters.')
+        with transaction(path) as db:
+            ref=_action_reference(db,kind,action_id)
+            if not ref.get('lead_id'):raise HTTPException(422,'Use the dedicated operational screen for this action.')
+            lead=one(db,'SELECT * FROM leads WHERE id=?',(ref['lead_id'],))
+            if not lead:raise HTTPException(404,'Client project not found.')
+            current=str(lead.get('assigned_to') or '')
+            if current:
+                current_user=one(db,'SELECT id,name FROM users WHERE id=? OR name=? LIMIT 1',(current,current))
+                current_id=current_user.get('id') if current_user else current
+                if current_id!=u['id'] and u['role'] not in MANAGERS:
+                    raise HTTPException(403,'This client is assigned to another team member.')
+            else:
+                _sync_client_owner(db,lead['id'],u['id'],u['id'],'Action claimed during outcome',strict=True)
+            next_task_id=None
+            if outcome=='followup':
+                if not followup_date:raise HTTPException(422,'Choose the follow-up date.')
+                due=_date_arg(followup_date,'follow-up date')
+                today_local=datetime.now(TORONTO).date()
+                if due<today_local:raise HTTPException(422,'Follow-up date cannot be in the past.')
+                next_task_id=uid('TASK')
+                title=followup_title or ('Follow up with '+(lead.get('client_name') or 'client'))
+                owner=lead.get('assigned_to') or u['id']
+                if owner not in (u['id'],u.get('name')) and u['role'] not in MANAGERS:
+                    owner=u['id']
+                insert(db,'tasks',dict(id=next_task_id,legacy_id=None,lead_id=lead['id'],title=title,
+                  due_date=followup_date,owner=owner,status='Open',historical=0,raw_json='{}',created_at=now()))
+            _complete_source_action(db,ref,u['id'])
+            if outcome=='waiting':
+                db.execute("UPDATE leads SET stage='Waiting on client',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
+            elif outcome=='quote_sent':
+                db.execute("UPDATE leads SET stage='Quote Sent',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
+            elif outcome=='lost':
+                db.execute("UPDATE leads SET stage='Lost',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
+                db.execute("UPDATE tasks SET status='Done' WHERE lead_id=? AND status!='Done' AND historical=0",(lead['id'],))
+                db.execute("""UPDATE inbox_claims SET resolved_at=? WHERE message_id IN
+                  (SELECT id FROM messages WHERE lead_id=?) AND resolved_at IS NULL""",(now(),lead['id']))
+            _record_action_outcome(db,ref,lead['id'],outcome,note,next_task_id,followup_date,u['id'])
+            audit(db,u['id'],'Action outcome recorded','action_outcomes',ref['kind']+':'+ref['id'],
+              {'outcome':outcome,'lead_id':lead['id'],'followup_task_id':next_task_id,'followup_date':followup_date,'note':note})
+        return {'ok':True,'outcome':outcome,'followup_task_id':next_task_id}
+
     @app.get('/api/ux/search')
     def global_search(q:str='',u=Depends(auth)):
         require_role(u,OFFICE)

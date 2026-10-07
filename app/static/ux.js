@@ -1,6 +1,6 @@
 /* CrownOps v5.4 simplified job review pass: simple defaults, useful exceptions, clean role-based UX. */
 'use strict';
-const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,actionAssignees:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
+const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,actionAssignees:null,currentAction:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
 
 // ---------- Navigation: show the things people actually use ----------
 ensureNav(['communications','mail','Communications']);
@@ -61,6 +61,43 @@ function uxAttentionButton(a){
  const attrs=`data-ux="attention" data-kind="${h(a.type)}" data-id="${h(a.id||'')}" data-lead="${h(a.lead_id||'')}"`;
  return `<div class="row">${uxActionAssignmentButtons(a.type,a.id,a.owner)}<button class="btn-small" ${attrs}>Open</button></div>`;
 }
+function uxActionOutcomeLabel(key){
+ return ({done:'Done',waiting:'Waiting on client',followup:'Follow up later',quote_sent:'Quote sent',lost:'Lost / not proceeding'})[key]||key;
+}
+function uxActionDetailHtml(d){
+ const a=d.action,c=d.client||{},call=a.call;
+ let exact='';
+ if(call){
+   const phone=call.phone?'<a href="tel:'+h(call.phone)+'">'+h(call.phone)+'</a>':'Phone unavailable';
+   exact=`<div class="callout teal"><div class="eyebrow">${call.voicemail?'VOICEMAIL':'MISSED CALL'}</div><h3 style="margin:4px 0">${h(call.caller||c.client_name||'Unknown caller')}</h3><div class="small">${phone} &middot; ${h(call.occurred_at||a.created_at||'')}</div>${call.subject?'<div class="tiny muted" style="margin-top:6px">'+h(call.subject)+'</div>':''}</div>`;
+ }else if(a.kind==='email'){
+   exact=`<div class="panel panel-body"><div class="eyebrow">CLIENT EMAIL</div><h3>${h(a.title||'Client email')}</h3><div class="tiny muted">${h(a.created_at||'')}</div><div class="spacer"></div><div class="small" style="white-space:pre-wrap;max-height:280px;overflow:auto">${h(a.body||'')}</div></div>`;
+ }else{
+   exact=`<div class="panel panel-body"><div class="eyebrow">FOLLOW-UP</div><h3>${h(a.title||'Follow-up')}</h3><div class="small muted">${a.due_date?'Due '+h(a.due_date)+' · ':''}${h(a.status||'')}</div></div>`;
+ }
+ const owner=d.owner?.name||'Unclaimed';
+ const client=`<div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3 style="margin-bottom:4px">${h(c.client_name||'Client')}</h3><div class="small muted">${h(c.stage||'')}</div><div class="spacer"></div><div class="stack compact"><div><strong>Phone:</strong> ${c.phone?'<a href="tel:'+h(c.phone)+'">'+h(c.phone)+'</a>':'—'}</div><div><strong>Email:</strong> ${c.email?'<a href="mailto:'+h(c.email)+'">'+h(c.email)+'</a>':'—'}</div><div><strong>Move:</strong> ${h(c.move_date||'Date needed')}</div><div><strong>Pickup:</strong> ${h(c.pickup||'Address needed')}</div>${c.dropoff?'<div><strong>Destination:</strong> '+h(c.dropoff)+'</div>':''}<div><strong>Owner:</strong> ${h(owner)}</div></div></div>`;
+ const tasks=(d.open_tasks||[]).length?(d.open_tasks||[]).map(t=>`<div class="task-row"><div class="grow"><div class="small strong">${h(t.title)}</div><div class="tiny muted">${h(t.due_date||'No due date')}${t.id===a.id?' · current action':''}</div></div>${pill(t.status)}</div>`).join(''):'<div class="tiny muted">No other open follow-ups.</div>';
+ const history=(d.history||[]).slice(0,8).map(x=>`<div class="activity-row"><span class="activity-dot"></span><div class="grow"><div class="tiny strong">${h(x.title)}</div><div class="tiny muted">${h(x.kind)} &middot; ${h(x.at)}${x.detail?' &middot; '+h(x.detail):''}</div></div>${x.status?pill(x.status):''}</div>`).join('')||'<div class="tiny muted">No recent history.</div>';
+ return `<div class="grid2">${exact}${client}</div><div class="spacer"></div><div class="grid2"><div class="panel panel-body"><div class="eyebrow">OPEN FOLLOW-UPS</div><div class="spacer"></div>${tasks}</div><div class="panel panel-body"><div class="eyebrow">RECENT HISTORY</div><div class="spacer"></div>${history}</div></div>`;
+}
+async function uxOpenActionWorkspace(kind,id){
+ const d=await api('/ux/actions/'+encodeURIComponent(kind)+'/'+encodeURIComponent(id)+'/workspace');UX.currentAction={kind,id,data:d,page:S.page};
+ const owner=d.owner?.name||'Unclaimed';
+ const outcomeButtons=(d.outcomes||[]).map(o=>`<button class="${o==='lost'?'btn-soft':'btn-small'}" data-ux="action-outcome-open" data-kind="${h(kind)}" data-id="${h(id)}" data-outcome="${h(o)}">${h(uxActionOutcomeLabel(o))}</button>`).join('');
+ showModal(d.action?.title||'Action workspace',
+   `<div class="callout ${d.owner?'teal':'orange'}"><strong>${d.owner?'Owned by '+h(owner):'Unclaimed action'}</strong><div class="small muted" style="margin-top:5px">${d.owner?'The client and open follow-ups stay with this owner.':'Choosing an outcome will claim this client to you first.'}</div></div><div class="spacer"></div>${uxActionDetailHtml(d)}`,
+   `<button class="btn-soft" data-ux="open-client" data-id="${h(d.client.id)}">Full client</button><div class="grow"></div>${outcomeButtons}`,true);
+}
+function uxActionOutcomeForm(kind,id,outcome){
+ const labels={done:['Complete action','Mark this action complete and remove it from the active queue.'],waiting:['Waiting on client','Close this action for now. A new client message can become the next action.'],followup:['Follow up later','Close this action and create the next owned follow-up automatically.'],quote_sent:['Quote sent','Record that the estimate was sent and close this current action.'],lost:['Lost / not proceeding','Close this client opportunity and all remaining active follow-ups.']};
+ const [title,desc]=labels[outcome]||['Update action',''];
+ const follow=outcome==='followup'?`<div class="grid2">${field('followup_date','Follow-up date','','date','required')}${field('followup_title','Next action','Follow up with client')}</div>`:'';
+ const warning=outcome==='lost'?'<div class="callout orange"><strong>This closes the active opportunity.</strong><div class="small muted" style="margin-top:5px">All remaining active follow-ups for this client will be completed.</div></div><div class="spacer"></div>':'';
+ showModal(title,`${warning}<p class="small muted">${h(desc)}</p><form id="ux-action-outcome-form" data-ux-form="action-outcome"><input type="hidden" name="action_kind" value="${h(kind)}"><input type="hidden" name="action_id" value="${h(id)}"><input type="hidden" name="outcome" value="${h(outcome)}">${follow}${textArea('note','Internal note (optional)','',3)}</form>`,
+   `${btn('close','Cancel')}<button type="submit" form="ux-action-outcome-form" class="btn-primary">${h(title)}</button>`,true);
+}
+
 async function uxAssignAction(kind,id,currentOwner){
  if(!UX.actionAssignees)UX.actionAssignees=await api('/ux/action-assignees');
  const opts=[['','Unassigned'],...UX.actionAssignees.map(u=>[u.id,u.name+' · '+(u.role==='owner'?'manager':u.role)])];
@@ -75,7 +112,7 @@ X.pageRenderers.communications=async()=>{
  const [tasks,calls,mail,inbox]=await Promise.all([api('/tasks?scope=active'),api('/calls'),api('/outbound'),api('/ux/inbox')]);
  const due=tasks.slice(0,30),recentCalls=calls.slice(0,25),out=mail.slice(0,25);
  const openInbox=inbox.filter(m=>!m.resolved_at),answered=inbox.filter(m=>m.resolved_at);
- const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(m.created_at)}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name===S.user.name?'You':m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}<div class="row">${uxActionAssignmentButtons('email',m.id,m.claimed_by)}${m.claimed_by&&(m.claimed_by===S.user.id||S.user.role==='owner')?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:''}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');
+ const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(m.created_at)}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name===S.user.name?'You':m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}<div class="row">${uxActionAssignmentButtons('email',m.id,m.claimed_by)}<button class="btn-small" data-ux="action-workspace" data-kind="email" data-id="${h(m.id)}">Open</button>${m.claimed_by&&(m.claimed_by===S.user.id||S.user.role==='owner')?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:''}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');
  return head('Communications','One shared place for client email, follow-ups and calls.',xbtn('new-email','Prepare email','','btn-primary'))+
  `<div class="grid3"><div class="panel metric"><div class="label"><span>Unanswered email</span>${icon('mail')}</div><div class="value">${openInbox.length}</div></div><div class="panel metric"><div class="label"><span>Open follow-ups</span>${icon('check')}</div><div class="value">${tasks.filter(x=>x.status!=='Done').length}</div></div><div class="panel metric"><div class="label"><span>Recent calls</span>${icon('phone')}</div><div class="value">${calls.length}</div></div></div><div class="spacer"></div>`+
  panel('Shared client inbox',inboxHtml)+
@@ -241,7 +278,7 @@ X.pageRenderers.followups=async()=>{
    h(t.due_date||'No date'),
    t.owner?(t.owner===S.user.id?'<span class="pill blue">You</span>':`<span class="pill gray">${h(ownerNames[t.owner]||t.owner)}</span>`):'<span class="pill orange">Unassigned</span>',
    pill(state(t)==='completed'?'Done':state(t)==='overdue'?'Overdue':state(t)==='today'?'Due today':'Upcoming'),
-   `<div class="row">${t.status!=='Done'?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
+   `<div class="row">${t.status!=='Done'?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.status!=='Done'&&t.lead_id?`<button class="btn-small" data-ux="action-workspace" data-kind="task" data-id="${h(t.id)}">Open</button>`:''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
  ]);
  const overview=`<div class="ux-overview-grid">${[
    uxOverviewMetric('Open',counts.open),
@@ -333,9 +370,11 @@ document.addEventListener('click',async e=>{
     modal.close();toast(userId?'Assignment updated.':'Action returned to Unclaimed.');
     return navigate(S.page);
   }
+  if(a==='action-workspace')return uxOpenActionWorkspace(el.dataset.kind,id);
+  if(a==='action-outcome-open')return uxActionOutcomeForm(el.dataset.kind,id,el.dataset.outcome);
   if(a==='attention'){
     const k=el.dataset.kind,lid=el.dataset.lead;
-    if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='task'&&lid)return openLead(lid);if(k==='payment')return navigate('payments');if(k==='gmail'||k==='gmail-payment-batch')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
+    if(k==='task'&&lid)return uxOpenActionWorkspace('task',id);if(k==='email'&&lid)return uxOpenActionWorkspace('email',id);if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='payment')return navigate('payments');if(k==='gmail'||k==='gmail-payment-batch')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
   }
   if(a==='search-open'){modal.close();if(el.dataset.type==='client')return openLead(id);if(el.dataset.type==='job')return openJob(id);if(el.dataset.type==='invoice')return openInvoice(id);}
   if(a==='estimate-open')return openQuote(id);
@@ -415,6 +454,13 @@ document.addEventListener('submit',async e=>{
     const team=UX.crewHours,employee_ids=team.employees.map(x=>x.id),exceptions={};
     for(const emp of team.employees){const common=f.elements['common_'+emp.id].checked;if(!common)exceptions[emp.id]={total_hours:Number(f.elements['hours_'+emp.id].value),note:f.elements['note_'+emp.id].value};}
     await api('/ux/jobs/'+encodeURIComponent(d.job_id)+'/crew-hours',{method:'POST',data:{employee_ids,team_hours:Number(d.team_hours),exceptions,note:d.note}});toast('Team hours saved.');modal.close();return navigate('team');
+  }
+  if(kind==='action-outcome'){
+    const returnPage=UX.currentAction?.page||'dashboard';
+    const r=await api('/ux/actions/'+encodeURIComponent(d.action_kind)+'/'+encodeURIComponent(d.action_id)+'/outcome',{method:'POST',data:{outcome:d.outcome,note:d.note||'',followup_date:d.followup_date||'',followup_title:d.followup_title||''}});
+    modal.close();
+    const msg=r.outcome==='followup'?'Follow-up scheduled.':r.outcome==='waiting'?'Marked waiting on client.':r.outcome==='quote_sent'?'Quote-sent outcome recorded.':r.outcome==='lost'?'Opportunity closed as lost.':'Action completed.';
+    toast(msg);return navigate(returnPage);
   }
   if(kind==='followup'){await api('/tasks',{method:'POST',data:{lead_id:d.lead_id,title:d.title,due_date:d.due_date}});modal.close();toast('Follow-up added.');return navigate('followups');}
   if(kind==='qbo-setup'){await api('/quickbooks/setup',{method:'PATCH',data:d});modal.close();toast('QuickBooks mapping saved.');return navigate('connections');}
