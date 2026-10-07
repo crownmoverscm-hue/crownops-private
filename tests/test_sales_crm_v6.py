@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 
@@ -5,7 +6,8 @@ from fastapi import HTTPException
 from pathlib import Path
 
 from app.store import initialize, transaction, one
-from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours, minimum_trucks_for_movers, service_minimum_hours, long_distance_hos_plan
+from app.gmail_sync import _gmail_received_iso
+from app.sales_crm_v6 import schema, calculate, quote_start_window, quoted_block_hours, minimum_trucks_for_movers, service_minimum_hours, long_distance_hos_plan, client_latest_activity
 
 
 class SalesCrmV6Tests(unittest.TestCase):
@@ -18,6 +20,39 @@ class SalesCrmV6Tests(unittest.TestCase):
               (id,label,start_date,end_date,rate_2_cents,rate_3_cents,rate_4_cents,rate_5_cents,rate_6_cents,active,version,note,approved_by,created_at)
               VALUES ('RATE-TEST','Fall 2026','2026-09-01','2026-12-31',13500,17500,22000,26000,31500,1,1,'test','test','2026-01-01T00:00:00+00:00')""")
         return td,path
+
+    def test_gmail_quote_activity_uses_original_email_time_not_import_time(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                db.execute("""INSERT INTO leads
+                  (id,external_id,client_name,email,phone,source,lead_type,stage,created_at,updated_at)
+                  VALUES ('LEAD-GMAIL-TIME','gmail:test-quote','Timed Client','timed@example.invalid','5145550101',
+                  'Gmail','Form','New Lead','2026-10-06T21:46:00+00:00','2026-10-06T21:46:00+00:00')""")
+                db.execute("""INSERT INTO client_accounts
+                  (id,identity_key,client_name,email,phone,language,created_at,updated_at)
+                  VALUES ('CLIENT-GMAIL-TIME','e:timed@example.invalid','Timed Client','timed@example.invalid','5145550101',
+                  'English','2026-10-06T21:46:00+00:00','2026-10-06T21:46:00+00:00')""")
+                db.execute("""INSERT INTO client_account_leads(client_id,lead_id,created_at)
+                  VALUES ('CLIENT-GMAIL-TIME','LEAD-GMAIL-TIME','2026-10-06T21:46:00+00:00')""")
+                db.execute("""INSERT INTO integration_events
+                  (id,event_key,event_type,object_id,payload_json,status,created_at)
+                  VALUES ('EVENT-GMAIL-TIME','gmail:test-quote','gmail_quote','LEAD-GMAIL-TIME',?,'Imported',
+                  '2026-10-06T21:46:00+00:00')""",
+                  (json.dumps({"date":"Tue, 6 Oct 2026 14:30:00 -0400","subject":"New Quote Request"}),))
+                activity=client_latest_activity(db,"CLIENT-GMAIL-TIME")
+            self.assertEqual(activity["label"],"Quote request")
+            self.assertEqual(activity["at"],"2026-10-06T18:30:00+00:00")
+        finally:
+            td.cleanup()
+
+    def test_gmail_received_time_prefers_internal_date_and_supports_header_date(self):
+        self.assertEqual(
+            _gmail_received_iso({},{"date":"Tue, 6 Oct 2026 14:30:00 -0400"}),
+            "2026-10-06T18:30:00+00:00")
+        self.assertEqual(
+            _gmail_received_iso({"internalDate":"1791311400000"},{"date":"Tue, 6 Oct 2026 14:30:00 -0400"}),
+            "2026-10-06T14:30:00+00:00")
 
     def test_templates_include_blank_long_distance_english_and_french(self):
         td,path=self.make_db()
