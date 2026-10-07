@@ -4,6 +4,7 @@ import json
 import unittest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
@@ -74,8 +75,9 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             db_path=Path(td)/"crownops.sqlite3"
             app=create_app(db_path)
             now_utc=datetime.now(timezone.utc)
-            today_local=datetime.now().date().isoformat()
-            tomorrow=(datetime.now().date()+timedelta(days=1)).isoformat()
+            local_day=datetime.now(timezone.utc).astimezone(ZoneInfo('America/Toronto')).date()
+            today_local=local_day.isoformat()
+            tomorrow=(local_day+timedelta(days=1)).isoformat()
             expiry=(now_utc+timedelta(days=1)).isoformat(timespec="seconds")
             with transaction(db_path) as db:
                 insert(db,"users",dict(id="USER-OWNER-TODAY",email="owner.today@example.invalid",name="Owner Today",role="owner",
