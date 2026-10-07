@@ -321,6 +321,18 @@ document.addEventListener('click',async e=>{
   if(a==='open-job')return openJob(id);
   if(a==='open-client')return openLead(id);
   if(a==='today-view'){UX.todayView=el.dataset.value||'team';return navigate('dashboard');}
+  if(a==='action-claim'){
+    await api('/ux/actions/'+encodeURIComponent(el.dataset.kind) + '/' + encodeURIComponent(id) + '/claim',{method:'POST'});
+    toast('Action claimed. Related client work is now aligned to you.');
+    return navigate(S.page);
+  }
+  if(a==='action-assign')return uxAssignAction(el.dataset.kind,id,el.dataset.owner||'');
+  if(a==='action-assign-save'){
+    const userId=document.getElementById('ux-action-assignee')?.value||'';
+    await api('/ux/actions/'+encodeURIComponent(el.dataset.kind) + '/' + encodeURIComponent(id) + '/assign',{method:'POST',data:{user_id:userId}});
+    modal.close();toast(userId?'Assignment updated.':'Action returned to Unclaimed.');
+    return navigate(S.page);
+  }
   if(a==='attention'){
     const k=el.dataset.kind,lid=el.dataset.lead;
     if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='task'&&lid)return openLead(lid);if(k==='payment')return navigate('payments');if(k==='gmail'||k==='gmail-payment-batch')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
