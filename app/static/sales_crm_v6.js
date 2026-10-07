@@ -60,7 +60,7 @@ async function crmClientBrowser(){
    '<div class="filterbar"><div class="searchbox" style="min-width:360px">'+icon('search')+
    '<input id="crm-client-search" value="'+h(CRM.clientSearch)+'" placeholder="Search name, email, phone or address..." aria-label="Search clients"></div>'+
    '<span class="tiny muted">'+clients.length+' client matches · newest inquiry first</span></div>'+
-   '<div class="panel"><div class="panel-head"><h2>Inquiry inbox</h2><span class="tiny muted">Forms, calls, voicemails and emails are ranked by the client's actual inquiry time</span></div>'+
+   '<div class="panel"><div class="panel-head"><h2>Inquiry inbox</h2><span class="tiny muted">Forms, calls, voicemails and emails are ranked by the actual inquiry time</span></div>'+
    '<div class="panel-body flush">'+(rows.length?xtable(['Client','Latest inquiry','Move / service','Stage / follow-up','History',''],rows):empty('No clients found','Search another email, phone or name, or create a new client.'))+'</div></div>';
 }
 X.pageRenderers.sales=crmClientBrowser;
