@@ -304,12 +304,24 @@ def client_latest_activity(db,client_id):
           "at":activity_at,"occurred_at":activity_at,
           "lead_id":call["lead_id"],"summary":summary[:180]})
 
-    msg=one(db,"""SELECT m.* FROM messages m JOIN client_account_leads x ON x.lead_id=m.lead_id
+    msg=one(db,"""SELECT m.*,l.source lead_source,l.lead_type lead_type
+      FROM messages m JOIN client_account_leads x ON x.lead_id=m.lead_id JOIN leads l ON l.id=m.lead_id
       WHERE x.client_id=? AND lower(m.kind)='incoming email'
       ORDER BY m.created_at DESC LIMIT 1""",(client_id,))
     if msg:
-        candidates.append({"type":"email","label":"Email","source":"Company email","at":msg["created_at"],
-          "lead_id":msg["lead_id"],"summary":str(msg.get("subject") or msg.get("body") or "")[:180]})
+        auto_quote_copy=False
+        if str(msg.get("lead_source") or "")=="Gmail" and str(msg.get("lead_type") or "") in ("Form","Instant estimate"):
+            ev=one(db,"""SELECT payload_json FROM integration_events
+              WHERE event_type='gmail_quote' AND object_id=? ORDER BY created_at DESC LIMIT 1""",(msg["lead_id"],))
+            if ev:
+                try:payload=json.loads(ev.get("payload_json") or "{}")
+                except Exception:payload={}
+                original_subject=str(payload.get("subject") or "").strip().lower()
+                message_subject=str(msg.get("subject") or "").strip().lower()
+                auto_quote_copy=bool(original_subject and message_subject==original_subject)
+        if not auto_quote_copy:
+            candidates.append({"type":"email","label":"Email","source":"Company email","at":msg["created_at"],
+              "lead_id":msg["lead_id"],"summary":str(msg.get("subject") or msg.get("body") or "")[:180]})
 
     if not candidates:return None
     candidates.sort(key=lambda x:str(x.get("at") or ""),reverse=True)

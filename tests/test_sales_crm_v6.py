@@ -46,6 +46,47 @@ class SalesCrmV6Tests(unittest.TestCase):
         finally:
             td.cleanup()
 
+    def test_quote_form_email_copy_does_not_override_quote_request_activity(self):
+        td,path=self.make_db()
+        try:
+            with transaction(path) as db:
+                db.execute("""INSERT INTO leads
+                  (id,external_id,client_name,email,phone,source,lead_type,stage,created_at,updated_at)
+                  VALUES ('LEAD-QUOTE-COPY','gmail:quote-copy','Quote Client','quote@example.invalid','5145550202',
+                  'Gmail','Form','New Lead','2026-10-06T21:46:00+00:00','2026-10-06T21:46:00+00:00')""")
+                db.execute("""INSERT INTO client_accounts
+                  (id,identity_key,client_name,email,phone,language,created_at,updated_at)
+                  VALUES ('CLIENT-QUOTE-COPY','e:quote@example.invalid','Quote Client','quote@example.invalid','5145550202',
+                  'English','2026-10-06T21:46:00+00:00','2026-10-06T21:46:00+00:00')""")
+                db.execute("""INSERT INTO client_account_leads(client_id,lead_id,created_at)
+                  VALUES ('CLIENT-QUOTE-COPY','LEAD-QUOTE-COPY','2026-10-06T21:46:00+00:00')""")
+                db.execute("""INSERT INTO integration_events
+                  (id,event_key,event_type,object_id,payload_json,status,created_at)
+                  VALUES ('EVENT-QUOTE-COPY','gmail:quote-copy','gmail_quote','LEAD-QUOTE-COPY',?,'Imported',
+                  '2026-10-06T21:46:00+00:00')""",
+                  (json.dumps({"date":"Tue, 6 Oct 2026 14:30:00 -0400","subject":"New Crown Movers Quote Request - Quote Client"}),))
+                db.execute("""INSERT INTO messages
+                  (id,lead_id,kind,subject,body,language,author,created_at)
+                  VALUES ('MSG-QUOTE-COPY','LEAD-QUOTE-COPY','Incoming email',
+                  'New Crown Movers Quote Request - Quote Client','Form body','English','sync',
+                  '2026-10-06T21:46:00+00:00')""")
+                activity=client_latest_activity(db,"CLIENT-QUOTE-COPY")
+                self.assertEqual(activity["label"],"Quote request")
+                self.assertEqual(activity["source"],"Gmail")
+                self.assertEqual(activity["at"],"2026-10-06T18:30:00+00:00")
+
+                db.execute("""INSERT INTO messages
+                  (id,lead_id,kind,subject,body,language,author,created_at)
+                  VALUES ('MSG-REAL-REPLY','LEAD-QUOTE-COPY','Incoming email',
+                  'Re: New Crown Movers Quote Request - Quote Client','Can you call me?','English','sync',
+                  '2026-10-06T22:00:00+00:00')""")
+                activity=client_latest_activity(db,"CLIENT-QUOTE-COPY")
+                self.assertEqual(activity["label"],"Email")
+                self.assertEqual(activity["source"],"Company email")
+                self.assertEqual(activity["at"],"2026-10-06T22:00:00+00:00")
+        finally:
+            td.cleanup()
+
     def test_gmail_received_time_prefers_internal_date_and_supports_header_date(self):
         self.assertEqual(
             _gmail_received_iso({},{"date":"Tue, 6 Oct 2026 14:30:00 -0400"}),
