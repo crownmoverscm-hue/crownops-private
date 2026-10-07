@@ -2,6 +2,40 @@
 'use strict';
 const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,actionAssignees:null,currentAction:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
 
+// Display helpers preserve stored values and use Montreal time for real timestamps.
+function uxPhoneLabel(value){
+ const raw=String(value||'').trim(),ext=raw.match(/\s*(?:ext\.?|extension|x|#)\s*(\d+)$/i);
+ const number=ext?raw.slice(0,ext.index).trim():raw;
+ if(!/^[+\d\s().-]+$/.test(number))return raw;
+ let digits=number.replace(/\D/g,'');
+ if(digits.length===11&&digits[0]==='1')digits=digits.slice(1);
+ return digits.length===10?`(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}${ext?' ext. '+ext[1]:''}`:raw;
+}
+function uxDateLabel(value,fallback='—'){
+ const raw=String(value||'').trim();if(!raw)return fallback;
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(raw))return raw;
+ const d=new Date(raw+'T12:00:00Z');
+ if(Number.isNaN(d.getTime())||d.toISOString().slice(0,10)!==raw)return raw;
+ return new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',month:'short',day:'numeric',year:'numeric'}).format(d);
+}
+function uxTimestampLabel(value){
+ const raw=String(value||'').trim();if(!raw)return 'Time unavailable';
+ if(/^\d{4}-\d{2}-\d{2}$/.test(raw))return uxDateLabel(raw);
+ if(!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(raw))return raw;
+ const d=new Date(raw);if(Number.isNaN(d.getTime()))return raw;
+ const day=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',month:'short',day:'numeric',year:'numeric'}).format(d);
+ const time=new Intl.DateTimeFormat('en-US',{timeZone:'America/Toronto',hour:'numeric',minute:'2-digit',hour12:true}).format(d);
+ return `${day} · ${time} ET`;
+}
+function uxHistoryDetail(value){
+ return String(value||'').replace(/^Due (\d{4}-\d{2}-\d{2})(?= ·|$)/,(_,day)=>'Due '+uxDateLabel(day));
+}
+function uxArchivedCallback(task){
+ try{return Boolean(JSON.parse(task.raw_json||'{}').callback_archive);}catch{return false;}
+}
+const uxShowModal=showModal;
+showModal=function(...args){modal.classList.remove('ux-workspace-dialog');return uxShowModal(...args);};
+
 // ---------- Navigation: show the things people actually use ----------
 ensureNav(['communications','mail','Communications']);
 for(const [key,label] of [['dashboard','Today'],['quotes','Estimates'],['followups','Follow-ups'],['invoices','Invoices'],['team','Employee directory'],['payroll','Payroll'],['inventory','Materials'],['rates','Pricing & rates'],['documents','Documents & approvals']]){const n=nav.find(x=>x[0]===key);if(n)n[2]=label;}
@@ -68,34 +102,48 @@ function uxActionDetailHtml(d){
  const a=d.action,c=d.client||{},call=a.call;
  let exact='';
  if(call){
-   const phone=call.phone?'<a href="tel:'+h(call.phone)+'">'+h(call.phone)+'</a>':'Phone unavailable';
-   exact=`<div class="callout teal"><div class="eyebrow">${call.voicemail?'VOICEMAIL':'MISSED CALL'}</div><h3 style="margin:4px 0">${h(call.caller||c.client_name||'Unknown caller')}</h3><div class="small">${phone} &middot; ${h(call.occurred_at||a.created_at||'')}</div>${call.subject?'<div class="tiny muted" style="margin-top:6px">'+h(call.subject)+'</div>':''}</div>`;
+   const phone=call.phone?'<a class="ux-call-phone" href="tel:'+h(call.phone)+'">'+h(uxPhoneLabel(call.phone))+'</a>':'Phone unavailable';
+   exact=`<div class="callout teal ux-action-context"><div class="eyebrow">${call.voicemail?'VOICEMAIL':'MISSED CALL'}</div><h3 style="margin:4px 0">${h(call.caller||c.client_name||'Unknown caller')}</h3><div class="small">${phone}</div><div class="tiny muted">${h(uxTimestampLabel(call.occurred_at||a.created_at))}</div>${call.subject?'<div class="tiny muted" style="margin-top:6px">'+h(call.subject)+'</div>':''}</div>`;
  }else if(a.kind==='email'){
-   exact=`<div class="panel panel-body"><div class="eyebrow">CLIENT EMAIL</div><h3>${h(a.title||'Client email')}</h3><div class="tiny muted">${h(a.created_at||'')}</div><div class="spacer"></div><div class="small" style="white-space:pre-wrap;max-height:280px;overflow:auto">${h(a.body||'')}</div></div>`;
+   exact=`<div class="panel panel-body ux-action-context"><div class="eyebrow">CLIENT EMAIL</div><h3>${h(a.title||'Client email')}</h3><div class="tiny muted">${h(uxTimestampLabel(a.created_at))}</div><div class="spacer"></div><div class="small ux-email-body">${h(a.body||'')}</div></div>`;
  }else{
-   exact=`<div class="panel panel-body"><div class="eyebrow">FOLLOW-UP</div><h3>${h(a.title||'Follow-up')}</h3><div class="small muted">${a.due_date?'Due '+h(a.due_date)+' · ':''}${h(a.status||'')}</div></div>`;
+   exact=`<div class="panel panel-body ux-action-context"><div class="eyebrow">FOLLOW-UP</div><h3>${h(a.title||'Follow-up')}</h3><div class="small muted">${a.due_date?'Due '+h(uxDateLabel(a.due_date))+' · ':''}${h(a.historical?'Archived':a.status||'')}</div></div>`;
  }
  const owner=d.owner?.name||'Unclaimed';
- const client=`<div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3 style="margin-bottom:4px">${h(c.client_name||'Client')}</h3><div class="small muted">${h(c.stage||'')}</div><div class="spacer"></div><div class="stack compact"><div><strong>Phone:</strong> ${c.phone?'<a href="tel:'+h(c.phone)+'">'+h(c.phone)+'</a>':'—'}</div><div><strong>Email:</strong> ${c.email?'<a href="mailto:'+h(c.email)+'">'+h(c.email)+'</a>':'—'}</div><div><strong>Move:</strong> ${h(c.move_date||'Date needed')}</div><div><strong>Pickup:</strong> ${h(c.pickup||'Address needed')}</div>${c.dropoff?'<div><strong>Destination:</strong> '+h(c.dropoff)+'</div>':''}<div><strong>Owner:</strong> ${h(owner)}</div></div></div>`;
- const tasks=(d.open_tasks||[]).length?(d.open_tasks||[]).map(t=>`<div class="task-row"><div class="grow"><div class="small strong">${h(t.title)}</div><div class="tiny muted">${h(t.due_date||'No due date')}${t.id===a.id?' · current action':''}</div></div>${pill(t.status)}</div>`).join(''):'<div class="tiny muted">No other open follow-ups.</div>';
- const history=(d.history||[]).slice(0,8).map(x=>`<div class="activity-row"><span class="activity-dot"></span><div class="grow"><div class="tiny strong">${h(x.title)}</div><div class="tiny muted">${h(x.kind)} &middot; ${h(x.at)}${x.detail?' &middot; '+h(x.detail):''}</div></div>${x.status?pill(x.status):''}</div>`).join('')||'<div class="tiny muted">No recent history.</div>';
- return `<div class="grid2">${exact}${client}</div><div class="spacer"></div><div class="grid2"><div class="panel panel-body"><div class="eyebrow">OPEN FOLLOW-UPS</div><div class="spacer"></div>${tasks}</div><div class="panel panel-body"><div class="eyebrow">RECENT HISTORY</div><div class="spacer"></div>${history}</div></div>`;
+ const client=`<div class="panel panel-body ux-action-context"><div class="eyebrow">CLIENT</div><h3 style="margin-bottom:4px">${h(c.client_name||'Client')}</h3><div class="small muted">${h(c.stage||'')}</div><div class="spacer"></div><div class="stack compact"><div><strong>Phone:</strong> ${c.phone?'<a href="tel:'+h(c.phone)+'">'+h(uxPhoneLabel(c.phone))+'</a>':'—'}</div><div><strong>Email:</strong> ${c.email?'<a href="mailto:'+h(c.email)+'">'+h(c.email)+'</a>':'—'}</div><div><strong>Move:</strong> ${h(uxDateLabel(c.move_date,'Date needed'))}</div><div><strong>Pickup:</strong> ${h(c.pickup||'Address needed')}</div>${c.dropoff?'<div><strong>Destination:</strong> '+h(c.dropoff)+'</div>':''}<div><strong>Owner:</strong> ${h(owner)}</div></div></div>`;
+ const tasks=(d.open_tasks||[]).length?(d.open_tasks||[]).map(t=>`<div class="task-row"><div class="grow"><div class="small strong">${h(t.title)}</div><div class="tiny muted">${h(uxDateLabel(t.due_date,'No due date'))}${t.id===a.id?' · current action':''}</div></div>${pill(t.status)}</div>`).join(''):'<div class="tiny muted">No other open follow-ups.</div>';
+ const history=(d.history||[]).slice(0,8).map(x=>`<div class="activity-row"><span class="activity-dot"></span><div class="grow"><div class="tiny strong">${h(x.title)}</div><div class="tiny muted">${h(x.kind)} &middot; ${h(uxTimestampLabel(x.at))}${x.detail?' &middot; '+h(uxHistoryDetail(x.detail)):''}</div></div>${x.status?pill(x.status):''}</div>`).join('')||'<div class="tiny muted">No recent history.</div>';
+ return `<div class="ux-action-workspace"><div class="grid2">${exact}${client}</div><div class="spacer"></div><div class="grid2"><div class="panel panel-body"><div class="eyebrow">OPEN FOLLOW-UPS</div><div class="spacer"></div>${tasks}</div><div class="panel panel-body"><div class="eyebrow">RECENT HISTORY</div><div class="spacer"></div>${history}</div></div></div>`;
 }
 async function uxOpenActionWorkspace(kind,id){
  const d=await api('/ux/actions/'+encodeURIComponent(kind)+'/'+encodeURIComponent(id)+'/workspace');UX.currentAction={kind,id,data:d,page:S.page};
  const owner=d.owner?.name||'Unclaimed';
- const outcomeButtons=(d.outcomes||[]).map(o=>`<button class="${o==='lost'?'btn-soft':'btn-small'}" data-ux="action-outcome-open" data-kind="${h(kind)}" data-id="${h(id)}" data-outcome="${h(o)}">${h(uxActionOutcomeLabel(o))}</button>`).join('');
+ const otherOwner=d.owner&&d.owner.id!==S.user.id&&d.owner.name!==S.user.name&&S.user.role!=='owner';
+ const canAct=may(['owner','sales','dispatch'])&&!otherOwner;
+ const outcomeButtons=(d.outcomes||[]).map(o=>`<button class="${o==='done'?'btn-primary':o==='lost'?'btn-danger':'btn-small'}" data-ux="action-outcome-open" data-kind="${h(kind)}" data-id="${h(id)}" data-outcome="${h(o)}" ${canAct?'':'disabled'}>${h(uxActionOutcomeLabel(o))}</button>`).join('');
+ const description=!d.outcomes?.length?'This action is completed or archived. Its history is available below.':otherOwner?'This client is assigned to another team member. A manager can reassign it.':d.owner?'Review the action, then record the result below.':'Choosing an outcome will claim this client to you first.';
  showModal(d.action?.title||'Action workspace',
-   `<div class="callout ${d.owner?'teal':'orange'}"><strong>${d.owner?'Owned by '+h(owner):'Unclaimed action'}</strong><div class="small muted" style="margin-top:5px">${d.owner?'The client and open follow-ups stay with this owner.':'Choosing an outcome will claim this client to you first.'}</div></div><div class="spacer"></div>${uxActionDetailHtml(d)}`,
-   `<button class="btn-soft" data-ux="open-client" data-id="${h(d.client.id)}">Full client</button><div class="grow"></div>${outcomeButtons}`,true);
+   `<div class="callout ${d.owner?'teal':'orange'} ux-action-ownership"><strong>${d.owner?'Owned by '+h(owner):'Unclaimed action'}</strong><div class="small muted">${h(description)}</div></div><div class="spacer"></div>${uxActionDetailHtml(d)}`,
+   `<div class="ux-action-footer-content"><button class="btn-soft" data-ux="open-client" data-id="${h(d.client.id)}">Full client</button>${outcomeButtons?'<div class="ux-outcomes"><div class="tiny strong">Record the result</div><div class="ux-outcome-buttons">'+outcomeButtons+'</div></div>':''}</div>`,true);
+ modal.querySelector('.modal-foot').classList.add('ux-action-footer');
+ modal.classList.add('ux-workspace-dialog');
 }
 function uxActionOutcomeForm(kind,id,outcome){
  const labels={done:['Complete action','Mark this action complete and remove it from the active queue.'],waiting:['Waiting on client','Close this action for now. A new client message can become the next action.'],followup:['Follow up later','Close this action and create the next owned follow-up automatically.'],quote_sent:['Quote sent','Record that the estimate was sent and close this current action.'],lost:['Lost / not proceeding','Close this client opportunity and all remaining active follow-ups.']};
  const [title,desc]=labels[outcome]||['Update action',''];
- const follow=outcome==='followup'?`<div class="grid2">${field('followup_date','Follow-up date','','date','required')}${field('followup_title','Next action','Follow up with client')}</div>`:'';
+ const follow=outcome==='followup'?`<div class="grid2">${field('followup_date','Follow-up date','','date','min="'+today()+'" required')}${field('followup_title','Next action','Follow up with client')}</div>`:'';
  const warning=outcome==='lost'?'<div class="callout orange"><strong>This closes the active opportunity.</strong><div class="small muted" style="margin-top:5px">All remaining active follow-ups for this client will be completed.</div></div><div class="spacer"></div>':'';
  showModal(title,`${warning}<p class="small muted">${h(desc)}</p><form id="ux-action-outcome-form" data-ux-form="action-outcome"><input type="hidden" name="action_kind" value="${h(kind)}"><input type="hidden" name="action_id" value="${h(id)}"><input type="hidden" name="outcome" value="${h(outcome)}">${follow}${textArea('note','Internal note (optional)','',3)}</form>`,
-   `${btn('close','Cancel')}<button type="submit" form="ux-action-outcome-form" class="btn-primary">${h(title)}</button>`,true);
+   `<button class="btn-soft" data-ux="action-workspace" data-kind="${h(kind)}" data-id="${h(id)}">Back to action</button><button type="submit" form="ux-action-outcome-form" class="${outcome==='lost'?'btn-danger':'btn-primary'}">${h(title)}</button>`,true);
+}
+
+async function uxReviewCallbackBacklog(before=today()){
+ const d=await api('/ux/callback-backlog?before='+encodeURIComponent(before));UX.callbackBacklog=d;
+ const shown=d.candidates.slice(0,500);
+ const items=shown.map(t=>`<label class="task-row ux-backlog-item"><input type="checkbox" name="task_ids" value="${h(t.id)}"><span class="grow"><span class="small strong">${h(t.client_name)}</span><span class="tiny muted ux-block">${h(uxPhoneLabel(t.phone))} · ${h(t.title)}</span><span class="tiny muted ux-block">${h(uxTimestampLabel(t.call_at))} · ${h(t.source)}</span></span></label>`).join('');
+ showModal('Review older callbacks',
+   `<p class="small muted">Only untouched, unclaimed Gmail callbacks before this date are shown. Choose the callbacks your team no longer needs to return. Archived callbacks remain in Imported backlog and can be restored.</p><div class="ux-backlog-controls">${field('backlog_before','Calls before',d.before,'date','max="'+today()+'" required')}<button class="btn-soft" data-ux="callback-backlog-refresh">Update list</button></div><form id="ux-callback-archive" data-ux-form="callback-archive"><input type="hidden" name="before" value="${h(d.before)}"><input type="hidden" name="review_token" value="${h(d.review_token)}">${shown.length?`<label class="checkbox-label"><input id="ux-backlog-all" type="checkbox">Select all ${shown.length} shown callbacks</label><div class="ux-backlog-list">${items}</div><p class="tiny muted">${shown.length} of ${d.candidates.length} eligible callbacks shown. Claimed clients and clients with newer calls, emails, estimates, jobs or manual follow-ups are kept in current work.</p>`:empty('No eligible callbacks','No untouched imported callbacks match this date.')}</form>`,
+   `${btn('close','Close')}${shown.length?'<button type="submit" form="ux-callback-archive" class="btn-primary">Archive selected callbacks</button>':''}`,true);
 }
 
 async function uxAssignAction(kind,id,currentOwner){
@@ -112,11 +160,11 @@ X.pageRenderers.communications=async()=>{
  const [tasks,calls,mail,inbox]=await Promise.all([api('/tasks?scope=active'),api('/calls'),api('/outbound'),api('/ux/inbox')]);
  const due=tasks.slice(0,30),recentCalls=calls.slice(0,25),out=mail.slice(0,25);
  const openInbox=inbox.filter(m=>!m.resolved_at),answered=inbox.filter(m=>m.resolved_at);
- const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(m.created_at)}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name===S.user.name?'You':m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}<div class="row">${uxActionAssignmentButtons('email',m.id,m.claimed_by)}<button class="btn-small" data-ux="action-workspace" data-kind="email" data-id="${h(m.id)}">Open</button>${m.claimed_by&&(m.claimed_by===S.user.id||S.user.role==='owner')?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:''}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');
+ const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(uxTimestampLabel(m.created_at))}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name===S.user.name?'You':m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}<div class="row">${uxActionAssignmentButtons('email',m.id,m.claimed_by)}<button class="btn-small" data-ux="action-workspace" data-kind="email" data-id="${h(m.id)}">Open</button>${m.claimed_by&&(m.claimed_by===S.user.id||S.user.role==='owner')?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:''}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');
  return head('Communications','One shared place for client email, follow-ups and calls.',xbtn('new-email','Prepare email','','btn-primary'))+
  `<div class="grid3"><div class="panel metric"><div class="label"><span>Unanswered email</span>${icon('mail')}</div><div class="value">${openInbox.length}</div></div><div class="panel metric"><div class="label"><span>Open follow-ups</span>${icon('check')}</div><div class="value">${tasks.filter(x=>x.status!=='Done').length}</div></div><div class="panel metric"><div class="label"><span>Recent calls</span>${icon('phone')}</div><div class="value">${calls.length}</div></div></div><div class="spacer"></div>`+
  panel('Shared client inbox',inboxHtml)+
- `<div class="spacer"></div>${panel('Follow-ups',xtable(['Client','Action','Due','Status',''],due.map(t=>[h(t.client_name||'Unmatched'),h(t.title),h(t.due_date||''),pill(t.status),t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Open</button>`:''])))}<div class="spacer"></div><div class="grid2">${panel('Recent calls',recentCalls.length?recentCalls.map(c=>`<div class="activity-row"><span class="activity-dot"></span><div><div class="small strong">${h(c.client_name||'Unmatched call')}</div><div class="tiny muted">${h(c.created_at)} &middot; ${h(c.details?.phone||c.details?.Phone||'')}</div></div></div>`).join(''):empty('No call activity','Connected call events will appear here.'))}${panel('Outgoing email',out.length?out.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name||m.recipient)}</div><div class="tiny muted">${h(m.subject)}</div></div>${pill(m.status)}${xbtn('read-email','Open',m.id,'btn-small')}</div>`).join(''):empty('No email activity','Drafts and sent messages will appear here.'))}</div>`;
+ `<div class="spacer"></div>${panel('Follow-ups',xtable(['Client','Action','Due','Status',''],due.map(t=>[h(t.client_name||'Unmatched'),h(t.title),h(uxDateLabel(t.due_date)),pill(t.status),t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Open</button>`:''])))}<div class="spacer"></div><div class="grid2">${panel('Recent calls',recentCalls.length?recentCalls.map(c=>`<div class="activity-row"><span class="activity-dot"></span><div><div class="small strong">${h(c.client_name||'Unmatched call')}</div><div class="tiny muted">${h(uxTimestampLabel(c.created_at))} &middot; ${h(uxPhoneLabel(c.details?.phone||c.details?.Phone))}</div></div></div>`).join(''):empty('No call activity','Connected call events will appear here.'))}${panel('Outgoing email',out.length?out.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name||m.recipient)}</div><div class="tiny muted">${h(m.subject)}</div></div>${pill(m.status)}${xbtn('read-email','Open',m.id,'btn-small')}</div>`).join(''):empty('No email activity','Drafts and sent messages will appear here.'))}</div>`;
 };
 // ---------- Client project: lifecycle + full activity, without more data entry ----------
 const uxOldOpenLead=openLead;
@@ -128,7 +176,7 @@ openLead=async function(id){
  if(foot&&may(['owner','sales','dispatch']))foot.insertAdjacentHTML('afterbegin',`<button class="btn-soft" data-ux="new-followup" data-id="${h(id)}">${icon('check')}Add follow-up</button>`);
  const steps=overview.lifecycle.steps.map((s,i)=>`<div class="lifecycle-step ${i<overview.lifecycle.current_index?'done':i===overview.lifecycle.current_index?'current':''}"><span>${i+1}</span><small>${h(s)}</small></div>`).join('');
  const notReady=overview.jobs.flatMap(j=>j.readiness.ready?[]:j.readiness.missing);
- const activity=overview.timeline.slice(0,12).map(t=>`<div class="activity-row"><span class="activity-dot"></span><div class="grow"><div class="tiny strong">${h(t.title)}</div><div class="tiny muted">${h(t.kind)} &middot; ${h(t.at)}${t.detail?' &middot; '+h(t.detail):''}</div></div>${t.status?pill(t.status):''}</div>`).join('')||'<p class="tiny muted">No project activity yet.</p>';
+ const activity=overview.timeline.slice(0,12).map(t=>`<div class="activity-row"><span class="activity-dot"></span><div class="grow"><div class="tiny strong">${h(t.title)}</div><div class="tiny muted">${h(t.kind)} &middot; ${h(uxTimestampLabel(t.at))}${t.detail?' &middot; '+h(uxHistoryDetail(t.detail)):''}</div></div>${t.status?pill(t.status):''}</div>`).join('')||'<p class="tiny muted">No project activity yet.</p>';
  const block=`<div class="ux-project-overview"><div class="lifecycle">${steps}</div><div class="spacer"></div><div class="callout ${notReady.length?'orange':'teal'}"><strong>${notReady.length?'Next: resolve the exceptions':'Project flow is clear'}</strong>${h(notReady.length?[...new Set(notReady)].join(', '):'CrownOps will surface the next exception instead of asking for repeated confirmations.')}</div><div class="spacer"></div><details class="ux-details"><summary>Full project activity (${overview.timeline.length})</summary><div class="timeline-list">${activity}</div></details><div class="spacer"></div></div>`;
  const err=body.querySelector('.modal-error');if(err)err.insertAdjacentHTML('afterend',block);else body.insertAdjacentHTML('afterbegin',block);
  // Remove the older short timeline so there is only one source of truth on screen.
@@ -227,7 +275,7 @@ X.pageRenderers.quotes=async()=>{
  const filtered=all.filter(q=>(UX.estimateStatus==='all'||q.status===UX.estimateStatus)&&(!search||[q.client_name,q.status,q.inputs?.move_date,q.inputs?.pickup,q.inputs?.dropoff].join(' ').toLowerCase().includes(search)));
  const rows=filtered.map(q=>[
    `<div class="client-name">${h(q.client_name)}</div><div class="tiny muted">Revision ${q.revision}</div>`,
-   h(q.inputs?.move_date||'Date to confirm'),
+   h(uxDateLabel(q.inputs?.move_date,'Date to confirm')),
    `${q.result?.movers||'—'} movers / ${q.result?.trucks||'—'} truck${Number(q.result?.trucks||0)===1?'':'s'}`,
    `<span class="strong">${compact(q.result?.low_cents||0)} – ${compact(q.result?.high_cents||0)}</span><div class="tiny muted">before tax</div>`,
    pill(q.status),
@@ -273,12 +321,12 @@ X.pageRenderers.followups=async()=>{
    return rank(a)-rank(b)||String(a.due_date||'9999').localeCompare(String(b.due_date||'9999'));
  });
  const rows=filtered.map(t=>[
-   `<div class="client-name">${h(t.client_name||'Internal / unmatched')}</div><div class="tiny muted">${h(t.phone||t.email||'')}</div>`,
+   `<div class="client-name">${h(t.client_name||'Internal / unmatched')}</div><div class="tiny muted">${h(uxPhoneLabel(t.phone)||t.email||'')}</div>`,
    `<div class="strong">${h(t.title)}</div>`,
-   h(t.due_date||'No date'),
+   h(uxDateLabel(t.due_date,'No date')),
    t.owner?(t.owner===S.user.id?'<span class="pill blue">You</span>':`<span class="pill gray">${h(ownerNames[t.owner]||t.owner)}</span>`):'<span class="pill orange">Unassigned</span>',
    pill(state(t)==='completed'?'Done':state(t)==='overdue'?'Overdue':state(t)==='today'?'Due today':'Upcoming'),
-   `<div class="row">${t.status!=='Done'?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.status!=='Done'&&t.lead_id?`<button class="btn-small" data-ux="action-workspace" data-kind="task" data-id="${h(t.id)}">Open</button>`:''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
+   `<div class="row">${t.status!=='Done'&&!t.historical?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.status!=='Done'&&t.lead_id?`<button class="btn-small" data-ux="action-workspace" data-kind="task" data-id="${h(t.id)}">Open</button>`:''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&!t.historical&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}" data-lead="${h(t.lead_id||'')}">Done</button>`:''}${t.status!=='Done'&&uxArchivedCallback(t)&&may(['owner'])?`<button class="btn-soft" data-ux="callback-backlog-restore" data-id="${h(t.id)}">Restore</button>`:''}</div>`
  ]);
  const overview=`<div class="ux-overview-grid">${[
    uxOverviewMetric('Open',counts.open),
@@ -293,7 +341,8 @@ X.pageRenderers.followups=async()=>{
    uxStatusButton('followup-filter','upcoming','Upcoming',counts.upcoming,UX.followupStatus),
    uxStatusButton('followup-filter','completed','Completed',counts.completed,UX.followupStatus)
  ].join('')}</div><div class="ux-browser-controls"><select id="ux-followup-scope" class="input-inline" aria-label="Follow-up source"><option value="active" ${UX.followupScope==='active'?'selected':''}>Current work</option><option value="imported" ${UX.followupScope==='imported'?'selected':''}>Imported backlog</option></select><div class="searchbox ux-browser-search">${icon('search')}<input id="ux-followup-search" value="${h(UX.followupSearch)}" placeholder="Search client or action" aria-label="Search follow-ups"></div></div></div>`;
- return head('Follow-ups','Every callback, missing detail and next action your sales team needs to finish.',btn('go-sales','Open clients','btn-soft'))+
+ const review=UX.followupScope==='active'&&may(['owner'])?'<button class="btn-soft" data-ux="callback-backlog-review">Review older callbacks</button>':'';
+ return head('Follow-ups','Every callback, missing detail and next action your sales team needs to finish.',review+btn('go-sales','Open clients','btn-soft'))+
    panel('Overview',overview)+'<div class="spacer"></div>'+
    `<div class="panel"><div class="panel-head"><h2>Follow-ups</h2><span class="tiny muted">${filtered.length.toLocaleString()} shown</span></div>${filters}<div class="panel-body flush">${rows.length?xtable(['Client','Action','Due','Owner','Status',''],rows):empty('No follow-ups in this view','Your team is clear here, or the current filters have no matches.')}</div></div>`;
 };
@@ -372,6 +421,12 @@ document.addEventListener('click',async e=>{
   }
   if(a==='action-workspace')return uxOpenActionWorkspace(el.dataset.kind,id);
   if(a==='action-outcome-open')return uxActionOutcomeForm(el.dataset.kind,id,el.dataset.outcome);
+  if(a==='callback-backlog-review')return uxReviewCallbackBacklog();
+  if(a==='callback-backlog-refresh')return uxReviewCallbackBacklog(document.getElementById('f-backlog_before').value);
+  if(a==='callback-backlog-restore'){
+    await api('/ux/callback-backlog/'+encodeURIComponent(id)+'/restore',{method:'POST',data:{}});
+    toast('Callback restored to current work.');return navigate('followups');
+  }
   if(a==='attention'){
     const k=el.dataset.kind,lid=el.dataset.lead;
     if(k==='task'&&lid)return uxOpenActionWorkspace('task',id);if(k==='email'&&lid)return uxOpenActionWorkspace('email',id);if(k==='job')return openJob(id);if(k==='timeoff')return navigate('timeoff');if(k==='payment')return navigate('payments');if(k==='gmail'||k==='gmail-payment-batch')return navigate('connections');if(k==='client-change')return navigate('portalhub');if(k==='fleet')return navigate('fleet');
@@ -383,7 +438,7 @@ document.addEventListener('click',async e=>{
   if(a==='estimate-filter'){UX.estimateStatus=el.dataset.value||'all';return navigate('quotes');}
   if(a==='followup-filter'){UX.followupStatus=el.dataset.value||'open';return navigate('followups');}
   if(a==='invoice-filter'){UX.invoiceStatus=el.dataset.value||'all';return navigate('invoices');}
-  if(a==='followup-complete'){await api('/tasks/'+encodeURIComponent(id)+'/complete',{method:'POST'});toast('Follow-up completed.');return navigate('followups');}
+  if(a==='followup-complete'){await api(el.dataset.lead?'/ux/actions/task/'+encodeURIComponent(id)+'/outcome':'/tasks/'+encodeURIComponent(id)+'/complete',{method:'POST',data:el.dataset.lead?{outcome:'done'}:{}});toast('Follow-up completed.');return navigate('followups');}
 
   if(a==='directory-load'){UX.dirStart=document.getElementById('ux-dir-start').value;UX.dirEnd=document.getElementById('ux-dir-end').value;return navigate('team');}
   if(a==='employee-open'){const emp=UX.directory?.employees.find(x=>x.id===id);return uxEmployeeForm(emp);}
@@ -431,6 +486,7 @@ document.addEventListener('click',async e=>{
 });
 
 document.addEventListener('change',e=>{
+ if(e.target.id==='ux-backlog-all')modal.querySelectorAll('input[name="task_ids"]').forEach(x=>{x.checked=e.target.checked;});
  if(e.target.matches('#ux-crew-hours-form input[name^="common_"]')){const row=e.target.closest('.simple-hours-row');row.querySelectorAll('input[name^="hours_"],input[name^="note_"]').forEach(i=>{i.disabled=e.target.checked;if(e.target.checked)i.value='';});}
  if(e.target.id==='ux-followup-scope'){UX.followupScope=e.target.value;return navigate('followups');}
 });
@@ -456,11 +512,27 @@ document.addEventListener('submit',async e=>{
     await api('/ux/jobs/'+encodeURIComponent(d.job_id)+'/crew-hours',{method:'POST',data:{employee_ids,team_hours:Number(d.team_hours),exceptions,note:d.note}});toast('Team hours saved.');modal.close();return navigate('team');
   }
   if(kind==='action-outcome'){
+    if(f.dataset.submitting==='true')return;
+    f.dataset.submitting='true';
+    const submit=modal.querySelector('[type="submit"][form="ux-action-outcome-form"]'),label=submit?.textContent;
+    if(submit){submit.disabled=true;submit.textContent='Saving…';}
+    try{
     const returnPage=UX.currentAction?.page||'dashboard';
     const r=await api('/ux/actions/'+encodeURIComponent(d.action_kind)+'/'+encodeURIComponent(d.action_id)+'/outcome',{method:'POST',data:{outcome:d.outcome,note:d.note||'',followup_date:d.followup_date||'',followup_title:d.followup_title||''}});
     modal.close();
     const msg=r.outcome==='followup'?'Follow-up scheduled.':r.outcome==='waiting'?'Marked waiting on client.':r.outcome==='quote_sent'?'Quote-sent outcome recorded.':r.outcome==='lost'?'Opportunity closed as lost.':'Action completed.';
     toast(msg);return navigate(returnPage);
+    }finally{delete f.dataset.submitting;if(submit){submit.disabled=false;submit.textContent=label;}}
+  }
+  if(kind==='callback-archive'){
+    if(f.dataset.submitting==='true')return;
+    const task_ids=checked(f,'task_ids');if(!task_ids.length)throw new Error('Select the callbacks you reviewed first.');
+    f.dataset.submitting='true';
+    const submit=modal.querySelector('[type="submit"][form="ux-callback-archive"]');if(submit)submit.disabled=true;
+    try{
+      const r=await api('/ux/callback-backlog/archive',{method:'POST',data:{before:d.before,review_token:d.review_token,task_ids}});
+      modal.close();toast(r.archived+' callback'+(r.archived===1?'':'s')+' archived. Available in Imported backlog.');return navigate('followups');
+    }finally{delete f.dataset.submitting;if(submit)submit.disabled=false;}
   }
   if(kind==='followup'){await api('/tasks',{method:'POST',data:{lead_id:d.lead_id,title:d.title,due_date:d.due_date}});modal.close();toast('Follow-up added.');return navigate('followups');}
   if(kind==='qbo-setup'){await api('/quickbooks/setup',{method:'PATCH',data:d});modal.close();toast('QuickBooks mapping saved.');return navigate('connections');}

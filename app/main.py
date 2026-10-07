@@ -519,6 +519,13 @@ def create_app(database_path=None):
     def complete_task(tid:str,u=Depends(auth)):
         require(u,QUOTERS)
         with transaction(path) as db:
+            task=one(db,'SELECT * FROM tasks WHERE id=?',(tid,))
+            if not task:raise HTTPException(404,'Follow-up not found.')
+            if task['historical']:raise HTTPException(409,'Restore an archived callback before completing it.')
+            lead=one(db,'SELECT assigned_to FROM leads WHERE id=?',(task.get('lead_id'),)) or {}
+            owner=str(lead.get('assigned_to') or task.get('owner') or '')
+            if owner and owner not in (u['id'],u.get('name')) and u['role']!='owner':
+                raise HTTPException(403,'This client is assigned to another team member.')
             db.execute("UPDATE tasks SET status='Done' WHERE id=?",(tid,));audit(db,u['id'],'Task completed','tasks',tid)
         return {'ok':True}
 
