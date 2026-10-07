@@ -164,7 +164,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                     payload_json=dumps({"parsed":{"payer":"Action Payer","amount":"300.00"}}),
                     status="Needs review",created_at=now()))
 
-            agent_a=TestClient(app);agent_a.cookies.set("crownops_session","action-a-session")
+            agent_a=TestClient(app);agent_a.cookies.set("crownops_session","action-a-session");agent_a.headers.update({"x-csrf-token":"csrf-a"})
             claimed=agent_a.post("/api/ux/actions/task/TASK-ACTION-1/claim")
             self.assertEqual(claimed.status_code,200,claimed.text)
             with transaction(db_path) as db:
@@ -176,13 +176,13 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 self.assertEqual(inbox["claimed_by"],"USER-ACTION-A")
                 self.assertIsNone(inbox["resolved_at"])
 
-            agent_b=TestClient(app);agent_b.cookies.set("crownops_session","action-b-session")
+            agent_b=TestClient(app);agent_b.cookies.set("crownops_session","action-b-session");agent_b.headers.update({"x-csrf-token":"csrf-b"})
             conflict=agent_b.post("/api/ux/actions/task/TASK-ACTION-1/claim")
             self.assertEqual(conflict.status_code,409,conflict.text)
             forbidden=agent_a.post("/api/ux/actions/task/TASK-ACTION-1/assign",json={"user_id":"USER-ACTION-B"})
             self.assertEqual(forbidden.status_code,403,forbidden.text)
 
-            owner=TestClient(app);owner.cookies.set("crownops_session","action-owner-session")
+            owner=TestClient(app);owner.cookies.set("crownops_session","action-owner-session");owner.headers.update({"x-csrf-token":"csrf-owner"})
             reassigned=owner.post("/api/ux/actions/task/TASK-ACTION-1/assign",json={"user_id":"USER-ACTION-B"})
             self.assertEqual(reassigned.status_code,200,reassigned.text)
             with transaction(db_path) as db:
