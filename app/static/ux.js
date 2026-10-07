@@ -1,6 +1,6 @@
 /* CrownOps v5.4 simplified job review pass: simple defaults, useful exceptions, clean role-based UX. */
 'use strict';
-const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
+const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,actionAssignees:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
 
 // ---------- Navigation: show the things people actually use ----------
 ensureNav(['communications','mail','Communications']);
@@ -51,9 +51,23 @@ dashboard=async function(){
  `<div class="grid3">${panel('Sales',`<p class="small muted">New inquiries, quotes and client conversations.</p>${btn('go-sales','Open sales','btn-soft')}`)}${panel('Operations',`<p class="small muted">Schedule, invoices, time off and field work.</p>${btn('go-schedule','Open schedule','btn-soft')}`)}${panel('Company setup',`<p class="small muted">Rates, materials, documents, fleet and connections.</p><button data-page="settings" class="btn-soft">Open setup</button>`)}</div>`;
 };
 
+function uxActionAssignmentButtons(kind,id,owner){
+ const attrs=`data-kind="${h(kind)}" data-id="${h(id||'')}"`;
+ const claim=!owner?`<button class="btn-small" data-ux="action-claim" ${attrs}>Claim</button>`:'';
+ const assign=S.user.role==='owner'?`<button class="btn-small" data-ux="action-assign" ${attrs} data-owner="${h(owner||'')}">${owner?'Reassign':'Assign'}</button>`:'';
+ return claim+assign;
+}
 function uxAttentionButton(a){
  const attrs=`data-ux="attention" data-kind="${h(a.type)}" data-id="${h(a.id||'')}" data-lead="${h(a.lead_id||'')}"`;
- return `<button class="btn-small" ${attrs}>Open</button>`;
+ return `<div class="row">${uxActionAssignmentButtons(a.type,a.id,a.owner)}<button class="btn-small" ${attrs}>Open</button></div>`;
+}
+async function uxAssignAction(kind,id,currentOwner){
+ if(!UX.actionAssignees)UX.actionAssignees=await api('/ux/action-assignees');
+ const opts=[['','Unassigned'],...UX.actionAssignees.map(u=>[u.id,u.name+' · '+(u.role==='owner'?'manager':u.role)])];
+ const options=opts.map(([v,label])=>`<option value="${h(v)}" ${v===currentOwner?'selected':''}>${h(label)}</option>`).join('');
+ showModal(currentOwner?'Reassign action':'Assign action',
+   `<div class="callout teal"><strong>One owner, one next action.</strong><div class="small muted" style="margin-top:6px">For client follow-ups and email, CrownOps keeps the client and their open follow-ups with the same owner. Operational/payment actions stay separately assigned.</div></div><div class="spacer"></div><label class="field-label">Assign to</label><select id="ux-action-assignee" class="input">${options}</select>`,
+   `${btn('close','Cancel')}<button class="btn-primary" data-ux="action-assign-save" data-kind="${h(kind)}" data-id="${h(id)}">Save assignment</button>`,true);
 }
 
 // ---------- Communications: calls, follow-ups and outgoing email in one place ----------
