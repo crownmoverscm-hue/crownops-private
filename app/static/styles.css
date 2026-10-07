@@ -155,3 +155,6 @@
   .ux-overview-metric:last-child{border-bottom:0!important}
   .ux-overview-label{margin-top:3px}
 }
+
+/* v6.0.1 table-edge fix: flush table panels must not inherit the older negative right margin. */
+.panel-body.flush > .table-wrap{margin:0}
