@@ -235,10 +235,11 @@ def register_ux_features(app,path,auth):
         if selected not in ('unclaimed','mine','team'):raise HTTPException(422,'Choose Unclaimed, Mine or Team.')
         with closing(connect(path)) as db:
             people={r['id']:r['name'] for r in rows(db,"SELECT id,name FROM users WHERE active=1")}
+            generic_owners={(r['action_type'],r['action_id']):r['assigned_to'] for r in rows(db,'SELECT action_type,action_id,assigned_to FROM action_assignments')}
             jobs_all=rows(db,'SELECT * FROM jobs WHERE status!=\'Cancelled\' ORDER BY start_at')
             jobs=[];attention=[]
             def add_item(item,owner=''):
-                owner=str(owner or '').strip()
+                owner=str(owner or generic_owners.get((item.get('type'),item.get('id')),'') or '').strip()
                 item['owner']=owner
                 item['owner_name']=people.get(owner,owner) if owner else ''
                 item['ownership']='mine' if owner and owner in (u.get('id'),u.get('name')) else ('unclaimed' if not owner else 'other')
