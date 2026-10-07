@@ -134,6 +134,98 @@ def _timeline(db,lid):
     return sorted(items,key=lambda x:x['at'],reverse=True)
 
 
+
+def _action_reference(db,kind,action_id):
+    kind=str(kind or '').strip()
+    action_id=str(action_id or '').strip()
+    if kind=='task':
+        r=one(db,'SELECT id,lead_id,title FROM tasks WHERE id=?',(action_id,))
+        if not r:raise HTTPException(404,'Follow-up not found.')
+        return {'kind':kind,'id':action_id,'lead_id':r.get('lead_id') or '','label':r.get('title') or 'Follow-up'}
+    if kind=='email':
+        r=one(db,'SELECT id,lead_id,subject FROM messages WHERE id=?',(action_id,))
+        if not r:raise HTTPException(404,'Email not found.')
+        return {'kind':kind,'id':action_id,'lead_id':r.get('lead_id') or '','label':r.get('subject') or 'Client email'}
+    if kind=='payment':
+        r=one(db,'SELECT id,lead_id,purpose FROM payments WHERE id=?',(action_id,))
+        if not r:raise HTTPException(404,'Payment action not found.')
+        return {'kind':kind,'id':action_id,'lead_id':'','label':r.get('purpose') or 'Payment verification'}
+    if kind=='client-change':
+        r=one(db,'SELECT id,lead_id FROM client_changes WHERE id=?',(action_id,))
+        if not r:raise HTTPException(404,'Client change not found.')
+        return {'kind':kind,'id':action_id,'lead_id':'','label':'Client portal update'}
+    if kind=='job':
+        r=one(db,'SELECT id,title FROM jobs WHERE id=?',(action_id,))
+        if not r:raise HTTPException(404,'Job action not found.')
+        return {'kind':kind,'id':action_id,'lead_id':'','label':r.get('title') or 'Job readiness'}
+    if kind=='timeoff':
+        r=one(db,'SELECT id FROM time_off_requests WHERE id=?',(action_id,))
+        if not r:raise HTTPException(404,'Time-off action not found.')
+        return {'kind':kind,'id':action_id,'lead_id':'','label':'Time-off request'}
+    if kind=='fleet':
+        r=one(db,'SELECT id,title FROM maintenance WHERE id=?',(action_id,))
+        if not r:raise HTTPException(404,'Fleet action not found.')
+        return {'kind':kind,'id':action_id,'lead_id':'','label':r.get('title') or 'Fleet maintenance'}
+    if kind=='gmail-payment-batch':
+        if action_id!='gmail-payment-review':raise HTTPException(404,'Payment review action not found.')
+        exists=one(db,"""SELECT id FROM integration_events WHERE event_type IN ('gmail_bank_payment','gmail_wix_payment')
+          AND status='Needs review' LIMIT 1""")
+        if not exists:raise HTTPException(409,'There are no Gmail payment notices waiting for review.')
+        return {'kind':kind,'id':action_id,'lead_id':'','label':'Gmail payment review'}
+    raise HTTPException(422,'This action type cannot be assigned.')
+
+def _action_user(db,user_id):
+    user=one(db,'SELECT id,name,email,role,active FROM users WHERE id=? AND active=1',(user_id,))
+    if not user or user.get('role') not in OFFICE:raise HTTPException(422,'Choose an active office team member.')
+    return user
+
+def _sync_client_owner(db,lead_id,target_id,actor,reason,strict=False):
+    lead=one(db,'SELECT id,client_name,assigned_to FROM leads WHERE id=?',(lead_id,))
+    if not lead:raise HTTPException(404,'Client project not found.')
+    target=_action_user(db,target_id) if target_id else None
+    current=str(lead.get('assigned_to') or '')
+    if strict and current not in ('',target_id,target.get('name') if target else ''):
+        raise HTTPException(409,'This client is already assigned to another team member.')
+    if strict:
+        task_conflict=one(db,"""SELECT id,owner FROM tasks WHERE lead_id=? AND status!='Done' AND historical=0
+          AND owner!='' AND owner NOT IN (?,?) LIMIT 1""",(lead_id,target_id,target.get('name') if target else ''))
+        if task_conflict:raise HTTPException(409,'An open follow-up is already assigned to another team member.')
+        inbox_conflict=one(db,"""SELECT c.message_id,c.claimed_by FROM inbox_claims c JOIN messages m ON m.id=c.message_id
+          WHERE m.lead_id=? AND c.resolved_at IS NULL AND c.claimed_by!=? LIMIT 1""",(lead_id,target_id))
+        if inbox_conflict:raise HTTPException(409,'An unanswered client email is already claimed by another team member.')
+    db.execute('UPDATE leads SET assigned_to=?,version=version+1,updated_at=? WHERE id=?',(target_id,now(),lead_id))
+    db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND historical=0",(target_id,lead_id))
+    open_mail=rows(db,"""SELECT m.id,c.message_id,c.resolved_at FROM messages m
+      LEFT JOIN inbox_claims c ON c.message_id=m.id
+      WHERE m.lead_id=? AND (lower(m.kind) LIKE '%incoming%' OR lower(m.kind) LIKE '%email%')""",(lead_id,))
+    for message in open_mail:
+        if message.get('resolved_at'):continue
+        if target_id:
+            if message.get('message_id'):
+                db.execute('UPDATE inbox_claims SET claimed_by=?,claimed_at=?,resolved_at=NULL WHERE message_id=?',(target_id,now(),message['id']))
+            else:
+                insert(db,'inbox_claims',dict(message_id=message['id'],claimed_by=target_id,claimed_at=now(),resolved_at=None))
+        elif message.get('message_id'):
+            db.execute('DELETE FROM inbox_claims WHERE message_id=? AND resolved_at IS NULL',(message['id'],))
+    audit(db,actor,reason,'leads',lead_id,{'from':current,'to':target_id,'open_followups_aligned':True,'unanswered_email_aligned':True})
+    return {'lead_id':lead_id,'assigned_to':target_id,'assigned_name':target.get('name') if target else ''}
+
+def _assign_generic_action(db,ref,target_id,actor,reason,strict=False):
+    target=_action_user(db,target_id) if target_id else None
+    current=one(db,'SELECT * FROM action_assignments WHERE action_type=? AND action_id=?',(ref['kind'],ref['id']))
+    if strict and current and current.get('assigned_to')!=target_id:
+        raise HTTPException(409,'This action is already claimed by another team member.')
+    if target_id:
+        db.execute("""INSERT INTO action_assignments(action_type,action_id,assigned_to,assigned_by,assigned_at)
+          VALUES(?,?,?,?,?) ON CONFLICT(action_type,action_id) DO UPDATE SET
+          assigned_to=excluded.assigned_to,assigned_by=excluded.assigned_by,assigned_at=excluded.assigned_at""",
+          (ref['kind'],ref['id'],target_id,actor,now()))
+    else:
+        db.execute('DELETE FROM action_assignments WHERE action_type=? AND action_id=?',(ref['kind'],ref['id']))
+    audit(db,actor,reason,'action_assignments',ref['kind']+':'+ref['id'],
+      {'from':current.get('assigned_to') if current else '','to':target_id,'label':ref.get('label') or ''})
+    return {'assigned_to':target_id,'assigned_name':target.get('name') if target else ''}
+
 def register_ux_features(app,path,auth):
     @app.get('/api/ux/today')
     def today_view(view:str='',u=Depends(auth)):
