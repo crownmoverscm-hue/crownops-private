@@ -51,7 +51,7 @@ class SalesCrmV6Tests(unittest.TestCase):
             _gmail_received_iso({},{"date":"Tue, 6 Oct 2026 14:30:00 -0400"}),
             "2026-10-06T18:30:00+00:00")
         self.assertEqual(
-            _gmail_received_iso({"internalDate":"1791311400000"},{"date":"Tue, 6 Oct 2026 14:30:00 -0400"}),
+            _gmail_received_iso({"internalDate":"1791297000000"},{"date":"Tue, 6 Oct 2026 14:30:00 -0400"}),
             "2026-10-06T14:30:00+00:00")
 
     def test_templates_include_blank_long_distance_english_and_french(self):
