@@ -214,7 +214,9 @@ X.pageRenderers.quotes=async()=>{
 };
 
 X.pageRenderers.followups=async()=>{
- const all=await api('/tasks?scope='+encodeURIComponent(UX.followupScope));
+ const [all,assignees]=await Promise.all([api('/tasks?scope='+encodeURIComponent(UX.followupScope)),api('/ux/action-assignees')]);
+ UX.actionAssignees=assignees;
+ const ownerNames=Object.fromEntries(assignees.map(u=>[u.id,u.name]));
  const nowDay=today();
  const state=t=>{
    if(t.status==='Done')return 'completed';
@@ -237,9 +239,9 @@ X.pageRenderers.followups=async()=>{
    `<div class="client-name">${h(t.client_name||'Internal / unmatched')}</div><div class="tiny muted">${h(t.phone||t.email||'')}</div>`,
    `<div class="strong">${h(t.title)}</div>`,
    h(t.due_date||'No date'),
-   t.owner?(t.owner===S.user.id?'<span class="pill blue">You</span>':'<span class="pill gray">Assigned</span>'):'<span class="pill orange">Unassigned</span>',
+   t.owner?(t.owner===S.user.id?'<span class="pill blue">You</span>':`<span class="pill gray">${h(ownerNames[t.owner]||t.owner)}</span>`):'<span class="pill orange">Unassigned</span>',
    pill(state(t)==='completed'?'Done':state(t)==='overdue'?'Overdue':state(t)==='today'?'Due today':'Upcoming'),
-   `<div class="row">${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
+   `<div class="row">${t.status!=='Done'?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}">Done</button>`:''}</div>`
  ]);
  const overview=`<div class="ux-overview-grid">${[
    uxOverviewMetric('Open',counts.open),
