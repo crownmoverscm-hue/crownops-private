@@ -158,3 +158,38 @@
 
 /* v6.0.1 table-edge fix: flush table panels must not inherit the older negative right margin. */
 .panel-body.flush > .table-wrap{margin:0}
+/* Action Workspace: readable context and outcomes that fit small screens. */
+.ux-action-workspace .grid2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.ux-action-workspace .panel,.ux-action-context,.ux-action-workspace .grow{min-width:0;overflow-wrap:anywhere}
+.ux-action-context h3{margin-top:6px}
+.ux-call-phone{display:inline-block;margin:5px 0;font-size:18px;font-weight:650}
+.ux-email-body{white-space:pre-wrap;max-height:280px;overflow:auto;overflow-wrap:anywhere}
+.ux-action-ownership{padding:12px 16px}
+.ux-action-ownership .small{margin-top:3px}
+dialog.ux-workspace-dialog[open]{display:flex;flex-direction:column;max-height:90dvh;overflow:hidden}
+.ux-workspace-dialog .modal-head{flex-shrink:0;position:static}
+.ux-workspace-dialog .modal-body{min-height:0;overflow:auto}
+.modal-foot.ux-action-footer{display:block;flex-shrink:0;position:static;max-height:none;overflow:visible}
+.ux-action-footer-content{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
+.ux-action-footer-content>button{flex-shrink:0}
+.ux-outcomes{min-width:0}
+.ux-outcomes>.tiny{margin-bottom:7px;color:var(--muted)}
+.ux-outcome-buttons{display:flex;gap:8px;flex-wrap:wrap}
+.ux-outcome-buttons button{min-height:40px}
+.ux-backlog-controls{display:flex;align-items:flex-end;gap:12px;margin-bottom:16px}
+.ux-backlog-controls .form-field{flex:1;max-width:260px;margin-bottom:0}
+.ux-backlog-controls button{margin-bottom:2px}
+.ux-backlog-list{max-height:360px;overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:9px;padding:0 12px}
+.ux-backlog-item{align-items:flex-start;gap:12px;cursor:pointer;overflow-wrap:anywhere}
+.ux-backlog-item input{width:18px;height:18px;flex-shrink:0;margin-top:4px}
+.ux-backlog-item .grow{min-width:0}
+.ux-block{display:block}
+@media(max-width:720px){
+ .ux-action-workspace .grid2{grid-template-columns:minmax(0,1fr)}
+ .ux-action-footer-content{align-items:stretch;flex-direction:column;gap:10px}
+ .ux-action-footer-content>button{align-self:flex-start}
+ .ux-outcome-buttons{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+ .ux-outcome-buttons button{white-space:normal;padding:8px}
+ .ux-outcome-buttons button:last-child:nth-child(odd){grid-column:1/-1}
+ .ux-backlog-controls{flex-wrap:wrap}
+}

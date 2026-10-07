@@ -15,8 +15,8 @@ function crmClientCard(c){
  const latest=(c.services||[])[0];
  return '<button class="search-result crm-client-result" data-crm="client-open" data-id="'+h(c.id)+'">'+
    '<div class="avatar">'+h(initials(c.client_name))+'</div><div class="grow"><div class="strong">'+h(c.client_name)+'</div>'+
-   '<div class="tiny muted">'+h(c.email||'No email')+' · '+h(c.phone||'No phone')+'</div>'+
-   '<div class="tiny">'+(latest?(h(latest.move_date||'Date needed')+' · '+h(latest.pickup||'Address needed')+' · '+h(latest.stage||'')):'No service history yet')+'</div></div>'+
+   '<div class="tiny muted">'+h(c.email||'No email')+' · '+h(uxPhoneLabel(c.phone)||'No phone')+'</div>'+
+   '<div class="tiny">'+(latest?(h(uxDateLabel(latest.move_date,'Date needed'))+' · '+h(latest.pickup||'Address needed')+' · '+h(latest.stage||'')):'No service history yet')+'</div></div>'+
    '<span class="pill gray">'+Number((c.services||[]).length)+' service'+((c.services||[]).length===1?'':'s')+'</span>'+icon('right')+'</button>';
 }
 async function crmSearchClients(q=''){
@@ -46,9 +46,9 @@ async function crmClientBrowser(){
      '<div class="tiny muted">'+h(a.source||'CrownOps')+(a.summary?' · '+h(a.summary):'')+'</div>';
    const follow=Number(c.open_followups||0);
    return [
-    '<div class="client-name">'+h(c.client_name)+'</div><div class="tiny muted">'+h(c.email||'')+'<br>'+h(c.phone||'')+'</div>',
+    '<div class="client-name">'+h(c.client_name)+'</div><div class="tiny muted">'+h(c.email||'')+'<br>'+h(uxPhoneLabel(c.phone))+'</div>',
     activity,
-    latest.id?(h(latest.move_date||'Date needed')+'<div class="tiny muted">'+h(latest.pickup||'Address needed')+'</div>'):'No service yet',
+    latest.id?(h(uxDateLabel(latest.move_date,'Date needed'))+'<div class="tiny muted">'+h(latest.pickup||'Address needed')+'</div>'):'No service yet',
     pill(latest.stage||'Client')+(follow?'<div class="tiny" style="margin-top:5px"><strong>'+h(follow)+'</strong> open follow-up'+(follow===1?'':'s')+'</div>':''),
     h((c.services||[]).length),
     '<button class="btn-small" data-crm="client-open" data-id="'+h(c.id)+'">Open</button>'
@@ -73,7 +73,7 @@ X.pageRenderers.quotes=async()=>{
  const counts={all:all.length,Draft:0,Approved:0,Accepted:0};all.forEach(q=>{if(counts[q.status]!==undefined)counts[q.status]++;});
  const rows=filtered.map(q=>[
    '<div class="client-name">'+h(q.client_name)+'</div><div class="tiny muted">Revision '+h(q.revision)+' · '+h(q.inputs?.service_type||'Moving')+'</div>',
-   h(q.inputs?.move_date||'Date needed'),
+   h(uxDateLabel(q.inputs?.move_date,'Date needed')),
    q.result?.movers?('<strong>'+h(q.result.movers)+' movers</strong><div class="tiny muted">'+h(q.result.trucks||1)+' truck(s)</div>'):'—',
    '<strong>'+crmCash(q.result?.low_cents)+'</strong> – <strong>'+crmCash(q.result?.high_cents)+'</strong>',
    pill(q.status),
@@ -119,7 +119,7 @@ async function crmOpenClient(cid){
  const duplicateWarning=duplicates.length?'<div class="callout orange"><strong>Possible duplicate client record</strong>'+duplicates.map(d=>'<div class="task-row"><div class="grow"><div class="small strong">'+h(d.client_name)+'</div><div class="tiny muted">'+h([d.email,d.phone].filter(Boolean).join(' · '))+'</div><div class="tiny muted">'+h(d.reason)+'</div></div><button class="btn-small" data-crm="duplicate-open" data-id="'+h(d.candidate_id)+'">Open</button><button class="btn-small" data-crm="duplicate-dismiss" data-id="'+h(d.id)+'" data-client="'+h(c.id)+'">Not same client</button></div>').join('')+'</div><div class="spacer"></div>':'';
  const services=(c.services||[]).map(s=>[
    '<strong>'+h(crmServiceLabel(s.lead_type))+'</strong><div class="tiny muted">'+h(s.home_size||'Size not entered')+'</div>',
-   h(s.move_date||'Date needed'),
+   h(uxDateLabel(s.move_date,'Date needed')),
    h(s.pickup||'Pickup needed')+'<div class="tiny muted">'+h(s.dropoff||'Destination needed')+'</div>',
    pill(s.stage),
    '<button class="btn-small" data-crm="quote-from-service" data-id="'+h(s.id)+'">Quote</button>'
@@ -127,7 +127,7 @@ async function crmOpenClient(cid){
  showModal(h(c.client_name),
    duplicateWarning+'<section class="job-section"><div class="eyebrow">CLIENT INFORMATION</div><div class="spacer"></div><div class="info-grid">'+
    '<div><div class="info-label">Email</div><div>'+h(c.email||'Not provided')+'</div></div>'+
-   '<div><div class="info-label">Phone</div><div>'+h(c.phone||'Not provided')+'</div></div>'+
+   '<div><div class="info-label">Phone</div><div>'+h(uxPhoneLabel(c.phone)||'Not provided')+'</div></div>'+
    '<div><div class="info-label">Language</div><div>'+h(c.language||'English')+'</div></div>'+
    '<div><div class="info-label">Service history</div><div>'+services.length+' record(s)</div></div></div></section>'+
    '<div class="spacer"></div><div class="panel"><div class="panel-head"><h3>Services</h3><button class="btn-primary btn-small" data-crm="service-new" data-id="'+h(c.id)+'">'+icon('plus')+'New service</button></div>'+
@@ -201,7 +201,7 @@ async function crmQuoteBuilder(leadId){
    '</div></div>'+
    '<div class="callout teal"><strong>Protection & liability</strong>Free limited liability coverage is $0.60/lb per article. TVs, large mirrors, glass, marble and other fragile items require suitable protection/boxing. Added packing protection does not by itself increase liability coverage.</div>'+
    '</div><div class="stack"><div id="crm-quote-result" class="quote-summary"><div class="eyebrow">ESTIMATE PREVIEW</div><div class="quote-price">Choose the service details</div><p class="muted">Rates remain editable before saving.</p></div>'+
-   '<div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3>'+h(lead.client_name)+'</h3><p class="small">'+h(lead.email)+'<br>'+h(lead.phone)+'</p><p class="tiny muted">'+h(lead.pickup||'Pickup needed')+' → '+h(lead.dropoff||'Destination needed')+'</p></div>'+
+   '<div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3>'+h(lead.client_name)+'</h3><p class="small">'+h(lead.email)+'<br>'+h(uxPhoneLabel(lead.phone))+'</p><p class="tiny muted">'+h(lead.pickup||'Pickup needed')+' → '+h(lead.dropoff||'Destination needed')+'</p></div>'+
    '</div></div></form>',
    btn('close','Cancel')+'<button type="button" class="btn-soft" data-crm="quote-calc">Calculate</button><button type="submit" form="crm-quote-form" class="btn-primary">Save draft</button>',true);
  crmToggleServiceFields();crmToggleStartTime();
@@ -262,7 +262,7 @@ async function crmOpenQuote(qid){
  showModal('Estimate · '+h(l.client_name),
    status+'<div class="spacer"></div><div class="quote-layout"><div>'+
    '<div class="quote-summary"><div class="eyebrow">'+h(r.service_type||'Moving').toUpperCase()+'</div><div class="quote-price">'+crmCash(r.low_cents)+' – '+crmCash(r.high_cents)+'</div><p class="muted">Before applicable taxes · Revision '+h(q.revision)+'</p>'+
-   '<div class="quote-line"><span>Service date</span><strong>'+h(q.inputs?.move_date||l.move_date||'Not set')+'</strong></div>'+
+   '<div class="quote-line"><span>Service date</span><strong>'+h(uxDateLabel(q.inputs?.move_date||l.move_date,'Not set'))+'</strong></div>'+
    '<div class="quote-line"><span>Arrival / start</span><strong>'+h(q.inputs?.start_window_label||q.inputs?.start_time||'Not set')+'</strong></div>'+
    '<div class="quote-line"><span>Client template</span><strong>'+h(q.inputs?.template_snapshot?.name||q.inputs?.template_key||'—')+'</strong></div>'+
    '<div class="quote-line"><span>Crew</span><strong>'+h(r.movers||'—')+' movers · '+h(r.trucks||'—')+' truck(s)</strong></div>'+
@@ -272,7 +272,7 @@ async function crmOpenQuote(qid){
    '<div class="quote-line"><span>Fuel / distance</span><strong>'+crmCash(r.fuel_cents)+'</strong></div></div>'+
    (r.hos_plan?'<div class="spacer"></div><div class="callout '+(r.hos_plan.one_day_possible?'teal':'orange')+'"><strong>Quebec HOS plan</strong>'+h(r.hos_plan.status)+'<br><span class="tiny">'+h(r.hos_plan.true_driving_hours)+' h driving · '+h(r.hos_plan.estimated_on_duty_hours)+' h estimated on-duty · final driver log/cycle verification required.</span></div>':'')+
    '<div class="spacer"></div><div class="panel panel-body">'+crmLineTable(r)+'</div></div>'+
-   '<div class="stack"><div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3>'+h(l.client_name)+'</h3><p>'+h(l.email)+'<br>'+h(l.phone)+'</p><p class="small muted">'+h(l.pickup||'Pickup needed')+' → '+h(l.dropoff||'Destination needed')+'</p></div>'+
+   '<div class="stack"><div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3>'+h(l.client_name)+'</h3><p>'+h(l.email)+'<br>'+h(uxPhoneLabel(l.phone))+'</p><p class="small muted">'+h(l.pickup||'Pickup needed')+' → '+h(l.dropoff||'Destination needed')+'</p></div>'+
    '<div class="callout teal"><strong>'+h(q.inputs?.template_snapshot?.title||'Included')+'</strong>'+h(q.inputs?.template_snapshot?.liability||'Free limited liability coverage: $0.60/lb per article.')+(q.inputs?.template_snapshot?.fragile?'<br><br>'+h(q.inputs.template_snapshot.fragile):'')+(q.inputs?.template_snapshot?.blank_notes?'<br><br>'+h(q.inputs.template_snapshot.blank_notes):'')+'</div>'+
    (d.job?'<div class="panel panel-body"><div class="eyebrow">SCHEDULE</div><strong>'+h(d.job.status)+'</strong><p class="small muted">'+h(localDay(d.job.start_at))+' · crew/truck assignment follows confirmation.</p></div>':'')+
    '</div></div>',actions.join(' ')+btn('close','Close'),true);

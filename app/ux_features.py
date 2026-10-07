@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from .store import connect, transaction, rows, one, insert, audit, uid, now
 from .platform_common import require_role, OFFICE, MANAGERS, text, settings, put_setting, invoice_current
 from .operations import hos_dispatch_status
+from .crm_backlog import callback_backlog_preview, archive_callbacks, restore_callback
 
 TORONTO=ZoneInfo('America/Toronto')
 PRIVATE_HR={'owner','accounting'}
@@ -128,10 +129,15 @@ def _timeline(db,lid):
     for x in rows(db,'SELECT * FROM client_changes WHERE lead_id=?',(lid,)):add(x['created_at'],'client change','Client portal update','',x['status'])
     for x in rows(db,'SELECT * FROM document_approvals WHERE lead_id=?',(lid,)):add(x['created_at'],'document','Client acknowledgement','',x['status'])
     for x in rows(db,'SELECT * FROM calls WHERE lead_id=?',(lid,)):add(x['created_at'],'call','Call / intake event','')
+    outcome_titles={'done':'Action completed','waiting':'Waiting on client','followup':'Follow-up scheduled',
+      'quote_sent':'Quote sent','lost':'Opportunity closed as lost'}
+    for x in rows(db,'SELECT * FROM action_outcomes WHERE lead_id=?',(lid,)):
+        detail=' · '.join(v for v in ('Due '+x['followup_date'] if x['followup_date'] else '',x['note']) if v)
+        add(x['created_at'],'outcome',outcome_titles.get(x['outcome'],x['outcome']),detail)
     for x in rows(db,"""SELECT i.*,j.title,r.issued_at FROM job_invoices i JOIN jobs j ON j.id=i.job_id
       LEFT JOIN invoice_revisions r ON r.invoice_id=i.id AND r.revision=i.revision WHERE j.lead_id=?""",(lid,)):
         add(x.get('issued_at') or x['created_at'],'invoice',x['number'],x['title'],x['status'])
-    return sorted(items,key=lambda x:x['at'],reverse=True)
+    return sorted(items,key=lambda x:(x['at'],x['kind']=='outcome'),reverse=True)
 
 
 
@@ -248,7 +254,7 @@ def _action_workspace_data(db,ref):
         if not task:raise HTTPException(404,'Follow-up not found.')
         meta=_json_dict(task.get('raw_json'))
         action={'kind':'task','id':task['id'],'title':task['title'],'status':task['status'],
-          'due_date':task.get('due_date') or '','created_at':task['created_at'],'detail':''}
+          'due_date':task.get('due_date') or '','created_at':task['created_at'],'detail':'','historical':bool(task['historical'])}
         call_id=str(meta.get('call_id') or '')
         if call_id:
             call=one(db,'SELECT * FROM calls WHERE id=?',(call_id,))
@@ -257,7 +263,7 @@ def _action_workspace_data(db,ref):
                 action['call']={
                   'id':call['id'],'phone':detail.get('phone') or detail.get('Phone') or '',
                   'caller':detail.get('caller') or detail.get('Caller') or lead.get('client_name') or '',
-                  'occurred_at':detail.get('occurred_at') or detail.get('call_time') or call['created_at'],
+                  'occurred_at':detail.get('occurred_at') or call['created_at'] or detail.get('call_time') or '',
                   'subject':detail.get('subject') or '',
                   'voicemail':bool(detail.get('voicemail')),
                   'attachments':detail.get('attachments') or []
@@ -280,7 +286,7 @@ def _action_workspace_data(db,ref):
     client={k:lead.get(k,'') for k in ('id','client_name','email','phone','move_date','pickup','dropoff','stage','assigned_to','priority','language')}
     return {'action':action,'client':client,'owner':owner,'open_tasks':open_tasks,
       'latest_quote':latest_quote,'history':history,
-      'outcomes':['done','waiting','followup','quote_sent','lost']}
+      'outcomes':[] if action['status'] in ('Done','Answered') or action.get('historical') else ['done','waiting','followup','quote_sent','lost']}
 
 def _complete_source_action(db,ref,actor):
     if ref['kind']=='task':
@@ -298,6 +304,24 @@ def _record_action_outcome(db,ref,lead_id,outcome,note,followup_task_id,followup
       followup_date=followup_date or '',actor=actor,created_at=now()))
 
 def register_ux_features(app,path,auth):
+    @app.get('/api/ux/callback-backlog')
+    def callback_backlog(before:str='',u=Depends(auth)):
+        require_role(u,MANAGERS)
+        with closing(connect(path)) as db:
+            return callback_backlog_preview(db,before or datetime.now(TORONTO).date().isoformat())
+
+    @app.post('/api/ux/callback-backlog/archive')
+    def archive_callback_backlog(data:dict,u=Depends(auth)):
+        require_role(u,MANAGERS)
+        with transaction(path) as db:
+            return archive_callbacks(db,data,u['id'])
+
+    @app.post('/api/ux/callback-backlog/{task_id}/restore')
+    def restore_callback_backlog(task_id:str,u=Depends(auth)):
+        require_role(u,MANAGERS)
+        with transaction(path) as db:
+            return restore_callback(db,task_id,u['id'])
+
     @app.get('/api/ux/today')
     def today_view(view:str='',u=Depends(auth)):
         require_role(u,OFFICE)
@@ -425,6 +449,16 @@ def register_ux_features(app,path,auth):
                     raise HTTPException(403,'This client is assigned to another team member.')
             else:
                 _sync_client_owner(db,lead['id'],u['id'],u['id'],'Action claimed during outcome',strict=True)
+            if ref['kind']=='task':
+                source=one(db,'SELECT status,historical FROM tasks WHERE id=?',(ref['id'],))
+                if source['status']=='Done' or source['historical']:
+                    raise HTTPException(409,'This action is completed or archived. Refresh the queue.')
+            elif ref['kind']=='email':
+                claim=one(db,'SELECT resolved_at FROM inbox_claims WHERE message_id=?',(ref['id'],))
+                if claim and claim.get('resolved_at'):
+                    raise HTTPException(409,'This email is already resolved. Refresh the queue.')
+            else:
+                raise HTTPException(422,'Use the dedicated operational screen for this action.')
             next_task_id=None
             if outcome=='followup':
                 if not followup_date:raise HTTPException(422,'Choose the follow-up date.')
@@ -446,8 +480,11 @@ def register_ux_features(app,path,auth):
             elif outcome=='lost':
                 db.execute("UPDATE leads SET stage='Lost',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
                 db.execute("UPDATE tasks SET status='Done' WHERE lead_id=? AND status!='Done' AND historical=0",(lead['id'],))
-                db.execute("""UPDATE inbox_claims SET resolved_at=? WHERE message_id IN
-                  (SELECT id FROM messages WHERE lead_id=?) AND resolved_at IS NULL""",(now(),lead['id']))
+                unanswered=rows(db,"""SELECT m.id FROM messages m LEFT JOIN inbox_claims c ON c.message_id=m.id
+                  WHERE m.lead_id=? AND (lower(m.kind) LIKE '%incoming%' OR lower(m.kind) LIKE '%email%')
+                    AND c.resolved_at IS NULL""",(lead['id'],))
+                for message in unanswered:
+                    _complete_source_action(db,{'kind':'email','id':message['id']},u['id'])
             _record_action_outcome(db,ref,lead['id'],outcome,note,next_task_id,followup_date,u['id'])
             audit(db,u['id'],'Action outcome recorded','action_outcomes',ref['kind']+':'+ref['id'],
               {'outcome':outcome,'lead_id':lead['id'],'followup_task_id':next_task_id,'followup_date':followup_date,'note':note})
