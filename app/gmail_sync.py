@@ -9,6 +9,7 @@ import json
 import re
 import time
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
@@ -26,6 +27,23 @@ FEEDS = {
     'missed_call': 'Missed Calls',
     'voicemail': 'Voice Mail',
 }
+def _gmail_received_iso(message,headers):
+    raw_internal=str((message or {}).get('internalDate') or '').strip()
+    if raw_internal:
+        try:
+            return datetime.fromtimestamp(int(raw_internal)/1000,tz=timezone.utc).isoformat(timespec='seconds')
+        except (TypeError,ValueError,OverflowError):
+            pass
+    raw_date=str((headers or {}).get('date') or '').strip()
+    if raw_date:
+        try:
+            dt=parsedate_to_datetime(raw_date)
+            if dt.tzinfo is None:dt=dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).isoformat(timespec='seconds')
+        except Exception:
+            pass
+    return ''
+
 def _api(token, path, params=None):
     last = None
     for attempt in range(3):
@@ -394,10 +412,11 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                 summary['errors'].append({'feed': feed, 'message_id': mid, 'error': 'Gmail message read failed' + (f' (HTTP {status})' if status else '')})
                 continue
             headers = _headers(message)
+            received_at = _gmail_received_iso(message,headers) or now()
             subject = headers.get('subject', '')
             body = _clean_html(_body(message.get('payload') or {}))
             attachments = _attachments(message.get('payload') or {})
-            payload = {'gmail_id': mid, 'thread_id': message.get('threadId'), 'subject': subject, 'from': headers.get('from', ''), 'date': headers.get('date', ''), 'snippet': message.get('snippet', '')}
+            payload = {'gmail_id': mid, 'thread_id': message.get('threadId'), 'subject': subject, 'from': headers.get('from', ''), 'date': headers.get('date', ''), 'received_at': received_at, 'snippet': message.get('snippet', '')}
             event_type = ''
             object_id = mid
             status = 'Needs review'
@@ -411,8 +430,9 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                         lead = new_lead(db, data, actor, external_id=event_key, suppressed=1)
                         object_id = lead['id']
                         summary['new_leads'] += 1
+                    db.execute("UPDATE leads SET created_at=? WHERE id=?",(received_at,object_id))
                     if fluid:
-                        _record_incoming_message(db, object_id, actor, subject, body or message.get('snippet', ''))
+                        _record_incoming_message(db, object_id, actor, subject, body or message.get('snippet', ''),created_at=received_at)
                     payload['parsed'] = data
                     event_type = 'gmail_quote'
                     status = 'Imported'
