@@ -204,7 +204,7 @@ def register_ux_features(app,path,auth):
               'open_followups':sum(1 for x in filtered if x['type']=='task'),
               'pending_client_changes':sum(1 for x in filtered if x['type']=='client-change')
             }
-        return {'date':today,'view':selected,'view_counts':view_counts,'stats':stats,'jobs':jobs,'attention':filtered[:60]}
+        return {'date':today,'view':selected,'view_counts':view_counts,'stats':stats,'jobs':jobs,'attention':filtered}
 
     @app.get('/api/ux/search')
     def global_search(q:str='',u=Depends(auth)):
