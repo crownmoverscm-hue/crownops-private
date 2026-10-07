@@ -455,6 +455,13 @@ document.addEventListener('submit',async e=>{
     for(const emp of team.employees){const common=f.elements['common_'+emp.id].checked;if(!common)exceptions[emp.id]={total_hours:Number(f.elements['hours_'+emp.id].value),note:f.elements['note_'+emp.id].value};}
     await api('/ux/jobs/'+encodeURIComponent(d.job_id)+'/crew-hours',{method:'POST',data:{employee_ids,team_hours:Number(d.team_hours),exceptions,note:d.note}});toast('Team hours saved.');modal.close();return navigate('team');
   }
+  if(kind==='action-outcome'){
+    const returnPage=UX.currentAction?.page||'dashboard';
+    const r=await api('/ux/actions/'+encodeURIComponent(d.action_kind)+'/'+encodeURIComponent(d.action_id)+'/outcome',{method:'POST',data:{outcome:d.outcome,note:d.note||'',followup_date:d.followup_date||'',followup_title:d.followup_title||''}});
+    modal.close();
+    const msg=r.outcome==='followup'?'Follow-up scheduled.':r.outcome==='waiting'?'Marked waiting on client.':r.outcome==='quote_sent'?'Quote-sent outcome recorded.':r.outcome==='lost'?'Opportunity closed as lost.':'Action completed.';
+    toast(msg);return navigate(returnPage);
+  }
   if(kind==='followup'){await api('/tasks',{method:'POST',data:{lead_id:d.lead_id,title:d.title,due_date:d.due_date}});modal.close();toast('Follow-up added.');return navigate('followups');}
   if(kind==='qbo-setup'){await api('/quickbooks/setup',{method:'PATCH',data:d});modal.close();toast('QuickBooks mapping saved.');return navigate('connections');}
   if(kind==='company-email'){const r=await api('/ux/company-communications',{method:'PATCH',data:{...d,approved:f.approved.checked}});UX.companyComms=r;modal.close();toast('Company email rules saved.');return navigate('connections');}
