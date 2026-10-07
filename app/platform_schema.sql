@@ -246,3 +246,17 @@ CREATE TABLE IF NOT EXISTS action_assignments (
  assigned_at TEXT NOT NULL,
  PRIMARY KEY(action_type,action_id)
 );
+CREATE TABLE IF NOT EXISTS action_outcomes (
+ id TEXT PRIMARY KEY,
+ action_type TEXT NOT NULL,
+ action_id TEXT NOT NULL,
+ lead_id TEXT,
+ outcome TEXT NOT NULL,
+ note TEXT NOT NULL DEFAULT '',
+ followup_task_id TEXT,
+ followup_date TEXT NOT NULL DEFAULT '',
+ actor TEXT NOT NULL REFERENCES users(id),
+ created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS action_outcomes_action ON action_outcomes(action_type,action_id,created_at);
+CREATE INDEX IF NOT EXISTS action_outcomes_lead ON action_outcomes(lead_id,created_at);
