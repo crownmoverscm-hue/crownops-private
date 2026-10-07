@@ -1,6 +1,6 @@
 /* CrownOps v5.4 simplified job review pass: simple defaults, useful exceptions, clean role-based UX. */
 'use strict';
-const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,actionAssignees:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
+const UX={payStart:null,payEnd:null,dirStart:null,dirEnd:null,searchResults:[],directory:null,payroll:null,todayView:null,actionAssignees:null,currentAction:null,estimateStatus:'all',estimateSearch:'',followupStatus:'open',followupSearch:'',followupScope:'active',invoiceStatus:'all',invoiceSearch:'',qboSetup:null};
 
 // ---------- Navigation: show the things people actually use ----------
 ensureNav(['communications','mail','Communications']);
@@ -61,6 +61,43 @@ function uxAttentionButton(a){
  const attrs=`data-ux="attention" data-kind="${h(a.type)}" data-id="${h(a.id||'')}" data-lead="${h(a.lead_id||'')}"`;
  return `<div class="row">${uxActionAssignmentButtons(a.type,a.id,a.owner)}<button class="btn-small" ${attrs}>Open</button></div>`;
 }
+function uxActionOutcomeLabel(key){
+ return ({done:'Done',waiting:'Waiting on client',followup:'Follow up later',quote_sent:'Quote sent',lost:'Lost / not proceeding'})[key]||key;
+}
+function uxActionDetailHtml(d){
+ const a=d.action,c=d.client||{},call=a.call;
+ let exact='';
+ if(call){
+   const phone=call.phone?'<a href="tel:'+h(call.phone)+'">'+h(call.phone)+'</a>':'Phone unavailable';
+   exact=`<div class="callout teal"><div class="eyebrow">${call.voicemail?'VOICEMAIL':'MISSED CALL'}</div><h3 style="margin:4px 0">${h(call.caller||c.client_name||'Unknown caller')}</h3><div class="small">${phone} &middot; ${h(call.occurred_at||a.created_at||'')}</div>${call.subject?'<div class="tiny muted" style="margin-top:6px">'+h(call.subject)+'</div>':''}</div>`;
+ }else if(a.kind==='email'){
+   exact=`<div class="panel panel-body"><div class="eyebrow">CLIENT EMAIL</div><h3>${h(a.title||'Client email')}</h3><div class="tiny muted">${h(a.created_at||'')}</div><div class="spacer"></div><div class="small" style="white-space:pre-wrap;max-height:280px;overflow:auto">${h(a.body||'')}</div></div>`;
+ }else{
+   exact=`<div class="panel panel-body"><div class="eyebrow">FOLLOW-UP</div><h3>${h(a.title||'Follow-up')}</h3><div class="small muted">${a.due_date?'Due '+h(a.due_date)+' · ':''}${h(a.status||'')}</div></div>`;
+ }
+ const owner=d.owner?.name||'Unclaimed';
+ const client=`<div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3 style="margin-bottom:4px">${h(c.client_name||'Client')}</h3><div class="small muted">${h(c.stage||'')}</div><div class="spacer"></div><div class="stack compact"><div><strong>Phone:</strong> ${c.phone?'<a href="tel:'+h(c.phone)+'">'+h(c.phone)+'</a>':'—'}</div><div><strong>Email:</strong> ${c.email?'<a href="mailto:'+h(c.email)+'">'+h(c.email)+'</a>':'—'}</div><div><strong>Move:</strong> ${h(c.move_date||'Date needed')}</div><div><strong>Pickup:</strong> ${h(c.pickup||'Address needed')}</div>${c.dropoff?'<div><strong>Destination:</strong> '+h(c.dropoff)+'</div>':''}<div><strong>Owner:</strong> ${h(owner)}</div></div></div>`;
+ const tasks=(d.open_tasks||[]).length?(d.open_tasks||[]).map(t=>`<div class="task-row"><div class="grow"><div class="small strong">${h(t.title)}</div><div class="tiny muted">${h(t.due_date||'No due date')}${t.id===a.id?' · current action':''}</div></div>${pill(t.status)}</div>`).join(''):'<div class="tiny muted">No other open follow-ups.</div>';
+ const history=(d.history||[]).slice(0,8).map(x=>`<div class="activity-row"><span class="activity-dot"></span><div class="grow"><div class="tiny strong">${h(x.title)}</div><div class="tiny muted">${h(x.kind)} &middot; ${h(x.at)}${x.detail?' &middot; '+h(x.detail):''}</div></div>${x.status?pill(x.status):''}</div>`).join('')||'<div class="tiny muted">No recent history.</div>';
+ return `<div class="grid2">${exact}${client}</div><div class="spacer"></div><div class="grid2"><div class="panel panel-body"><div class="eyebrow">OPEN FOLLOW-UPS</div><div class="spacer"></div>${tasks}</div><div class="panel panel-body"><div class="eyebrow">RECENT HISTORY</div><div class="spacer"></div>${history}</div></div>`;
+}
+async function uxOpenActionWorkspace(kind,id){
+ const d=await api('/ux/actions/'+encodeURIComponent(kind)+'/'+encodeURIComponent(id)+'/workspace');UX.currentAction={kind,id,data:d};
+ const owner=d.owner?.name||'Unclaimed';
+ const outcomeButtons=(d.outcomes||[]).map(o=>`<button class="${o==='lost'?'btn-soft':'btn-small'}" data-ux="action-outcome-open" data-kind="${h(kind)}" data-id="${h(id)}" data-outcome="${h(o)}">${h(uxActionOutcomeLabel(o))}</button>`).join('');
+ showModal(d.action?.title||'Action workspace',
+   `<div class="callout ${d.owner?'teal':'orange'}"><strong>${d.owner?'Owned by '+h(owner):'Unclaimed action'}</strong><div class="small muted" style="margin-top:5px">${d.owner?'The client and open follow-ups stay with this owner.':'Choosing an outcome will claim this client to you first.'}</div></div><div class="spacer"></div>${uxActionDetailHtml(d)}`,
+   `<button class="btn-soft" data-ux="open-client" data-id="${h(d.client.id)}">Full client</button><div class="grow"></div>${outcomeButtons}`,true);
+}
+function uxActionOutcomeForm(kind,id,outcome){
+ const labels={done:['Complete action','Mark this action complete and remove it from the active queue.'],waiting:['Waiting on client','Close this action for now. A new client message can become the next action.'],followup:['Follow up later','Close this action and create the next owned follow-up automatically.'],quote_sent:['Quote sent','Record that the estimate was sent and close this current action.'],lost:['Lost / not proceeding','Close this client opportunity and all remaining active follow-ups.']};
+ const [title,desc]=labels[outcome]||['Update action',''];
+ const follow=outcome==='followup'?`<div class="grid2">${field('followup_date','Follow-up date','','date','required')}${field('followup_title','Next action','Follow up with client')}</div>`:'';
+ const warning=outcome==='lost'?'<div class="callout orange"><strong>This closes the active opportunity.</strong><div class="small muted" style="margin-top:5px">All remaining active follow-ups for this client will be completed.</div></div><div class="spacer"></div>':'';
+ showModal(title,`${warning}<p class="small muted">${h(desc)}</p><form id="ux-action-outcome-form" data-ux-form="action-outcome"><input type="hidden" name="action_kind" value="${h(kind)}"><input type="hidden" name="action_id" value="${h(id)}"><input type="hidden" name="outcome" value="${h(outcome)}">${follow}${textArea('note','Internal note (optional)','',3)}</form>`,
+   `${btn('close','Cancel')}<button type="submit" form="ux-action-outcome-form" class="btn-primary">${h(title)}</button>`,true);
+}
+
 async function uxAssignAction(kind,id,currentOwner){
  if(!UX.actionAssignees)UX.actionAssignees=await api('/ux/action-assignees');
  const opts=[['','Unassigned'],...UX.actionAssignees.map(u=>[u.id,u.name+' · '+(u.role==='owner'?'manager':u.role)])];
