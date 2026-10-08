@@ -489,8 +489,8 @@ def confirmation(lead,q):
     inp=json.loads(q["inputs_json"]);fr=str(inp.get("language") or lead.get("language","")).lower().startswith("fr")
     _,window=quote_start_window(inp)
     if fr:
-        return f"Bonjour {lead['client_name']},\n\nVotre service avec Crown Movers est maintenant reserve et confirme. Fenetre d'arrivee : {window}. Si une urgence vous oblige a demander un changement de date, nous ferons notre possible pour vous accommoder. Un preavis d'au moins 10 jours est requis selon les conditions de reservation. Un changement demande a moins de 10 jours peut entrainer la perte du depot. Une nouvelle date depend des disponibilites et le tarif peut changer selon la date choisie.\n\nMerci,\nCrown Movers"
-    return f"Hi {lead['client_name']},\n\nYour Crown Movers service is booked and confirmed. Arrival window: {window}. If an emergency means you need to request a date change, we will do our best to accommodate you. At least 10 days' notice is required under the booking terms. A change requested inside 10 days may result in loss of the deposit. A replacement date is subject to availability and rates may change for the new date.\n\nThank you,\nCrown Movers"
+        return f"Bonjour {lead['client_name']},\n\nVotre service avec Crown Movers est maintenant réservé et confirmé. Fenêtre d'arrivée : {window}.\n\nPour une annulation ou un report, consultez les conditions de réservation convenues pour votre service et contactez-nous à info@crownmovers.ca ou au 514-606-4030. Une nouvelle date dépend des disponibilités. Tout changement de prix doit être accepté avant de confirmer la nouvelle réservation.\n\nMerci,\nCrown Movers"
+    return f"Hi {lead['client_name']},\n\nYour Crown Movers service is booked and confirmed. Arrival window: {window}.\n\nFor cancellation or rescheduling, refer to the booking terms agreed for your service and contact us at info@crownmovers.ca or 514-606-4030. A replacement date is subject to availability. Any price change requires your approval before confirming the replacement booking.\n\nThank you,\nCrown Movers"
 
 def confirm_job(db,q,lead,actor,reason):
     j=ensure_tentative_job(db,q,lead,actor)
