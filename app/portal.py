@@ -48,9 +48,10 @@ def register_portal(app,path,auth,public_url,secure):
             l=staff_read_project(db,lid,u)
             if '@' not in l['email']:raise HTTPException(422,'Confirm the client email before creating portal access.')
             raw=secrets.token_urlsafe(40)
-            insert(db,'portal_invites',dict(token_hash=stamp_hash(raw),lead_id=lid,email=l['email'],expires_at=(datetime.now(timezone.utc)+timedelta(hours=48)).isoformat(timespec='seconds'),created_by=u['id'],created_at=now()))
+            expires_at=(datetime.now(timezone.utc)+timedelta(hours=48)).isoformat(timespec='seconds')
+            insert(db,'portal_invites',dict(token_hash=stamp_hash(raw),lead_id=lid,email=l['email'],expires_at=expires_at,created_by=u['id'],created_at=now()))
             audit(db,u['id'],'Private portal invite created','leads',lid)
-        return {'url':public_url+'/portal#access='+raw,'expires_in':'48 hours; one use','sent':False}
+        return {'url':public_url+'/portal#access='+raw,'expires_in':'48 hours; one use','expires_at':expires_at,'sent':False}
 
     @app.post('/api/leads/{lid}/portal-revoke')
     def revoke(lid:str,u=Depends(auth)):

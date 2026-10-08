@@ -460,7 +460,7 @@ def calculate(db,data):
       {"name":f"{movers} demenageurs + {trucks} camion(s)" if fr else f"{movers} movers + {trucks} truck(s)","qty":float(low),"unit_cents":money(rate),"total_cents":money(slo),"note":(f"Estimation : {float(low):g}-{float(high):g} heures de service. Minimum {float(minimum):g} h." if fr else f"Estimated {float(low):g}-{float(high):g} service hours. Minimum {float(minimum):g} h.")},
       {"name":("Frais de transport longue distance" if fr else "Long Distance Transportation Fee") if service=="Long Distance" else ("Frais de transport" if fr else "Transportation Fee"),
        "qty":1,"unit_cents":money(transport),"total_cents":money(transport),
-       "note":((f"{float(show_transport_hours):g} h de conduite reelle x 1,15 = {float(billable_transport_hours):g} h facturables au taux horaire de l'equipe." if fr else f"{float(show_transport_hours):g} true driving hours x 1.15 = {float(billable_transport_hours):g} billable transportation hours at the team hourly rate.") if service=="Long Distance" and fixed in (None,"") else ("Montant de transport longue distance fixe convenu." if fr else "Agreed fixed long-distance transportation amount.") if service=="Long Distance" else ("Montant de transport presente au client." if fr else "Client-facing transportation amount."))},
+       "note":((f"{float(show_transport_hours):g} h de conduite reelle x 1,15 = {float(billable_transport_hours):g} h facturables au taux horaire de l'equipe." if fr else f"{float(show_transport_hours):g} true driving hours x 1.15 = {float(billable_transport_hours):g} billable transportation hours at the team hourly rate.") if service=="Long Distance" and fixed in (None,"") else ("Montant de transport longue distance fixe convenu." if fr else "Agreed fixed long-distance transportation amount.") if service=="Long Distance" else ("Frais de transport pour l’équipe et le camion." if fr else "Transportation charge for the crew and truck."))},
     ]
     if service=="Long Distance":
         lines.append({"name":"Carburant / distance longue distance" if fr else "Long-distance fuel / distance fee","qty":1,"unit_cents":money(fuel),"total_cents":money(fuel),"note":(f"{float(km):g} km aller-retour + 5 % = {float(adjusted_km):g} km ajustes a {float(km_rate):.2f} $ CA/km x {trucks} camion(s)." if fr else f"{float(km):g} actual round-trip km + 5% = {float(adjusted_km):g} adjusted km at CAD {float(km_rate):.2f}/km x {trucks} truck(s).")})
@@ -707,11 +707,12 @@ def register_sales_crm_v6(app,path,auth,public_url):
             body=(f"Bonjour {l['client_name']},\n\nVotre devis Crown Movers est pret pour le {inp.get('move_date') or l.get('move_date')} ({arrival}). Estimation avant taxes : {r['low_cents']/100:.2f} $ a {r['high_cents']/100:.2f} $ CA.\n\nConsultez les details, les protections applicables et les conditions, puis acceptez votre devis ici :\n{invite_url}\n\nApres l'acceptation, les options de depot applicables seront affichees.\n\nMerci,\nCrown Movers" if fr else
               f"Hi {l['client_name']},\n\nYour Crown Movers estimate is ready for {inp.get('move_date') or l.get('move_date')} ({arrival}). Estimated range before tax: CAD {r['low_cents']/100:.2f} to CAD {r['high_cents']/100:.2f}.\n\nReview the service details, applicable protection and booking terms, then accept your estimate here:\n{invite_url}\n\nAfter acceptance, the available deposit options will appear.\n\nThank you,\nCrown Movers")
             msg=queue_message(db,l["id"],subject,body,"Reply",u["id"],"quote-delivery:"+qid+":"+str(q["revision"]));mid=msg["id"]
-            db.execute("UPDATE leads SET stage='Quote Sent',notifications_suppressed=0,updated_at=? WHERE id=?",(now(),l["id"]));audit(db,u["id"],"Estimate finalized for client delivery","quotes",qid,{"mail_id":mid})
-        sent=False;err=""
-        if data.get("send_now") is True:
+            delivery_stage='Quote Sent' if msg.get('status')=='Sent' else 'Estimate Ready'
+            db.execute("UPDATE leads SET stage=CASE WHEN stage IN ('Accepted','Booked','Closed','Lost') THEN stage ELSE ? END,notifications_suppressed=0,updated_at=? WHERE id=?",(delivery_stage,now(),l["id"]));audit(db,u["id"],"Estimate finalized for client delivery","quotes",qid,{"mail_id":mid})
+        sent=msg.get('status')=='Sent';err=""
+        if data.get("send_now") is True and not sent:
             try:
-                with transaction(path) as db:db.execute("UPDATE outbound_messages SET status='Approved',approved_by=? WHERE id=?",(u["id"],mid))
+                with transaction(path) as db:db.execute("UPDATE outbound_messages SET status='Approved',approved_by=? WHERE id=? AND status IN ('Draft','Approved')",(u["id"],mid))
                 from .providers import process_mail
                 sent=bool(process_mail(path,mid).get("sent"))
             except Exception as ex:err=str(getattr(ex,"detail",ex))[:250]
