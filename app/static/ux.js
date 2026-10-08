@@ -50,7 +50,7 @@ function uxGroups(){
    ['SALES',['sales','quotes','followups','communications']],
    ['OPERATIONS',['schedule','invoices','payments','timeoff','documents','portalhub','care']],
    ['TEAM',['team','payroll']],
-   ['COMPANY',['rates','inventory','fleet','connections','settings','account']]
+   ['COMPANY',['rates','inventory','fleet','connections','policies','settings','account']]
  ];
  return full.map(([g,items])=>[g,items.filter(k=>allowedPages().includes(k))]).filter(x=>x[1].length);
 }
@@ -388,7 +388,7 @@ const uxOldSettings=settingsPage;
 settingsPage=async function(){
  if(S.user.role==='crew')return uxOldSettings();
  return head('Company setup','Low-frequency settings live here so day-to-day work stays clean.')+`<div class="grid3">${[
-  ['Pricing & rates','Hourly rates by date and crew size.','rates'],['Materials','Selling prices, cost and stock.','inventory'],['Documents & approvals','Liability and acknowledgement templates.','documents'],['Fleet','Vehicles, inspections and maintenance.','fleet'],['Connections','Company email, QuickBooks and providers.','connections'],['Security & imports','Accounts, workbook imports and technical settings.','settings-legacy']
+  ['Pricing & rates','Hourly rates by date and crew size.','rates'],['Materials','Selling prices, cost and stock.','inventory'],['Documents & approvals','Liability and acknowledgement templates.','documents'],['Fleet','Vehicles, inspections and maintenance.','fleet'],['Connections','Company email, QuickBooks and providers.','connections'],['Operating rules','Booking terms, deposit methods, invoice setup and payroll periods.','policies'],['Security & imports','Accounts, workbook imports and technical settings.','settings-legacy']
  ].map(([t,d,p])=>panel(t,`<p class="small muted">${d}</p><button data-ux="setup-go" data-page-target="${p}" class="btn-soft">Open</button>`)).join('')}</div>`;
 };
 
