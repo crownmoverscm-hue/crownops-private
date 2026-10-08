@@ -147,6 +147,8 @@ def process_mail(path,mid):
         pid=send_gmail(path,m)
         with transaction(path) as db:
             db.execute("UPDATE outbound_messages SET status='Sent',provider_id=?,sent_at=? WHERE id=?",(pid,now(),mid));audit(db,m['approved_by'],'Client email sent','outbound_messages',mid,{'provider_id':pid})
+            if (m.get('event_key') or '').startswith('quote-delivery:'):
+                db.execute("UPDATE leads SET stage='Quote Sent',updated_at=? WHERE id=? AND stage NOT IN ('Accepted','Booked','Closed','Lost')",(now(),m['lead_id']))
         return {'sent':True,'provider_id':pid}
     except Exception:
         with transaction(path) as db:db.execute("UPDATE outbound_messages SET status='Unknown',error=? WHERE id=?",('Sending was not confirmed. Check Sent mail before retrying; no automatic retry.',mid))
