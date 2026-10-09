@@ -39,13 +39,14 @@
   }
 
   function weeklyJobCard(j){
-    const t=truckPrimary(j),color=safeColor(t?.color_hex),crew=(j.crew||[]).length;
+    const t=truckPrimary(j),color=safeColor(t?.color_hex),crew=(j.crew||[]).length,required=Number(j.quote?.movers||0);
+    const crewLabel=required>crew?`${crew}/${required} movers assigned`:crew?`${crew} mover${crew===1?'':'s'}`:'Crew needed';
     const truckName=t?.name||'Truck needed';
     const statusClass=j.status==='Confirmed'?'confirmed':j.status==='In progress'?'progress':j.status==='Completed'?'completed':'tentative';
     return `<button class="weekly-dispatch-card ${statusClass}" data-final="open-job" data-id="${h(j.id)}" style="--truck:${color};--truck-soft:${rgba(color,.085)};--truck-border:${rgba(color,.32)}">
       <div class="weekly-card-top"><span>${h(timeLabel(j.start_at))}</span><strong>${h(estimateCode(j))}</strong></div>
       <div class="weekly-client">${h(j.client?.client_name||j.title)}</div>
-      <div class="weekly-service">${h(phaseName(j.phase))} · ${crew} Mover${crew===1?'':'s'}</div>
+      <div class="weekly-service">${h(phaseName(j.phase))} · ${h(crewLabel)}</div>
       <div class="weekly-truck">${truckDots(j)}<span>${h((j.trucks||[]).map(x=>x.name).join(' + ')||truckName)}</span></div>
     </button>`;
   }
@@ -88,7 +89,7 @@
       api('/time-off').catch(()=>[]),
       api('/vehicles').catch(()=>[])
     ]);
-    const navTools=`<div class="calendar-tools weekly-tools"><div class="weekly-nav-main"><div class="weekly-nav-buttons">${btn('week-prev',icon('left'),'btn-icon')}${btn('week-today','Today')}${btn('week-next',icon('right'),'btn-icon')}</div><div class="weekly-range-label">${h(compactWeekLabel(start,end))}</div></div><div class="weekly-nav-side"><label class="weekly-jump"><span>Jump to</span><input type="date" id="calendar-jump" value="${h(start)}" aria-label="Jump to schedule date"></label><div class="weekly-capacity">14+ slots / day</div></div></div>`;
+    const navTools=`<div class="calendar-tools weekly-tools"><div class="weekly-nav-main"><div class="weekly-nav-buttons">${btn('week-prev',icon('left'),'btn-icon')}${btn('week-today','Today')}${btn('week-next',icon('right'),'btn-icon')}</div><div class="weekly-range-label">${h(compactWeekLabel(start,end))}</div></div><div class="weekly-nav-side"><label class="weekly-jump"><span>Jump to</span><input type="date" id="calendar-jump" value="${h(start)}" aria-label="Jump to schedule date"></label><div class="weekly-capacity">${vehicles.filter(v=>v.active).length} active trucks</div></div></div>`;
     return head('Schedule','Weekly dispatch. Jobs stay grouped by truck colour, with larger services first and that truck’s later service directly underneath.',btn('new-job',icon('plus')+'New job','btn-primary'))+
       navTools+legend(vehicles)+weekCalendar(jobs,off,vehicles)+
       `<p class="source-warning">Example: 5–7 + 1 means 5–7 estimated service hours plus 1 transportation hour. CrownOps allows the same crew/truck on another service later that day when the time blocks do not overlap.</p>`;

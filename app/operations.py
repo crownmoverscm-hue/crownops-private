@@ -35,6 +35,8 @@ def fleet_warnings(db,v):
     p=one(db,'SELECT * FROM fleet_profiles WHERE vehicle_id=?',(v['id'],)) or {}
     warnings=[]
     if not v['active']:warnings.append('Unavailable')
+    from .company_ops import fleet_reference_blockers
+    warnings.extend(fleet_reference_blockers(db,v['id']))
     if p.get('next_service_date') and p['next_service_date']<=now()[:10]:warnings.append('Maintenance due')
     if p.get('next_service_km') is not None and p.get('odometer_km',0)>=p['next_service_km']:warnings.append('Mileage service due')
     if p.get('inspection_due') and p['inspection_due']<now()[:10]:warnings.append('Inspection overdue')
@@ -47,6 +49,8 @@ def fleet_warnings(db,v):
 
 def check_fleet_dispatch(db,trucks,crew,start):
     for vid in trucks:
+        from .company_ops import fleet_reference_blockers
+        if fleet_reference_blockers(db,vid):raise HTTPException(409,'Review the imported truck information and repairs before dispatch.')
         if one(db,"SELECT id FROM inspections WHERE vehicle_id=? AND severity='Major' AND cleared_at IS NULL",(vid,)):raise HTTPException(409,'Truck has an uncleared major defect.')
         p=one(db,'SELECT * FROM fleet_profiles WHERE vehicle_id=?',(vid,))
         if p and p['inspection_due'] and p['inspection_due']<start[:10]:raise HTTPException(409,'Truck inspection expires before this job. Update inspection evidence first.')
@@ -347,20 +351,24 @@ def register_operations(app,path,auth):
 
     @app.get('/api/fleet')
     def fleet(u=Depends(auth)):
+        require_role(u,OFFICE|{'crew'})
         with closing(connect(path)) as db:
             out=[]
             for v in rows(db,'SELECT * FROM vehicles ORDER BY name'):
+                if u['role']=='crew' and not one(db,"""SELECT a.job_id FROM assignments a JOIN assignments e ON e.job_id=a.job_id
+                    JOIN jobs j ON j.id=a.job_id WHERE a.resource_type='vehicle' AND a.resource_id=?
+                    AND e.resource_type='employee' AND e.resource_id=? AND j.status NOT IN ('Cancelled','Completed')""",(v['id'],u.get('employee_id') or '')):continue
                 p,w,latest=fleet_warnings(db,v);pos=one(db,'SELECT * FROM positions WHERE vehicle_id=?',(v['id'],))
                 if pos:
                     pos['stale']=(datetime.now(timezone.utc)-datetime.fromisoformat(pos['observed_at'])).total_seconds()>900
                 documents=[fleet_doc_public(x) for x in rows(db,'SELECT * FROM fleet_documents WHERE vehicle_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(v['id'],))] if u['role'] in OFFICE else []
                 out.append({**v,'profile':p,'warnings':w,'latest_check':latest,'position':pos,'documents':documents,
-                    'maintenance':rows(db,'SELECT * FROM maintenance WHERE vehicle_id=? ORDER BY created_at DESC',(v['id'],))})
+                    'maintenance':rows(db,'SELECT * FROM maintenance WHERE vehicle_id=? ORDER BY created_at DESC',(v['id'],)) if u['role'] in OFFICE else []})
             return out
 
     @app.post('/api/fleet/{vid}/documents')
     async def upload_fleet_document(vid:str,file:UploadFile=File(...),category:str=Form('Registration'),u=Depends(auth)):
-        require_role(u,{'owner','sales','dispatch'})
+        require_role(u,{'owner','dispatch'})
         return await save_fleet_doc(file,vid,category,u['id'])
 
     @app.get('/api/fleet-documents/{fid}')
@@ -387,7 +395,7 @@ def register_operations(app,path,auth):
 
     @app.put('/api/fleet/{vid}/profile')
     def fleet_profile(vid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','sales','dispatch'})
+        require_role(u,{'owner','dispatch'})
         allowed={'plate','vin','model','payload_kg','gvwr_kg','cargo_length_ft','odometer_km','next_service_km','next_service_date','inspection_due','inspection_interval_hours','check_required'}
         if set(data)-allowed:raise HTTPException(422,'Unknown vehicle fields.')
         with transaction(path) as db:
@@ -403,10 +411,17 @@ def register_operations(app,path,auth):
             if rec['odometer_km']<old.get('odometer_km',0):raise HTTPException(409,'Odometer cannot decrease. Ask management to reconcile the source.')
             rec.update(vehicle_id=vid,check_required=int(data.get('check_required',old.get('check_required',0)) is True or data.get('check_required')==1),inspection_interval_hours=int(number(data.get('inspection_interval_hours',24),'Check interval',1,168)),updated_at=now())
             db.execute('DELETE FROM fleet_profiles WHERE vehicle_id=?',(vid,));insert(db,'fleet_profiles',rec);audit(db,u['id'],'Fleet details reviewed','vehicles',vid)
+            if any(rec.get(k)!=old.get(k) for k in allowed):
+                db.execute('UPDATE fleet_reference SET review_required=1,updated_at=? WHERE vehicle_id=?',(now(),vid))
+                db.execute('UPDATE vehicles SET version=version+1 WHERE id=?',(vid,))
+            if rec['odometer_km']>old.get('odometer_km',0):
+                db.execute('UPDATE fleet_reference SET odometer_recorded_date=? WHERE vehicle_id=?',
+                    (datetime.now(ZoneInfo('America/Toronto')).date().isoformat(),vid))
         return {'ok':True}
 
     @app.post('/api/fleet/{vid}/inspection')
     def inspection(vid:str,data:dict,u=Depends(auth)):
+        require_role(u,{'owner','dispatch','crew'})
         checklist=data.get('checklist',{})
         keys={'tires','lights','brakes','fluids','body','dollies_3','straps_2','blankets','paperwork','locked'}
         if not isinstance(checklist,dict) or set(checklist)!=keys or any(not isinstance(v,bool) for v in checklist.values()):raise HTTPException(422,'Complete every truck and equipment check.')
@@ -428,6 +443,8 @@ def register_operations(app,path,auth):
             rec=dict(id=uid('CHECK'),vehicle_id=vid,job_id=jid,checked_by=u['id'],checked_at=now(),odometer_km=odo,checklist_json=dumps(checklist),severity=severity,notes=notes)
             insert(db,'inspections',rec)
             db.execute('UPDATE fleet_profiles SET odometer_km=?,updated_at=? WHERE vehicle_id=?',(odo,now(),vid))
+            db.execute('UPDATE fleet_reference SET odometer_recorded_date=? WHERE vehicle_id=?',
+                (datetime.now(ZoneInfo('America/Toronto')).date().isoformat(),vid))
             if severity=='Major':db.execute('UPDATE vehicles SET active=0,version=version+1 WHERE id=?',(vid,))
             audit(db,u['id'],'Truck check recorded','inspections',rec['id'],{'severity':severity,'unavailable':severity=='Major'})
         return {**rec,'truck_blocked':severity=='Major'}
@@ -446,7 +463,7 @@ def register_operations(app,path,auth):
 
     @app.post('/api/fleet/{vid}/maintenance')
     def maintenance(vid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','sales','dispatch'})
+        require_role(u,{'owner','dispatch'})
         title=text(data.get('title',''),'Work order',200)
         if not title:raise HTTPException(422,'Describe the work order.')
         due=text(data.get('due_date',''),'Due date',10)
@@ -460,7 +477,7 @@ def register_operations(app,path,auth):
 
     @app.post('/api/maintenance/{mid}/complete')
     def maintain_done(mid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','sales','dispatch'})
+        require_role(u,{'owner','dispatch'})
         note=text(data.get('notes',''),'Service evidence',3000)
         if not note:raise HTTPException(422,'Record the completed work or receipt reference.')
         with transaction(path) as db:
