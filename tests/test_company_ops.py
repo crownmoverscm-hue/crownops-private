@@ -214,7 +214,7 @@ class DispatchStartTests(unittest.TestCase):
 
     def test_legacy_fleet_routes_keep_sales_read_only_and_crew_sees_assigned_trucks(self):
         with transaction(self.path) as db:
-            insert(db,'employees',dict(id='E',name='Test Worker'))
+            insert(db,'employees',dict(id='E',name='Test Worker',role='Mover'))
             for vid in ('V','OTHER'):
                 insert(db,'vehicles',dict(id=vid,name='Test '+vid,active=1))
                 insert(db,'fleet_profiles',dict(vehicle_id=vid,updated_at=now()))
