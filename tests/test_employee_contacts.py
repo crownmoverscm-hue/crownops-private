@@ -1,7 +1,10 @@
 import importlib.util
+from contextlib import closing
 from io import BytesIO
 import json
 import os
+import re
+import zipfile
 from pathlib import Path
 import tempfile
 import unittest
@@ -49,12 +52,12 @@ class EmployeeContactImportTests(unittest.TestCase):
     def test_preview_does_not_create_employees_and_apply_creates_inactive_contacts_without_driver_approval(self):
         preview = self.preview({'Name': 'New Worker', 'Phone': '514-555-3000', 'Position': 'Lead',
             'Reported Driver': 'Yes', 'Availability': 'Weekends', 'Emergency Phone': '+39 123 456 7890'})
-        with connect(self.path) as db:
+        with closing(connect(self.path)) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM employees').fetchone()[0], 0)
         self.assertEqual(preview['summary']['create'], 1)
         report = apply_contacts(self.path, preview['batch_id'], 'OWNER')
         self.assertEqual(report['create'], 1)
-        with connect(self.path) as db:
+        with closing(connect(self.path)) as db:
             employee = one(db, 'SELECT * FROM employees')
             profile = one(db, 'SELECT * FROM employee_directory_profiles')
             self.assertEqual((employee['active'], employee['driver_verified'], employee['hourly_cents']), (0, 0, 0))
@@ -69,7 +72,7 @@ class EmployeeContactImportTests(unittest.TestCase):
         self.assertEqual(preview['summary']['update'], 1)
         self.assertEqual(preview['rows'][0]['changes']['phone']['from'], '514-555-1000')
         apply_contacts(self.path, preview['batch_id'], 'OWNER')
-        with connect(self.path) as db:
+        with closing(connect(self.path)) as db:
             employee = one(db, 'SELECT * FROM employees')
             profile = one(db, 'SELECT * FROM employee_directory_profiles')
             self.assertEqual((employee['name'], employee['role'], employee['active'], employee['driver_verified'], employee['hourly_cents']),
@@ -89,7 +92,7 @@ class EmployeeContactImportTests(unittest.TestCase):
         again = self.preview(record)
         self.assertEqual(again['summary'], {'create': 0, 'update': 0, 'unchanged': 1, 'conflict': 0})
         apply_contacts(self.path, again['batch_id'], 'OWNER')
-        with connect(self.path) as db:
+        with closing(connect(self.path)) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM employees').fetchone()[0], 1)
 
     def test_conflicting_identifiers_block_entire_batch(self):
@@ -100,7 +103,7 @@ class EmployeeContactImportTests(unittest.TestCase):
         with self.assertRaises(ContactImportError) as caught:
             apply_contacts(self.path, preview['batch_id'], 'OWNER')
         self.assertEqual(caught.exception.status, 409)
-        with connect(self.path) as db:
+        with closing(connect(self.path)) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM employees').fetchone()[0], 2)
 
     def test_stale_actor_bound_and_expired_previews_cannot_apply(self):
@@ -147,6 +150,19 @@ class EmployeeContactImportTests(unittest.TestCase):
                 with self.assertRaises(ContactImportError):
                     parse_contacts(content, 'contacts.xlsx')
 
+    def test_workbooks_without_dimension_metadata_are_supported(self):
+        original = workbook_bytes({'Name': 'New Worker', 'Phone': '514-555-3000'})
+        output = BytesIO()
+        with zipfile.ZipFile(BytesIO(original)) as source, zipfile.ZipFile(output, 'w') as target:
+            for entry in source.infolist():
+                data = source.read(entry.filename)
+                if entry.filename == 'xl/worksheets/sheet1.xml':
+                    data = re.sub(rb'<dimension ref="[^"]*"\s*/>', b'', data)
+                target.writestr(entry, data)
+        parsed = parse_contacts(output.getvalue(), 'contacts.xlsx')
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]['Phone'], '514-555-3000')
+
     @unittest.skipUnless(importlib.util.find_spec('fastapi') and importlib.util.find_spec('httpx'), 'Web dependencies unavailable in local artifact runtime')
     def test_http_routes_restrict_roles_and_require_actor_owned_preview(self):
         from fastapi import FastAPI
@@ -157,7 +173,7 @@ class EmployeeContactImportTests(unittest.TestCase):
         register_employee_contacts(app, self.path, lambda: user)
         client = TestClient(app)
         content = workbook_bytes({'Name': 'New Worker', 'Phone': '514-555-3000'})
-        for role in ('crew', 'sales', 'dispatch'):
+        for role in ('crew', 'sales', 'dispatch', 'accounting'):
             user['role'] = role
             self.assertEqual(client.post('/api/ux/employee-contact-import/preview', files={'file': ('contacts.xlsx', content)}).status_code, 403)
             self.assertEqual(client.post('/api/ux/employee-contact-import/apply', json={'batch_id': 'unreviewed'}).status_code, 403)
@@ -180,7 +196,7 @@ class EmployeeContactImportTests(unittest.TestCase):
             app = create_app(self.path)
             preview = self.preview({'Name': 'New Worker'})
             apply_contacts(self.path, preview['batch_id'], 'OWNER')
-            endpoints = {r.path: r.endpoint for r in app.routes}
+            endpoints = {r.path: r.endpoint for r in app.routes if hasattr(r, 'endpoint')}
             self.assertIn('/api/ux/employee-contact-import/preview', endpoints)
             owner = {'id': 'OWNER', 'role': 'owner'}
             directory = endpoints['/api/ux/employee-directory'](u=owner)

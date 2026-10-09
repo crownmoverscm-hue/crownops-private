@@ -228,8 +228,8 @@ def register_employee_contacts(app, path, auth):
     initialize_contact_imports(path)
 
     def allowed(user):
-        if user['role'] not in {'owner', 'accounting'}:
-            raise HTTPException(403, 'Contact imports are restricted to owner and accounting.')
+        if user['role'] != 'owner':
+            raise HTTPException(403, 'Contact imports are restricted to the owner.')
 
     @app.post('/api/ux/employee-contact-import/preview')
     async def preview(file: UploadFile = File(...), u=Depends(auth)):
