@@ -34,6 +34,20 @@ This is the controlled path from the current private review installation to prod
 
 ## Stage 2 - Staff acceptance test
 
+### Shared contacts and fleet setup
+
+After merging the company-information release and confirming Railway has deployed it:
+
+1. Sign in as the owner. Open **Fleet → Import company information** (also available in **Important contacts**).
+2. Select the separately supplied `Crown_Company_Information.xlsx`. Review the contacts, truck matches, service history and source questions. Save the reviewed import once. Repeated uploads are detected; conflicting plate/VIN matches block the batch.
+3. In **Important contacts**, verify the phone numbers and service areas. All signed-in staff can search and call these contacts; owner and dispatch users maintain them. Employee emergency contacts remain in the existing restricted staff profile workflow.
+4. Open each truck in **Fleet**. Confirm registration, VIN, fuel, current odometer, rated payload, GVWR, measured cargo length, service schedule and the exact inspection expiry date. Source inspection months are reference notes, not verified expiry dates. Resolve imported undated repairs with the workshop and record completed work.
+5. Owner or dispatch records the review evidence and uses **Review & activate** for trucks that are available. The import itself does not activate trucks or create current safety checks. Complete the normal pre-use check before a job starts. Current defects and imported review requirements continue to block dispatch/start.
+6. Review employee pay rates and activate current staff; verify the drivers who will be assigned. Directory imports do not create login accounts. Link each crew login to its employee record through the existing account workflow.
+7. Use the owner **Launch checklist** to identify remaining setup items. Verify a sales/accounting account can read Fleet without the new editing controls, and a crew account sees Important contacts and its assigned work rather than the office fleet directory. Server permissions enforce these restrictions.
+
+The workbook contains private operational contacts and identifiers. Keep it with the company records, outside the source repository. Deployment adds the screens and schema; a reviewed owner import is still required to load the supplied data.
+
 Test with at least one owner/manager and one sales user on desktop and mobile:
 
 - login and MFA,

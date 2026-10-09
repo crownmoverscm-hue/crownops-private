@@ -749,7 +749,7 @@ def create_app(database_path=None):
             for rid in ids:
                 resource=one(db,f'SELECT * FROM {table} WHERE id=? AND active=1',(rid,))
                 if not resource:raise HTTPException(422,'Resource is inactive or missing: '+rid)
-                conflict=one(db,"SELECT j.id,j.title FROM assignments a JOIN jobs j ON j.id=a.job_id WHERE a.resource_type=? AND a.resource_id=? AND j.status!='Cancelled' AND j.id!=? AND j.start_at<? AND j.end_at>?",(typ,rid,ignore_id,end,start))
+                conflict=one(db,"SELECT j.id,j.title FROM assignments a JOIN jobs j ON j.id=a.job_id WHERE a.resource_type=? AND a.resource_id=? AND j.status NOT IN ('Cancelled','Completed') AND j.id!=? AND j.start_at<? AND j.end_at>?",(typ,rid,ignore_id,end,start))
                 if conflict:raise HTTPException(409,resource['name']+' overlaps with '+conflict['title']+'.')
                 if typ=='employee':
                     start_day=datetime.fromisoformat(start).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
@@ -846,6 +846,10 @@ def create_app(database_path=None):
             if status!=j['status'] and status not in allowed[j['status']]:
                 raise HTTPException(422,'Invalid status transition. Create a reviewed booking rather than bypass approval.')
             if status=='In progress' and j['status']=='Confirmed':
+                assignments=rows(db,'SELECT * FROM assignments WHERE job_id=?',(jid,))
+                check_job_resources(db,dict(start_at=j['start_at'],end_at=j['end_at'],
+                    crew_ids=[a['resource_id'] for a in assignments if a['resource_type']=='employee'],
+                    truck_ids=[a['resource_id'] for a in assignments if a['resource_type']=='vehicle']),jid)
                 require_hos_dispatch_verification(db,jid)
                 from .security import check_preuse
                 check_preuse(db,jid)
@@ -930,7 +934,7 @@ def create_app(database_path=None):
 
     @app.post('/api/vehicles')
     def add_vehicle(data:dict,u=Depends(auth)):
-        require(u,{'owner','sales','dispatch'})
+        require(u,{'owner','dispatch'})
         name=bounded(data.get('name',''),'Truck name',150)
         if not name:raise HTTPException(422,'Name is required.')
         color=str(data.get('color_hex') or '#3B82F6').upper()
@@ -943,7 +947,7 @@ def create_app(database_path=None):
 
     @app.put('/api/vehicles/{vid}')
     def update_vehicle(vid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner','sales','dispatch'})
+        require(u,{'owner','dispatch'})
         name=bounded(data.get('name',''),'Truck name',150)
         color=str(data.get('color_hex') or '').upper()
         if not name:raise HTTPException(422,'Truck name is required.')
@@ -957,10 +961,12 @@ def create_app(database_path=None):
 
     @app.post('/api/vehicles/{vid}/activate')
     def activate_vehicle(vid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner','sales','dispatch'})
+        require(u,{'owner','dispatch'})
         note=bounded(data.get('note',''),'Fleet review',2000)
         if not note:raise HTTPException(422,'Add a note confirming the vehicle is valid and available.')
         with transaction(path) as db:
+            from .company_ops import fleet_reference_blockers
+            if fleet_reference_blockers(db,vid):raise HTTPException(409,'Use Fleet to review the imported details and resolve repairs before activating this truck.')
             if one(db,"SELECT id FROM inspections WHERE vehicle_id=? AND severity='Major' AND cleared_at IS NULL",(vid,)):raise HTTPException(409,'Repair and clear the major defect before activating this truck.')
             db.execute('UPDATE vehicles SET active=1,notes=?,version=version+1 WHERE id=?',(note,vid))
             audit(db,u['id'],'Vehicle activated for pilot','vehicles',vid,{'note':note})

@@ -33,11 +33,42 @@ def verify_user_mfa(path,user_id,code):
     return False
 
 
+def job_resource_blockers(db,j):
+    crew=rows(db,"SELECT resource_id FROM assignments WHERE job_id=? AND resource_type='employee'",(j['id'],))
+    trucks=rows(db,"SELECT resource_id FROM assignments WHERE job_id=? AND resource_type='vehicle'",(j['id'],))
+    missing=[]
+    required_crew,required_trucks=1,0 if j['phase'] in ('Packing','Unpacking') else 1
+    q=one(db,'SELECT result_json FROM quotes WHERE id=?',(j.get('quote_id'),)) if j.get('quote_id') else None
+    if q:
+        result=json.loads(q['result_json'])
+        required_crew=max(required_crew,int(result.get('movers') or 0))
+        if j['phase'] not in ('Packing','Unpacking'):
+            required_trucks=max(required_trucks,int(result.get('trucks') or 0))
+    if len(crew)<required_crew:missing.append(f'Assign {required_crew} crew members')
+    if len(trucks)<required_trucks:missing.append(f'Assign {required_trucks} trucks')
+    drivers=0
+    for a in crew:
+        e=one(db,'SELECT * FROM employees WHERE id=?',(a['resource_id'],))
+        if not e or not e['active']:
+            missing.append('An assigned employee is inactive or missing');continue
+        if json.loads(e['raw_json']).get('contact_import_pay_pending'):
+            missing.append(e['name']+' needs a reviewed pay rate')
+        drivers+=int(bool(e['driver_verified']))
+    if drivers<len(trucks):missing.append('Assign a verified driver for every truck')
+    return missing
+
+
 def check_preuse(db,jid):
+    j=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
+    blockers=job_resource_blockers(db,j)
+    if blockers:raise HTTPException(409,'; '.join(blockers)+'.')
+    from .company_ops import fleet_reference_blockers
     for a in rows(db,"SELECT resource_id FROM assignments WHERE job_id=? AND resource_type='vehicle'",(jid,)):
         vid=a['resource_id'];v=one(db,'SELECT * FROM vehicles WHERE id=?',(vid,))
+        if fleet_reference_blockers(db,vid):raise HTTPException(409,'Review the imported truck information and repairs before starting.')
         if not v or not v['active'] or one(db,"SELECT id FROM inspections WHERE vehicle_id=? AND severity='Major' AND cleared_at IS NULL",(vid,)):raise HTTPException(409,'A job truck is unavailable. Dispatch must assign a safe vehicle.')
         p=one(db,'SELECT * FROM fleet_profiles WHERE vehicle_id=?',(vid,))
+        if p and p['inspection_due'] and p['inspection_due']<datetime.now(timezone.utc).date().isoformat():raise HTTPException(409,'Truck inspection has expired. Update the inspection evidence before starting.')
         if p and p['check_required']:
             check=one(db,'SELECT * FROM inspections WHERE vehicle_id=? ORDER BY checked_at DESC LIMIT 1',(vid,))
             if not check or datetime.fromisoformat(check['checked_at'])<datetime.now(timezone.utc)-timedelta(hours=p['inspection_interval_hours']):raise HTTPException(409,'Complete the required pre-use truck check before starting.')

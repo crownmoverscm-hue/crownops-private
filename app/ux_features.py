@@ -72,6 +72,11 @@ def _job_readiness(db,j):
     if not l.get('dropoff'):missing.append('destination address')
     if not crew:missing.append('assigned crew')
     if not trucks and j['phase'] not in ('Packing','Unpacking'):missing.append('assigned truck')
+    from .security import job_resource_blockers,check_preuse
+    missing.extend(job_resource_blockers(db,j))
+    if crew and trucks:
+        try:check_preuse(db,j['id'])
+        except HTTPException as e:missing.append(str(e.detail))
     if j.get('status')=='Tentative':missing.append('job not confirmed')
     if j.get('quote_id'):
         q=one(db,'SELECT * FROM quotes WHERE id=?',(j['quote_id'],))
@@ -306,6 +311,8 @@ def _record_action_outcome(db,ref,lead_id,outcome,note,followup_task_id,followup
 
 def register_ux_features(app,path,auth):
     register_employee_contacts(app,path,auth)
+    from .company_ops import register_company_ops
+    register_company_ops(app,path,auth)
     @app.get('/api/ux/callback-backlog')
     def callback_backlog(before:str='',u=Depends(auth)):
         require_role(u,MANAGERS)
