@@ -16,6 +16,7 @@ from .store import connect, transaction, rows, one, insert, audit, uid, now
 from .platform_common import require_role, OFFICE, MANAGERS, text, settings, put_setting, invoice_current
 from .operations import hos_dispatch_status
 from .crm_backlog import callback_backlog_preview, archive_callbacks, restore_callback
+from .employee_contacts import register_employee_contacts, PAY_PENDING
 
 TORONTO=ZoneInfo('America/Toronto')
 PRIVATE_HR={'owner','accounting'}
@@ -38,8 +39,8 @@ def _profile_seed(db,e):
     if old:return
     suffix=re.sub(r'\D','',e['id'])[-2:] or '00'
     insert(db,'employee_directory_profiles',dict(
-        employee_id=e['id'],email='',phone=f'514-555-01{suffix.zfill(2)}',home_address='',
-        emergency_name='Emergency contact to confirm',emergency_phone='',start_date='',notes='',
+        employee_id=e['id'],email='',phone=f'514-555-01{suffix.zfill(2)}' if e['id'].startswith('DEMO-') else '',home_address='',
+        emergency_name='Emergency contact to confirm' if e['id'].startswith('DEMO-') else '',emergency_phone='',start_date='',notes='',
         team_lead=0,updated_by='review-seed',updated_at=now()))
 
 
@@ -304,6 +305,7 @@ def _record_action_outcome(db,ref,lead_id,outcome,note,followup_task_id,followup
       followup_date=followup_date or '',actor=actor,created_at=now()))
 
 def register_ux_features(app,path,auth):
+    register_employee_contacts(app,path,auth)
     @app.get('/api/ux/callback-backlog')
     def callback_backlog(before:str='',u=Depends(auth)):
         require_role(u,MANAGERS)
@@ -616,6 +618,7 @@ def register_ux_features(app,path,auth):
                 base.update({'email':e.get('email') or '','home_address':e.get('home_address') or '',
                   'start_date':e.get('start_date') or '','driver_verified':bool(e['driver_verified']),
                   'hourly_cents':e['hourly_cents'],'license_uploaded':bool(e.get('license_original_name')),
+                  'pay_rate_pending':bool(json.loads(e.get('raw_json') or '{}').get(PAY_PENDING)),
                   'license_name':e.get('license_original_name') or '','team_lead':bool(e.get('team_lead')),'notes':e.get('notes') or '',
                   'current_hours':round(by[e['id']]['minutes']/60,2),'current_jobs':len(by[e['id']]['jobs']),
                   'pending_time_entries':by[e['id']]['pending']})
@@ -630,11 +633,18 @@ def register_ux_features(app,path,auth):
             if not emp:raise HTTPException(404,'Employee not found.')
             _profile_seed(db,emp)
             rate=data.get('hourly_rate')
+            raw=json.loads(emp.get('raw_json') or '{}')
+            if raw.get(PAY_PENDING) and rate in (None,''):
+                if data.get('active',bool(emp['active'])):
+                    raise HTTPException(422,'Confirm an hourly pay rate before activating this imported employee.')
+                rate=None
             if rate is not None:
                 try:rate_cents=round(float(rate)*100)
                 except Exception:raise HTTPException(422,'Enter a valid hourly pay rate.')
                 if rate_cents<0 or rate_cents>100000:raise HTTPException(422,'Review the hourly pay rate.')
                 db.execute('UPDATE employees SET hourly_cents=?,role=?,active=?,driver_verified=? WHERE id=?',(rate_cents,text(data.get('role',emp['role']),'Role',120),int(data.get('active',bool(emp['active']))),int(data.get('driver_verified',bool(emp['driver_verified']))),eid))
+                if raw.pop(PAY_PENDING,False):
+                    db.execute('UPDATE employees SET raw_json=? WHERE id=?',(json.dumps(raw),eid))
             db.execute("""UPDATE employee_directory_profiles SET email=?,phone=?,home_address=?,emergency_name=?,emergency_phone=?,start_date=?,team_lead=?,notes=?,updated_by=?,updated_at=? WHERE employee_id=?""",
               (text(data.get('email',''),'Email',240),text(data.get('phone',''),'Phone',80),text(data.get('home_address',''),'Home address',500),
                text(data.get('emergency_name',''),'Emergency contact',180),text(data.get('emergency_phone',''),'Emergency phone',80),
