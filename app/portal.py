@@ -99,7 +99,7 @@ def register_portal(app,path,auth,public_url,secure):
             cfg=settings(db,'media_program',{})
             terms=settings(db,'client_terms',{})
             dep=settings(db,'deposit_policy',{}) or {}
-            card_deposit_available=live_enabled() and bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID'))
+            card_deposit_available=square_deposits_enabled(l['email']) and bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID'))
             public_deposit={'enabled':False}
             if dep.get('approved') and dep.get('enabled') and dep.get('recipient_email'):
                 public_deposit={'enabled':True,'recipient_name':dep.get('recipient_name','Crown Movers'),

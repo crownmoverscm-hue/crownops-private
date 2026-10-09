@@ -4,7 +4,7 @@ from decimal import Decimal
 import json,os,requests
 from fastapi import HTTPException
 from .store import connect,transaction,rows,one,insert,audit,now,uid
-from .platform_common import external_gate,add_task
+from .platform_common import square_deposit_gate,add_task
 from .pricing import cents
 
 
@@ -16,13 +16,15 @@ def deposit_state(db,lid,q):
 
 
 def create_deposit_checkout(path,qid,lid,actor):
-    external_gate();token=os.getenv('SQUARE_ACCESS_TOKEN');loc=os.getenv('SQUARE_LOCATION_ID')
+    token=os.getenv('SQUARE_ACCESS_TOKEN');loc=os.getenv('SQUARE_LOCATION_ID')
     if not token or not loc:raise HTTPException(503,'Card deposits are not configured. Ask Crown for its approved payment instructions.')
     with transaction(path) as db:
         q=one(db,"SELECT * FROM quotes WHERE id=? AND lead_id=? AND status='Accepted'",(qid,lid))
         if not q:raise HTTPException(409,'Accept the reviewed estimate before paying its deposit.')
         l=one(db,'SELECT * FROM leads WHERE id=?',(lid,))
-        if os.getenv('SQUARE_ENV','sandbox')!='sandbox' and (lid.startswith('DEMO-') or l['email'].endswith('.invalid')):raise HTTPException(409,'Fictional clients cannot create production card deposits.')
+        if not l:raise HTTPException(404,'Client project not found.')
+        env=square_deposit_gate(l['email'])
+        if env=='production' and (lid.startswith('DEMO-') or l['email'].endswith('.invalid')):raise HTTPException(409,'Fictional clients cannot create production card deposits.')
         if l['version']!=q['lead_version'] or one(db,"SELECT id FROM client_changes WHERE lead_id=? AND status='Pending'",(lid,)):raise HTTPException(409,'Ask Crown to review the latest changes before paying.')
         balance=deposit_state(db,lid,q)
         if balance['pending_cents']:raise HTTPException(409,'A deposit has already been recorded and is awaiting verification. Do not pay again.')
@@ -32,7 +34,7 @@ def create_deposit_checkout(path,qid,lid,actor):
             if old['status']=='Active' and old['quote_id']==qid and old['amount_cents']==balance['due_cents']:return {'url':old['url'],'already_created':True,'booking_confirmed':False}
             raise HTTPException(409,'An existing deposit checkout needs reconciliation before another payment method is used.')
         key=uid('DEPOSIT');insert(db,'deposit_links',dict(id=key,lead_id=lid,quote_id=qid,amount_cents=balance['due_cents'],created_by=actor,created_at=now()))
-    host='https://connect.squareupsandbox.com' if os.getenv('SQUARE_ENV','sandbox')=='sandbox' else 'https://connect.squareup.com'
+    host='https://connect.squareupsandbox.com' if env=='sandbox' else 'https://connect.squareup.com'
     try:
         r=requests.post(host+'/v2/online-checkout/payment-links',headers={'Authorization':'Bearer '+token,'Square-Version':os.getenv('SQUARE_API_VERSION','2026-09-16')},json={'idempotency_key':key,'quick_pay':{'name':'Crown Movers deposit','price_money':{'amount':balance['due_cents'],'currency':'CAD'},'location_id':loc},'checkout_options':{'allow_tipping':False}},timeout=30)
         r.raise_for_status();v=r.json()['payment_link']

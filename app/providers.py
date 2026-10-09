@@ -168,7 +168,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         mappings_complete=bool(reviewed_matches and mappings['service_item_id'] and mappings['tax_code_id'] and mappings['deposit_account_id'])
         return {'external_actions_enabled':live_enabled(),'gmail':{'authorized_at':connected.get('gmail'),'configured':bool(os.getenv('GOOGLE_CLIENT_ID'))},
           'quickbooks':{'authorized_at':connected.get('quickbooks'),'configured':bool(os.getenv('QBO_CLIENT_ID')),'environment':env,'writes_enabled':quickbooks_write_enabled(),'mappings_complete':mappings_complete},
-          'square':{'configured':bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID')),'environment':os.getenv('SQUARE_ENV','sandbox')},
+          'square':square_connection_status(),
           'ai':{'configured':bool(os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_MODEL'))},
           'intake':{'configured':len(os.getenv('CROWNOPS_WEBHOOK_SECRET',''))>=32},'scanner':{'configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND'))},
           'operations':operations,'note':'Configuration/authorization does not certify a successful end-to-end live test.'}
