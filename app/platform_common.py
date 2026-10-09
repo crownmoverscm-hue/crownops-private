@@ -67,6 +67,42 @@ def uploads_enabled():
 def external_gate():
     if not live_enabled():raise HTTPException(503,'External actions are disabled. Enable them on the authorized test/server installation first.')
 
+def square_deposit_environment():
+    env=os.getenv('SQUARE_ENV','sandbox').strip().lower()
+    if env not in ('sandbox','production'):
+        raise HTTPException(503,'SQUARE_ENV must be sandbox or production.')
+    return env
+
+def square_sandbox_test_recipients():
+    return {email.strip().casefold() for email in re.split(r'[,;\n]',os.getenv('CROWNOPS_SQUARE_SANDBOX_TEST_EMAILS','')) if email.strip()}
+
+def square_deposits_enabled(client_email=''):
+    try:env=square_deposit_environment()
+    except HTTPException:return False
+    if live_enabled():return True
+    return env=='sandbox' and os.getenv('CROWNOPS_ALLOW_SQUARE_SANDBOX_DEPOSITS','0')=='1' and (client_email or '').strip().casefold() in square_sandbox_test_recipients()
+
+def square_deposit_gate(client_email):
+    env=square_deposit_environment()
+    if not square_deposits_enabled(client_email):
+        raise HTTPException(503,'Card deposits are not enabled for this project. Ask Crown for its approved payment instructions.')
+    return env
+
+def square_connection_status():
+    env=os.getenv('SQUARE_ENV','sandbox').strip().lower()
+    valid=env in ('sandbox','production')
+    token=bool(os.getenv('SQUARE_ACCESS_TOKEN'))
+    location=bool(os.getenv('SQUARE_LOCATION_ID'))
+    sandbox_tests=os.getenv('CROWNOPS_ALLOW_SQUARE_SANDBOX_DEPOSITS','0')=='1'
+    recipients=len(square_sandbox_test_recipients())
+    return {'configured':token and location,'environment':env,'environment_valid':valid,
+        'access_token_present':token,'location_id_present':location,
+        'webhook_signature_key_present':bool(os.getenv('SQUARE_WEBHOOK_SIGNATURE_KEY')),
+        'webhook_url_present':bool(os.getenv('SQUARE_WEBHOOK_URL')),
+        'external_actions_enabled':live_enabled(),'sandbox_tests_enabled':sandbox_tests,
+        'sandbox_test_recipient_count':recipients,
+        'deposit_creation_enabled':valid and (live_enabled() or (env=='sandbox' and sandbox_tests and recipients>0))}
+
 def quickbooks_environment():
     env=os.getenv('QBO_ENV','sandbox').strip().lower()
     if env not in ('sandbox','production'):
