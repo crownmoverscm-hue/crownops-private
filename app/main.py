@@ -1233,10 +1233,10 @@ def create_app(database_path=None):
     def index():return FileResponse(ROOT/'app'/'static'/'index.html')
 
     @app.get('/manifest.webmanifest')
-    def manifest():return FileResponse(ROOT/'app'/'static'/'manifest.webmanifest',media_type='application/manifest+json')
+    def manifest():return FileResponse(ROOT/'app'/'static'/'manifest.webmanifest',media_type='application/manifest+json',headers={'Cache-Control':'no-cache'})
 
     @app.get('/sw.js')
-    def sw():return FileResponse(ROOT/'app'/'static'/'sw.js',media_type='application/javascript',headers={'Service-Worker-Allowed':'/'})
+    def sw():return FileResponse(ROOT/'app'/'static'/'sw.js',media_type='application/javascript',headers={'Service-Worker-Allowed':'/','Cache-Control':'no-cache'})
 
     from .invoices import register_invoices
     register_invoices(app,path,auth,visible_job,require)
