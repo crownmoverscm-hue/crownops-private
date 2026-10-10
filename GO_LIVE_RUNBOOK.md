@@ -34,6 +34,8 @@ This is the controlled path from the current private review installation to prod
 
 ## Stage 2 - Staff acceptance test
 
+Use [TEAM_ONBOARDING.md](TEAM_ONBOARDING.md) to delegate setup by role and record real-device results. The in-app **Help & install** page explains Mac, Android, iPhone and desktop installation. The icon is a shortcut to the hosted app; internet and an individual account are required.
+
 ### Shared contacts and fleet setup
 
 After merging the company-information release and confirming Railway has deployed it:

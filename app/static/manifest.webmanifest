@@ -1,1 +1,18 @@
-{"name":"CrownOps | Crown Movers","short_name":"CrownOps","start_url":"/","scope":"/","display":"standalone","background_color":"#f5f7fb","theme_color":"#22395f","icons":[{"src":"/static/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]}
+{
+  "id": "/",
+  "name": "CrownOps | Crown Movers",
+  "short_name": "CrownOps",
+  "description": "Private Crown Movers team workspace",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f7fb",
+  "theme_color": "#22395f",
+  "icons": [
+    {"src": "/static/icons/app-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icons/app-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icons/app-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}
+  ],
+  "prefer_related_applications": false
+}
