@@ -37,12 +37,13 @@ LEAD_FIELDS={'client_name','email','phone','move_date','pickup','dropoff','home_
     'lead_type','stage','assigned_to','priority','notes'}
 OPERATORS={'owner','sales','dispatch'}
 READERS=OPERATORS|{'accounting'}
-QUOTERS={'owner','sales'}  # owner is displayed as Manager in this pilot
+QUOTERS={'owner','sales'}
 COOKIE='crownops_session'
 SETUP_TOKEN_HASH='a2f107444f141c2a3d61af99ec02063038c77b60c0f639ef6bf7f5304fa21bb1'
 from .pricing import calculate_with_overrides
 from .operations import check_fleet_dispatch, require_hos_dispatch_verification
 from .platform_common import settings as platform_settings
+from .account_access import master_owner_id, remember_master_owner, protect_owner_account
 
 
 def sha(value):
@@ -55,7 +56,7 @@ def require(user, allowed):
 
 
 def safe_user(user):
-    return {k:user.get(k) for k in ('id','name','email','role','employee_id')}
+    return {k:user.get(k) for k in ('id','name','email','role','employee_id','is_master_owner')}
 
 
 def bounded(value, name, limit=20000):
@@ -95,6 +96,7 @@ def create_user(path, email, name, password, role='owner', employee_id=None):
            employee_id=employee_id,active=1,created_at=now())
     with transaction(path) as db:
         insert(db,'users',u)
+        u['is_master_owner']=remember_master_owner(db)==u['id']
     return safe_user(u)
 
 
@@ -198,6 +200,7 @@ def create_app(database_path=None):
         raw=request.cookies.get(COOKIE,'')
         with closing(connect(path)) as db:
             row=one(db,'SELECT u.*,s.csrf FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.active=1',(sha(raw),now()))
+            if row:row['is_master_owner']=master_owner_id(db)==row['id']
         if not raw or not row:
             raise HTTPException(401,'Please sign in.')
         if request.method not in ('GET','HEAD','OPTIONS'):
@@ -246,11 +249,13 @@ def create_app(database_path=None):
             raise HTTPException(422,'Enter your name.')
         if not isinstance(password,str) or not 12<=len(password)<=200:
             raise HTTPException(422,'Use a password between 12 and 200 characters.')
+        if 'confirm_password' in data and password!=data['confirm_password']:
+            raise HTTPException(422,'Passwords do not match.')
         user=create_user(path,email,name,password,role='owner')
         from .seed import seed_pricing
         seed_pricing(path)
         with transaction(path) as db:
-            audit(db,user['id'],'Initial manager account created','users',user['id'])
+            audit(db,user['id'],'Master owner account created','users',user['id'])
         return {'ok':True,'email':user['email']}
 
     @app.post('/api/login')
@@ -282,6 +287,7 @@ def create_app(database_path=None):
             db.execute('DELETE FROM sessions WHERE expires_at<?',(now(),))
             insert(db,'sessions',dict(token_hash=sha(token),user_id=u['id'],csrf=csrf,expires_at=expiry))
             audit(db,u['id'],'Signed in','users',u['id'])
+            u['is_master_owner']=master_owner_id(db)==u['id']
         resp=JSONResponse({'user':safe_user(u),'csrf':csrf})
         resp.set_cookie(COOKIE,token,httponly=True,secure=secure,samesite='lax',max_age=43200,path='/')
         return resp
@@ -300,7 +306,12 @@ def create_app(database_path=None):
     def users(u=Depends(auth)):
         require(u,READERS)
         with closing(connect(path)) as db:
-            return rows(db,'SELECT id,name,email,role,active,employee_id FROM users ORDER BY name')
+            master=master_owner_id(db)
+            accounts=rows(db,'SELECT id,name,email,role,active,employee_id FROM users ORDER BY name')
+        for person in accounts:
+            person['master_owner']=person['id']==master
+            person['can_manage']=u['role']=='owner' and person['id']!=u['id'] and person['id']!=master and (person['role']!='owner' or u['id']==master)
+        return accounts
 
     @app.post('/api/invitations')
     def invite(data:dict,u=Depends(auth)):
@@ -310,6 +321,8 @@ def create_app(database_path=None):
             raise HTTPException(422,'Unknown role.')
         token=secrets.token_urlsafe(32)
         with transaction(path) as db:
+            if role=='owner' and u['id']!=master_owner_id(db):
+                raise HTTPException(403,'Only the master owner can invite another owner.')
             emp=data.get('employee_id') or None
             if emp and not one(db,'SELECT id FROM employees WHERE id=?',(emp,)):
                 raise HTTPException(422,'Employee record does not exist.')
@@ -318,6 +331,7 @@ def create_app(database_path=None):
             email=valid_email(bounded(data.get('email',''),'Email',254))
             if one(db,'SELECT id FROM users WHERE email=?',(email,)):
                 raise HTTPException(409,'An account already exists for this email.')
+            db.execute('DELETE FROM invitations WHERE email=? AND used_at IS NULL',(email,))
             insert(db,'invitations',dict(token_hash=sha(token),email=email,
                 name=bounded(data.get('name',''),'Name',150),role=role,employee_id=emp,
                 expires_at=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat(timespec='seconds'),created_by=u['id']))
@@ -331,6 +345,8 @@ def create_app(database_path=None):
         if not isinstance(password,str) or len(password)>200:raise HTTPException(422,'Invalid password input.')
         if len(password)<12:
             raise HTTPException(422,'Use at least 12 characters for the password.')
+        if 'confirm_password' in data and password!=data['confirm_password']:
+            raise HTTPException(422,'Passwords do not match.')
         with transaction(path) as db:
             inv=one(db,'SELECT * FROM invitations WHERE token_hash=? AND used_at IS NULL AND expires_at>?',(sha(token),now()))
             if not inv:
@@ -350,8 +366,13 @@ def create_app(database_path=None):
         if user_id==u['id']:
             raise HTTPException(422,'You cannot disable your own account.')
         with transaction(path) as db:
+            target=one(db,'SELECT * FROM users WHERE id=?',(user_id,))
+            if not target:raise HTTPException(404,'Account not found.')
+            protect_owner_account(db,u,target)
             db.execute('UPDATE users SET active=0 WHERE id=?',(user_id,))
             db.execute('DELETE FROM sessions WHERE user_id=?',(user_id,))
+            db.execute('DELETE FROM account_resets WHERE user_id=?',(user_id,))
+            db.execute('DELETE FROM invitations WHERE email=? AND used_at IS NULL',(target['email'],))
             audit(db,u['id'],'Access revoked','users',user_id)
         return {'ok':True}
 
@@ -1255,6 +1276,8 @@ def create_app(database_path=None):
     register_workflows(app,path,auth,new_lead,check_job_resources,public_url)
     register_providers(app,path,auth,public_url,new_lead)
     register_security(app,path,auth,public_url,PASSWORDS)
+    from .account_access import register_account_access
+    register_account_access(app,path,auth,public_url)
     from .extensions import register_extensions
     register_extensions(app,path,auth,public_url)
     from starlette.middleware.trustedhost import TrustedHostMiddleware
