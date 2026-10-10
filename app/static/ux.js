@@ -577,4 +577,5 @@ document.addEventListener('click',e=>{const p=e.target.closest('[data-page]');if
 // First screen: field users go to My Jobs; everyone else goes to Today.
 const uxBootstrap=bootstrap;
 bootstrap=async function(){const out=await uxBootstrap();if(S.user?.role==='crew'){S.jobScope='mine';if(S.page!=='schedule')await navigate('schedule');}else if(S.user&&S.page!=='dashboard'){await navigate('dashboard');}return out;};
-bootstrap();
+// Wait for every deferred screen extension, including account links, before opening the app.
+document.addEventListener('DOMContentLoaded',()=>bootstrap(),{once:true});
