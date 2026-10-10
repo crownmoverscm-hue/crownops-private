@@ -106,6 +106,28 @@ class AccountAccessTests(unittest.TestCase):
             self.assertEqual(settings(db, 'master_owner')['user_id'], self.master['id'])
         self.assertEqual(self.public.post('/api/setup-owner', json={}).status_code, 409)
 
+    def test_empty_install_requires_private_setup_code_and_closes_after_the_master_owner_is_created(self):
+        path = Path(self.folder.name) / 'new-install.sqlite3'
+        client = TestClient(create_app(path), base_url=PUBLIC_URL)
+        self.addCleanup(client.close)
+        payload = {'setup_code':'incorrect','name':'Test First Owner','email':'first@example.invalid',
+            'password':PASSWORD,'confirm_password':PASSWORD}
+        with patch('app.main.SETUP_TOKEN_HASH', sha('test-private-setup-code')):
+            self.assertEqual(client.post('/api/setup-owner', json=payload).status_code, 401)
+            payload['setup_code'] = 'test-private-setup-code'
+            payload['confirm_password'] = 'mismatch'
+            self.assertEqual(client.post('/api/setup-owner', json=payload).status_code, 422)
+            payload['confirm_password'] = PASSWORD
+            self.assertEqual(client.post('/api/setup-owner', json=payload).status_code, 200)
+            self.assertEqual(client.post('/api/setup-owner', json=payload).status_code, 409)
+        login = client.post('/api/login', json={'email':'first@example.invalid','password':PASSWORD})
+        self.assertEqual(login.status_code, 200, login.text)
+        self.assertTrue(login.json()['user']['is_master_owner'])
+        with self.assertRaises(HTTPException):
+            create_user(path, 'race@example.invalid', 'Test Concurrent Setup', PASSWORD, initial_only=True)
+        with closing(connect(path)) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM users').fetchone()[0], 1)
+
     def test_team_access_and_all_account_mutations_require_owner_role_and_csrf(self):
         for role in ('CREW','SALES','DISPATCH','ACCOUNTING'):
             client = self.client(role)

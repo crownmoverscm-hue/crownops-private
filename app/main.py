@@ -88,13 +88,15 @@ def local_to_utc(value):
         raise HTTPException(422,'Use a valid date/time, with an explicit offset during daylight-saving transitions.')
 
 
-def create_user(path, email, name, password, role='owner', employee_id=None):
+def create_user(path, email, name, password, role='owner', employee_id=None, initial_only=False):
     email=valid_email(email.strip())
     if role not in ROLES or not 12<=len(password)<=200:
         raise ValueError('Choose a valid role and a password of 12 to 200 characters.')
     u=dict(id=uid('USER'),email=email,name=name,role=role,password_hash=PASSWORDS.hash(password),
            employee_id=employee_id,active=1,created_at=now())
     with transaction(path) as db:
+        if initial_only and db.execute('SELECT 1 FROM users LIMIT 1').fetchone():
+            raise HTTPException(409,'Initial setup is already complete.')
         insert(db,'users',u)
         u['is_master_owner']=remember_master_owner(db)==u['id']
     return safe_user(u)
@@ -251,7 +253,7 @@ def create_app(database_path=None):
             raise HTTPException(422,'Use a password between 12 and 200 characters.')
         if 'confirm_password' in data and password!=data['confirm_password']:
             raise HTTPException(422,'Passwords do not match.')
-        user=create_user(path,email,name,password,role='owner')
+        user=create_user(path,email,name,password,role='owner',initial_only=True)
         from .seed import seed_pricing
         seed_pricing(path)
         with transaction(path) as db:
