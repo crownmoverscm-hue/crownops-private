@@ -43,7 +43,9 @@ SETUP_TOKEN_HASH='a2f107444f141c2a3d61af99ec02063038c77b60c0f639ef6bf7f5304fa21b
 from .pricing import calculate_with_overrides
 from .operations import check_fleet_dispatch, require_hos_dispatch_verification
 from .platform_common import settings as platform_settings
-from .account_access import master_owner_id, remember_master_owner, protect_owner_account
+from .account_access import (master_owner_id, remember_master_owner, protect_owner_account,
+    check_invitation_email, invitation_request_id, previous_invitation_email,
+    reserve_invitation_email, invitation_email_result, deliver_invitation_email)
 
 
 def sha(value):
@@ -321,24 +323,46 @@ def create_app(database_path=None):
         role=data.get('role','crew')
         if role not in ROLES:
             raise HTTPException(422,'Unknown role.')
+        send_email=data.get('send_email',False)
+        if not isinstance(send_email,bool):raise HTTPException(422,'Choose whether to send the invitation email.')
+        request_id=invitation_request_id(data.get('request_id')) if send_email else None
+        person={'email':valid_email(bounded(data.get('email',''),'Email',254)),
+                'name':bounded(data.get('name',''),'Name',150),'role':role,'employee_id':data.get('employee_id') or None}
+        if not person['name']:raise HTTPException(422,'Enter the team member name.')
+        if person['employee_id'] is not None and not isinstance(person['employee_id'],str):
+            raise HTTPException(422,'Choose an employee record.')
         token=secrets.token_urlsafe(32)
         with transaction(path) as db:
             if role=='owner' and u['id']!=master_owner_id(db):
                 raise HTTPException(403,'Only the master owner can invite another owner.')
-            emp=data.get('employee_id') or None
+            emp=person['employee_id']
             if emp and not one(db,'SELECT id FROM employees WHERE id=?',(emp,)):
                 raise HTTPException(422,'Employee record does not exist.')
             if role=='crew' and not emp:
                 raise HTTPException(422,'Link a crew login to an employee record first.')
-            email=valid_email(bounded(data.get('email',''),'Email',254))
+            if send_email:
+                previous=previous_invitation_email(db,request_id,u,person)
+                if previous:return invitation_email_result(previous)
+                check_invitation_email(path,public_url,person['email'])
+            email=person['email']
             if one(db,'SELECT id FROM users WHERE email=?',(email,)):
                 raise HTTPException(409,'An account already exists for this email.')
             db.execute('DELETE FROM invitations WHERE email=? AND used_at IS NULL',(email,))
-            insert(db,'invitations',dict(token_hash=sha(token),email=email,
-                name=bounded(data.get('name',''),'Name',150),role=role,employee_id=emp,
-                expires_at=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat(timespec='seconds'),created_by=u['id']))
+            invitation=dict(person,token_hash=sha(token),
+                expires_at=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat(timespec='seconds'),created_by=u['id'])
+            insert(db,'invitations',invitation)
+            if send_email:reserve_invitation_email(db,invitation,request_id,u)
             audit(db,u['id'],'Invitation created','users',email,{'role':role})
-        return {'url':public_url+'/#invite='+token,'expires_in':'48 hours','sent':False}
+        from .staff_onboarding import invitation_content
+        url=public_url+'/#invite='+token
+        out={'url':url,'expires_in':'48 hours','expires_at':invitation['expires_at'],'sent':False,
+             'invitation_id':invitation['token_hash'],'recipient':email,'name':person['name'],'role':role,
+             'email_requested':send_email,'delivery_status':'Not requested',
+             'email_preview':invitation_content(person,public_url,url)}
+        if send_email:
+            delivery=deliver_invitation_email(path,invitation['token_hash'],token,public_url,request_id,u)
+            delivery.pop('url',None);delivery.pop('email_preview',None);out.update(delivery)
+        return out
 
     @app.post('/api/accept-invitation')
     def accept_invite(data:dict):
