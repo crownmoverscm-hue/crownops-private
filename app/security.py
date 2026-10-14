@@ -3,9 +3,10 @@ from contextlib import closing
 from datetime import datetime,timezone,timedelta
 from urllib.parse import quote
 import base64,hashlib,hmac,json,os,secrets,struct,time
-from fastapi import Depends,HTTPException
+from fastapi import BackgroundTasks,Depends,HTTPException,Request
 from .store import connect,transaction,one,rows,insert,audit,now,dumps,uid
 from .platform_common import *
+from .account_access import protect_owner_account, recovery_rate_limit, notify_password_reset
 
 
 def validate_deployment(url,secure):
@@ -81,18 +82,23 @@ def register_security(app,path,auth,public_url,passwords):
         with transaction(path) as db:
             person=one(db,'SELECT * FROM users WHERE id=? AND active=1',(uid_,))
             if not person:raise HTTPException(404,'Active account not found.')
+            protect_owner_account(db,u,person)
             db.execute('DELETE FROM account_resets WHERE user_id=?',(uid_,));insert(db,'account_resets',dict(token_hash=stamp_hash(raw),user_id=uid_,expires_at=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat(timespec='seconds')))
             audit(db,u['id'],'One-use password reset prepared','users',uid_)
         return {'url':public_url+'/#reset='+raw,'sent':False,'expires_in':'30 minutes'}
 
     @app.post('/api/reset-password')
-    def reset(data:dict):
-        raw=text(data.get('token',''),'Token',180);password=text(data.get('password',''),'Password',200)
-        if len(password)<12:raise HTTPException(422,'Use at least 12 characters.')
+    def reset(data:dict,request:Request,background:BackgroundTasks):
+        raw=text(data.get('token',''),'Token',180);password=data.get('password','')
+        if not isinstance(password,str) or not 12<=len(password)<=200:raise HTTPException(422,'Use 12 to 200 characters.')
+        if 'confirm_password' in data and password!=data['confirm_password']:raise HTTPException(422,'Passwords do not match.')
+        with transaction(path) as db:allowed=recovery_rate_limit(db,request,purpose='reset')
+        if not allowed:raise HTTPException(429,'Too many recovery attempts. Wait 15 minutes and try again.')
         with transaction(path) as db:
-            r=one(db,'SELECT * FROM account_resets WHERE token_hash=? AND expires_at>? AND used_at IS NULL',(stamp_hash(raw),now()))
+            r=one(db,'SELECT r.* FROM account_resets r JOIN users u ON u.id=r.user_id WHERE r.token_hash=? AND r.expires_at>? AND r.used_at IS NULL AND u.active=1',(stamp_hash(raw),now()))
             if not r:raise HTTPException(401,'Reset link is invalid or expired.')
-            db.execute('UPDATE users SET password_hash=? WHERE id=?',(passwords.hash(password),r['user_id']));db.execute('UPDATE account_resets SET used_at=? WHERE token_hash=?',(now(),stamp_hash(raw)));db.execute('DELETE FROM sessions WHERE user_id=?',(r['user_id'],));audit(db,r['user_id'],'Password reset; sessions revoked','users',r['user_id'])
+            db.execute('UPDATE users SET password_hash=? WHERE id=?',(passwords.hash(password),r['user_id']));db.execute('DELETE FROM account_resets WHERE user_id=?',(r['user_id'],));db.execute('DELETE FROM sessions WHERE user_id=?',(r['user_id'],));audit(db,r['user_id'],'Password reset; sessions revoked','users',r['user_id'])
+        background.add_task(notify_password_reset,path,r['user_id'],public_url)
         return {'ok':True,'mfa_still_required':True}
 
     @app.get('/api/security')
@@ -129,5 +135,5 @@ def register_security(app,path,auth,public_url,passwords):
         new=text(data.get('new_password',''),'New password',200)
         if len(new)<12:raise HTTPException(422,'Use at least 12 characters.')
         with transaction(path) as db:
-            db.execute('UPDATE users SET password_hash=? WHERE id=?',(passwords.hash(new),u['id']));db.execute('DELETE FROM sessions WHERE user_id=?',(u['id'],));audit(db,u['id'],'Password changed; sessions revoked','users',u['id'])
+            db.execute('UPDATE users SET password_hash=? WHERE id=?',(passwords.hash(new),u['id']));db.execute('DELETE FROM sessions WHERE user_id=?',(u['id'],));db.execute('DELETE FROM account_resets WHERE user_id=?',(u['id'],));audit(db,u['id'],'Password changed; sessions revoked','users',u['id'])
         return {'ok':True,'sign_in_again':True}
