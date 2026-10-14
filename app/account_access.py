@@ -317,7 +317,7 @@ def register_account_access(app, path, auth, public_url):
         require_role(u, {'owner'})
         from .staff_onboarding import ROLE_LABELS, invitation_content
         role = data.get('role','crew')
-        if role not in ROLE_LABELS:
+        if not isinstance(role,str) or role not in ROLE_LABELS:
             raise HTTPException(422, 'Choose an access role.')
         with closing(connect(path)) as db:
             if role=='owner' and u['id']!=master_owner_id(db):

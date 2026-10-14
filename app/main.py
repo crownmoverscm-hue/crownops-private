@@ -321,7 +321,7 @@ def create_app(database_path=None):
     def invite(data:dict,u=Depends(auth)):
         require(u,{'owner'})
         role=data.get('role','crew')
-        if role not in ROLES:
+        if not isinstance(role,str) or role not in ROLES:
             raise HTTPException(422,'Unknown role.')
         send_email=data.get('send_email',False)
         if not isinstance(send_email,bool):raise HTTPException(422,'Choose whether to send the invitation email.')

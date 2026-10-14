@@ -44,7 +44,7 @@ def invitation_content(person, public_url, signup_url=None):
     name = person.get('name') or 'Team member'
     email = person.get('email') or 'the email address on your invitation'
     address = public_url.rstrip('/')+'/'
-    subject = 'Your CrownOps invitation - set up your account'
+    subject = 'Crown Movers: set up your CrownOps account'
     sections = [
         ('1. Create your account', [
             'Open your private signup link. It works once and expires after 48 hours.',

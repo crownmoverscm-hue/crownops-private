@@ -11,6 +11,7 @@ class StaffOnboardingContentTests(unittest.TestCase):
             with self.subTest(role=role):
                 content = invitation_content({'name':'Test Team Member','email':'staff@example.invalid','role':role},URL,URL+'/#invite=TEST-PRIVATE-TOKEN')
                 self.assertIn('Hi Test Team Member',content['body'])
+                self.assertIn('Crown Movers',content['subject'])
                 self.assertIn('staff@example.invalid',content['body'])
                 for sentence in ROLE_STEPS[role]:self.assertIn(sentence,content['body'])
                 for device in ('Samsung / Android','iPhone / iPad','MacBook / Mac','Windows'):

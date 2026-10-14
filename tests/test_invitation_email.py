@@ -77,6 +77,13 @@ class InvitationEmailTests(unittest.TestCase):
         self.assertIn('Samsung / Android',data['email_preview']['body'])
         self.assertIn('Windows',data['email_preview']['body'])
 
+    def test_invalid_send_options_and_roles_are_rejected_without_creating_an_invitation(self):
+        for change in ({'send_email':'yes'},{'request_id':'short'},{'role':['owner']},{'role':{'role':'owner'}}):
+            result=self.owner.post('/api/invitations',json=self.payload(**change))
+            self.assertEqual(result.status_code,422,result.text)
+        self.assertEqual(self.owner.post('/api/account-access/invitation-preview',json={'role':['owner']}).status_code,422)
+        with closing(connect(self.path)) as db:self.assertEqual(db.execute('SELECT count(*) FROM invitations').fetchone()[0],0)
+
     def test_retry_of_the_same_send_request_does_not_create_a_new_link_or_send_again(self):
         self.ready()
         with patch('app.account_access.send_invitation_email',return_value='FAKE-MAIL') as send:

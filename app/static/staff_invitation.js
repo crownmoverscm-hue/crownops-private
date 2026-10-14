@@ -22,7 +22,7 @@
   const preview=out.email_preview?`<details class="staff-email-details"><summary>View welcome email</summary><div class="tiny strong">${h(out.email_preview.subject)}</div><div class="staff-email-copy">${h(out.email_preview.body)}</div></details>`:'';
   const send=out.url&&out.invitation_id&&!out.email_requested?`<button class="btn-primary" data-invite="email-current" ${emailReady?'':'disabled'}>Send this invitation by email</button>`:'';
   showModal(title,`<div class="callout ${color} staff-email-notice">${notice}</div>${link}${preview}`,btn('close','Done')+(out.url?btn('copy-draft','Copy private link','btn-soft'):'')+send);
-  S.modalContext.staffInvitation=out;
+  S.modalContext={...(S.modalContext||{}),staffInvitation:out};
  }
 
  window.submitStaffInvitation=async function(form,data,submit){
@@ -37,6 +37,10 @@
    if(form.isConnected){controls.forEach(button=>button.disabled=button.value==='email'&&!emailReady);if(submit)submit.textContent=label;}
   }
  };
+
+ modal.addEventListener('close',()=>{
+  if(!modal.open&&S.modalContext?.staffInvitation){delete S.modalContext.staffInvitation;modal.replaceChildren();}
+ });
 
  document.addEventListener('input',event=>{
   const form=event.target.closest('#invite-form');if(!form)return;
