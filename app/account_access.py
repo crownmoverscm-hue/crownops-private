@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from urllib.parse import urlparse
 import base64
+import json
 import os
 import re
 import secrets
@@ -88,7 +89,12 @@ def send_account_email(path, person, public_url, body, subject, message_id):
         person = one(db, 'SELECT id,email FROM users WHERE id=? AND active=1', (person['id'],))
     if not person:
         raise RuntimeError('This staff account is no longer active.')
-    if not recovery_email_allowed(path, public_url, person['email']):
+    return _send_account_message(path, person['email'], public_url, body, subject, message_id)
+
+
+def _send_account_message(path, recipient, public_url, body, subject, message_id, html=None):
+    # Called only after the staff account or pending invitation is resolved from the database.
+    if not recovery_email_allowed(path, public_url, recipient):
         raise RuntimeError('Account emails are not enabled for this staff account.')
     from .providers import provider_token
     token = provider_token(path, 'gmail', require_external=False)
@@ -100,10 +106,12 @@ def send_account_email(path, person, public_url, body, subject, message_id):
         raise RuntimeError('Gmail sender identity was not confirmed.')
     message = EmailMessage()
     message['From'] = sender
-    message['To'] = person['email']
+    message['To'] = recipient
     message['Subject'] = subject
     message['Message-ID'] = '<'+message_id.lower()+'@crownops.local>'
     message.set_content(body)
+    if html:
+        message.add_alternative(html, subtype='html')
     response = requests.post('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
                              json={'raw':base64.urlsafe_b64encode(message.as_bytes()).decode()}, headers=headers, timeout=20)
     response.raise_for_status()
@@ -111,6 +119,108 @@ def send_account_email(path, person, public_url, body, subject, message_id):
     if not provider_id:
         raise RuntimeError('Gmail did not confirm account email delivery.')
     return provider_id
+
+
+def check_invitation_email(path, public_url, email):
+    if not recovery_email_status(path, public_url)['available']:
+        raise HTTPException(503, 'Staff emails are not enabled yet. Connect Gmail with sending permission and enable account emails, or choose Create link only.')
+    if not recovery_email_allowed(path, public_url, email):
+        raise HTTPException(403, 'This invitation email is not on the staging test allowlist. Add this exact address to the approved account-email test addresses, or choose Create link only.')
+
+
+def invitation_request_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,100}', value):
+        raise HTTPException(422, 'Reopen the invitation form and try again.')
+    return value
+
+
+def invitation_fingerprint(person):
+    return stamp_hash(dumps({key:person.get(key) for key in ('name','email','role','employee_id')}))
+
+
+def previous_invitation_email(db, request_id, actor, person=None):
+    operation = one(db, "SELECT * FROM provider_operations WHERE id=? AND kind='Staff invitation'", ('INVMAIL-'+request_id,))
+    if operation:
+        meta = json.loads(operation['result_json'])
+        if meta.get('actor_id') != actor['id']:
+            raise HTTPException(403, 'This invitation request belongs to another owner.')
+        if person and meta.get('fingerprint') != invitation_fingerprint(person):
+            raise HTTPException(409, 'This invitation request has changed. Reopen the form to create a new invitation.')
+    return operation
+
+
+def invitation_email_result(operation):
+    meta = json.loads(operation['result_json'])
+    return {'sent':operation['status']=='Completed', 'delivery_status':operation['status'],
+            'email_requested':True, 'recipient':meta['email'], 'name':meta['name'], 'role':meta['role'],
+            'invitation_id':operation['object_id'], 'expires_at':meta['expires_at'],
+            'url':None, 'email_preview':None}
+
+
+def reserve_invitation_email(db, invitation, request_id, actor):
+    old = previous_invitation_email(db, request_id, actor, invitation)
+    if old:
+        return old
+    # One send attempt per link, even if a second form uses a different request ID.
+    old = one(db, "SELECT * FROM provider_operations WHERE provider='gmail' AND kind='Staff invitation' AND object_id=? ORDER BY created_at DESC LIMIT 1", (invitation['token_hash'],))
+    if old:
+        return old
+    meta = {key:invitation[key] for key in ('name','email','role','expires_at')}
+    meta.update(actor_id=actor['id'], fingerprint=invitation_fingerprint(invitation))
+    operation = {'id':'INVMAIL-'+request_id,'provider':'gmail','object_id':invitation['token_hash'],
+                 'kind':'Staff invitation','status':'Pending','result_json':dumps(meta),
+                 'created_at':now(),'updated_at':now()}
+    insert(db, 'provider_operations', operation)
+    return operation
+
+
+def send_invitation_email(path, invitation_id, raw_token, public_url, message_id):
+    from .staff_onboarding import invitation_content
+    if stamp_hash(raw_token) != invitation_id:
+        raise HTTPException(401, 'The private invitation link does not match.')
+    with closing(connect(path)) as db:
+        person = one(db, 'SELECT * FROM invitations WHERE token_hash=? AND used_at IS NULL AND expires_at>?', (invitation_id,now()))
+    if not person:
+        raise HTTPException(409, 'This invitation is no longer available. Create a new invitation if needed.')
+    content = invitation_content(person, public_url, public_url+'/#invite='+raw_token)
+    return _send_account_message(path, person['email'], public_url, content['body'], content['subject'], message_id, content['html'])
+
+
+def deliver_invitation_email(path, invitation_id, raw_token, public_url, request_id, actor):
+    invitation_request_id(request_id)
+    require_role(actor, {'owner'})
+    with transaction(path) as db:
+        previous = previous_invitation_email(db, request_id, actor)
+        if previous and previous['object_id'] != invitation_id:
+            raise HTTPException(409, 'This request belongs to a different invitation.')
+        invitation = one(db, 'SELECT * FROM invitations WHERE token_hash=?', (invitation_id,))
+        if not invitation or stamp_hash(raw_token) != invitation_id:
+            raise HTTPException(404, 'Private invitation not found.')
+        if invitation['role']=='owner' and actor['id']!=master_owner_id(db):
+            raise HTTPException(403, 'Only the master owner can send owner invitations.')
+        if previous and previous['status']!='Pending':
+            return invitation_email_result(previous)
+        if invitation['used_at'] or invitation['expires_at']<=now():
+            raise HTTPException(409, 'This invitation was used or expired. Do not resend it.')
+        if one(db, 'SELECT id FROM users WHERE email=?', (invitation['email'],)):
+            raise HTTPException(409, 'An account already exists for this email. Use password recovery if needed.')
+        check_invitation_email(path, public_url, invitation['email'])
+        operation = reserve_invitation_email(db, invitation, request_id, actor)
+        if operation['status']!='Pending':
+            return invitation_email_result(operation)
+        db.execute("UPDATE provider_operations SET status='Running',updated_at=? WHERE id=? AND status='Pending'", (now(),operation['id']))
+    try:
+        provider_id = send_invitation_email(path, invitation_id, raw_token, public_url, operation['id'])
+        with transaction(path) as db:
+            meta = json.loads(operation['result_json']); meta['provider_id'] = provider_id
+            db.execute("UPDATE provider_operations SET status='Completed',result_json=?,updated_at=? WHERE id=?", (dumps(meta),now(),operation['id']))
+            audit(db, actor['id'], 'Staff invitation email sent', 'invitations', invitation_id)
+    except Exception:
+        with transaction(path) as db:
+            db.execute("UPDATE provider_operations SET status='Unknown',error=?,updated_at=? WHERE id=?", ('Invitation email sending was not confirmed. Check Gmail Sent and the recipient inbox before creating another invitation.',now(),operation['id']))
+            audit(db, actor['id'], 'Staff invitation email not confirmed', 'invitations', invitation_id)
+    with closing(connect(path)) as db:
+        return invitation_email_result(one(db, 'SELECT * FROM provider_operations WHERE id=?', (operation['id'],)))
 
 
 def deliver_recovery(path, email, public_url):
@@ -193,12 +303,42 @@ def register_account_access(app, path, auth, public_url):
         with closing(connect(path)) as db:
             master = master_owner_id(db)
             accounts = rows(db, 'SELECT id,name,email,role,active,employee_id FROM users ORDER BY name')
-            invitations = rows(db, 'SELECT token_hash id,name,email,role,employee_id,expires_at FROM invitations WHERE used_at IS NULL AND expires_at>? ORDER BY expires_at DESC', (now(),))
+            invitations = rows(db, """SELECT token_hash id,name,email,role,employee_id,expires_at,
+                (SELECT status FROM provider_operations p WHERE p.kind='Staff invitation' AND p.object_id=invitations.token_hash ORDER BY p.created_at DESC LIMIT 1) email_status
+                FROM invitations WHERE used_at IS NULL AND expires_at>? ORDER BY expires_at DESC""", (now(),))
         for person in accounts:
             person['master_owner'] = person['id'] == master
             person['can_manage'] = person['id'] != u['id'] and not person['master_owner'] and (person['role'] != 'owner' or u['id'] == master)
         return {'accounts':accounts,'invitations':invitations,'master_owner_id':master,
                 'is_master_owner':u['id']==master,'email_recovery':recovery_email_status(path, public_url)}
+
+    @app.post('/api/account-access/invitation-preview')
+    def preview_invitation(data:dict, u=Depends(auth)):
+        require_role(u, {'owner'})
+        from .staff_onboarding import ROLE_LABELS, invitation_content
+        role = data.get('role','crew')
+        if not isinstance(role,str) or role not in ROLE_LABELS:
+            raise HTTPException(422, 'Choose an access role.')
+        with closing(connect(path)) as db:
+            if role=='owner' and u['id']!=master_owner_id(db):
+                raise HTTPException(403, 'Only the master owner can invite another owner.')
+        person = {'role':role}
+        for key, limit in (('name',150),('email',254)):
+            value = data.get(key,'')
+            if not isinstance(value,str) or len(value)>limit:
+                raise HTTPException(422, 'Check the invitation name and email.')
+            person[key] = value.strip()
+        if person['email'] and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',person['email']):
+            raise HTTPException(422, 'Enter a valid invitation email.')
+        return invitation_content(person, public_url)
+
+    @app.post('/api/account-access/invitations/{invitation_id}/send-email')
+    def email_invitation(invitation_id:str, data:dict, u=Depends(auth)):
+        require_role(u, {'owner'})
+        raw = data.get('token','')
+        if not isinstance(raw,str) or len(raw)>180:
+            raise HTTPException(422, 'Check the private invitation link.')
+        return deliver_invitation_email(path,invitation_id,raw,public_url,data.get('request_id'),u)
 
     @app.post('/api/account-access/invitations/{invitation_id}/revoke')
     def revoke_invitation(invitation_id:str, u=Depends(auth)):
