@@ -954,7 +954,7 @@ def create_app(database_path=None):
             if qid!=j['quote_id'] and one(db,'SELECT id FROM job_invoices WHERE job_id=?',(jid,)):raise HTTPException(409,'Invoice terms already exist. Have management reconcile billing before changing the accepted estimate link.')
             exception=bounded(data.get('exception_reason',j['exception_reason']),'Manager exception',3000)
             if exception!=j['exception_reason'] and u['role']!='owner':raise HTTPException(403,'Only management can change a booking exception.')
-            validate_final=confirm_requested or data.get('capacity_reviewed') is True or j['status']=='In progress'
+            validate_final=confirm_requested or data.get('capacity_reviewed') is True or j['status'] in ('Confirmed','In progress')
             if q and q['status']=='Accepted' and (start!=j['start_at'] or end!=j['end_at']):
                 result=json.loads(q['result_json'])
                 hours=(datetime.fromisoformat(end)-datetime.fromisoformat(start)).total_seconds()/3600

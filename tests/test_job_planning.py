@@ -105,7 +105,7 @@ class JobPlanningTests(unittest.TestCase):
                 with transaction(self.path) as db:
                     db.execute("UPDATE payments SET verified=1");db.execute("UPDATE quotes SET status='Accepted'");db.execute("UPDATE employees SET driver_verified=1 WHERE id='E1'")
 
-    def test_conflict_time_off_inactive_and_major_defect_still_block_saves(self):
+    def test_conflict_time_off_and_inactive_resources_still_block_saves(self):
         r=self.owner.put('/api/jobs/J1/plan',json=self.plan(crew_ids=['E3']));self.assertEqual(r.status_code,422,r.text)
         with transaction(self.path) as db:
             insert(db,'time_off_requests',dict(id='OFF',employee_id='E1',start_date='2026-11-15',end_date='2026-11-15',status='Approved',requested_by='crew',requested_at=now()))
@@ -137,8 +137,10 @@ class JobPlanningTests(unittest.TestCase):
         with transaction(self.path) as db:db.execute("UPDATE jobs SET status='Confirmed' WHERE id='J1'")
         r=self.staff('dispatch').put('/api/jobs/J1/plan',json=self.plan(confirm=True));self.assertEqual(r.status_code,200,r.text)
         self.assertEqual(r.json()['status'],'Confirmed');self.assertEqual(self.snapshot()[0]['capacity_reviewed'],1)
-        r=self.staff('sales').put('/api/jobs/J1/plan',json=self.plan(version=2,crew_ids=['E1']));self.assertEqual(r.status_code,200,r.text)
-        self.assertFalse(self.owner.get('/api/jobs/J1/planning').json()['readiness']['ready'])
+        before=self.snapshot();r=self.staff('sales').put('/api/jobs/J1/plan',json=self.plan(version=2,crew_ids=['E1']));self.assertEqual(r.status_code,422,r.text)
+        self.assertEqual(before,self.snapshot())
+        r=self.staff('sales').put('/api/jobs/J1/plan',json=self.plan(version=2,notes='Routine update without an explanation'));self.assertEqual(r.status_code,200,r.text)
+        self.assertEqual(self.snapshot()[0]['capacity_reviewed'],1)
 
     def test_confirmed_job_timing_cannot_shorten_accepted_service_during_partial_save(self):
         with transaction(self.path) as db:db.execute("UPDATE jobs SET status='Confirmed' WHERE id='J1'")
