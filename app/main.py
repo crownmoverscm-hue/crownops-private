@@ -42,6 +42,7 @@ COOKIE='crownops_session'
 SETUP_TOKEN_HASH='a2f107444f141c2a3d61af99ec02063038c77b60c0f639ef6bf7f5304fa21bb1'
 from .pricing import calculate_with_overrides
 from .operations import check_fleet_dispatch, require_hos_dispatch_verification
+from .job_planning import can_plan_jobs, require_planner, planning_resources
 from .platform_common import settings as platform_settings
 from .account_access import (master_owner_id, remember_master_owner, protect_owner_account,
     check_invitation_email, invitation_request_id, previous_invitation_email,
@@ -58,7 +59,7 @@ def require(user, allowed):
 
 
 def safe_user(user):
-    return {k:user.get(k) for k in ('id','name','email','role','employee_id','is_master_owner')}
+    return {k:user.get(k) for k in ('id','name','email','role','employee_id','is_master_owner','can_plan_jobs')}
 
 
 def bounded(value, name, limit=20000):
@@ -101,6 +102,7 @@ def create_user(path, email, name, password, role='owner', employee_id=None, ini
             raise HTTPException(409,'Initial setup is already complete.')
         insert(db,'users',u)
         u['is_master_owner']=remember_master_owner(db)==u['id']
+        u['can_plan_jobs']=can_plan_jobs(db,u)
     return safe_user(u)
 
 
@@ -208,7 +210,9 @@ def create_app(database_path=None):
         raw=request.cookies.get(COOKIE,'')
         with closing(connect(path)) as db:
             row=one(db,'SELECT u.*,s.csrf FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.active=1',(sha(raw),now()))
-            if row:row['is_master_owner']=master_owner_id(db)==row['id']
+            if row:
+                row['is_master_owner']=master_owner_id(db)==row['id']
+                row['can_plan_jobs']=can_plan_jobs(db,row)
         if not raw or not row:
             raise HTTPException(401,'Please sign in.')
         if request.method not in ('GET','HEAD','OPTIONS'):
@@ -227,7 +231,7 @@ def create_app(database_path=None):
         j=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
         if not j:
             raise HTTPException(404,'Job not found.')
-        if u['role']=='crew' and not one(db,'SELECT job_id FROM assignments WHERE job_id=? AND resource_type=? AND resource_id=?',(jid,'employee',u.get('employee_id') or '')):
+        if u['role']=='crew' and not can_plan_jobs(db,u) and not one(db,'SELECT job_id FROM assignments WHERE job_id=? AND resource_type=? AND resource_id=?',(jid,'employee',u.get('employee_id') or '')):
             raise HTTPException(403,'You can only view your assigned jobs.')
         return j
 
@@ -298,6 +302,7 @@ def create_app(database_path=None):
             insert(db,'sessions',dict(token_hash=sha(token),user_id=u['id'],csrf=csrf,expires_at=expiry))
             audit(db,u['id'],'Signed in','users',u['id'])
             u['is_master_owner']=master_owner_id(db)==u['id']
+            u['can_plan_jobs']=can_plan_jobs(db,u)
         resp=JSONResponse({'user':safe_user(u),'csrf':csrf})
         resp.set_cookie(COOKIE,token,httponly=True,secure=secure,samesite='lax',max_age=43200,path='/')
         return resp
@@ -778,7 +783,7 @@ def create_app(database_path=None):
                 }
                 if quoted['status']=='Accepted':
                     j['accepted_charges']={k:qr.get(k) for k in ('hourly_rate_cents','minimum_hours','transport_cents','fuel_cents','movers','trucks')}
-        if u['role'] not in QUOTERS:
+        if u['role'] not in QUOTERS and not can_plan_jobs(db,u):
             j.pop('quote_id',None);j.pop('exception_reason',None)
         return j
 
@@ -839,8 +844,8 @@ def create_app(database_path=None):
 
     @app.post('/api/jobs')
     def add_job(data:dict,u=Depends(auth)):
-        require(u,{'owner','sales','dispatch'})
         with transaction(path) as db:
+            require_planner(db,u)
             lead=get_lead(db,data.get('lead_id',''))
             start,end,crew,trucks=check_job_resources(db,data)
             status=data.get('status','Tentative')
@@ -869,8 +874,8 @@ def create_app(database_path=None):
 
     @app.post('/api/jobs/{jid}/confirm')
     def confirm_job(jid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner','sales','dispatch'})
         with transaction(path) as db:
+            require_planner(db,u)
             j=visible_job(db,jid,u)
             if j['status']!='Tentative':raise HTTPException(409,'Only a tentative job can be confirmed.')
             if data.get('version')!=j['version']:raise HTTPException(409,'Job changed. Refresh before confirming.')
@@ -906,14 +911,14 @@ def create_app(database_path=None):
                 require_hos_dispatch_verification(db,jid)
                 from .security import check_preuse
                 check_preuse(db,jid)
-            if u['role']=='crew' and status not in ('In progress','Completed'):
+            if u['role']=='crew' and not can_plan_jobs(db,u) and status not in ('In progress','Completed'):
                 raise HTTPException(403,'Crew can only start or complete assigned confirmed jobs.')
-            if u['role'] not in ('owner','sales','dispatch','crew'):raise HTTPException(403,'Dispatch access required.')
+            if u['role']!='crew':require_planner(db,u)
             db.execute("UPDATE outbound_messages SET status='Cancelled',error='Job updated; review reminder timing' WHERE job_id=? AND category='Preparation' AND status IN ('Draft','Approved')",(jid,))
             # Rescheduling is dispatch-only; recheck both workers and vehicles atomically.
             start,end=j['start_at'],j['end_at']
             if 'start_at' in data or 'end_at' in data:
-                require(u,{'owner','sales','dispatch'})
+                require_planner(db,u)
                 if j['status'] in ('Completed','Cancelled'):raise HTTPException(422,'Closed jobs cannot be rescheduled.')
                 assignments=rows(db,'SELECT * FROM assignments WHERE job_id=?',(jid,))
                 d={'start_at':data.get('start_at',start),'end_at':data.get('end_at',end),
@@ -930,13 +935,18 @@ def create_app(database_path=None):
 
     @app.put('/api/jobs/{jid}/plan')
     def edit_plan(jid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner','sales','dispatch'})
         with transaction(path) as db:
+            require_planner(db,u)
             j=visible_job(db,jid,u)
             if j['status'] in ('Completed','Cancelled'):raise HTTPException(409,'Closed jobs retain their plan. Use a return-visit job if needed.')
             if data.get('version')!=j['version']:raise HTTPException(409,'Job changed. Refresh before editing.')
             note=bounded(data.get('reason',''),'Planning change reason',3000)
-            if len(note)<8:raise HTTPException(422,'Explain the schedule or assignment change.')
+            confirm_requested=data.get('confirm') is True
+            before={k:j[k] for k in ('title','quote_id','start_at','end_at','notes','status')}
+            before['stops']=json.loads(j['stops_json'])
+            previous=rows(db,'SELECT resource_type,resource_id FROM assignments WHERE job_id=?',(jid,))
+            before['crew_ids']=sorted(x['resource_id'] for x in previous if x['resource_type']=='employee')
+            before['truck_ids']=sorted(x['resource_id'] for x in previous if x['resource_type']=='vehicle')
             start,end,crew,trucks=check_job_resources(db,data,jid)
             qid=data.get('quote_id') or None
             q=one(db,'SELECT * FROM quotes WHERE id=? AND lead_id=?',(qid,j['lead_id'])) if qid else None
@@ -944,8 +954,14 @@ def create_app(database_path=None):
             if qid!=j['quote_id'] and one(db,'SELECT id FROM job_invoices WHERE job_id=?',(jid,)):raise HTTPException(409,'Invoice terms already exist. Have management reconcile billing before changing the accepted estimate link.')
             exception=bounded(data.get('exception_reason',j['exception_reason']),'Manager exception',3000)
             if exception!=j['exception_reason'] and u['role']!='owner':raise HTTPException(403,'Only management can change a booking exception.')
-            if j['status'] in ('Confirmed','In progress'):
-                check_confirmation(db,get_lead(db,j['lead_id']),q,crew,trucks,start,end,exception,u,data.get('capacity_reviewed'))
+            validate_final=confirm_requested or data.get('capacity_reviewed') is True or j['status']=='In progress'
+            if q and q['status']=='Accepted' and (start!=j['start_at'] or end!=j['end_at']):
+                result=json.loads(q['result_json'])
+                hours=(datetime.fromisoformat(end)-datetime.fromisoformat(start)).total_seconds()/3600
+                if hours+1e-8<result['service_high']+result['transport_hours']:
+                    raise HTTPException(422,'Reserve the full high-end service duration plus base travel. Shorten only by revising the estimate.')
+            if validate_final:
+                check_confirmation(db,get_lead(db,j['lead_id']),q,crew,trucks,start,end,exception,u,True)
             stops=data.get('stops',[])
             if not isinstance(stops,list) or len(stops)>30:raise HTTPException(422,'Invalid stop list.')
             stops=[bounded(v,'Stop address',1000) for v in stops]
@@ -955,10 +971,30 @@ def create_app(database_path=None):
             db.execute('DELETE FROM assignments WHERE job_id=?',(jid,))
             for typ,ids in [('employee',crew),('vehicle',trucks)]:
                 for rid in ids:insert(db,'assignments',dict(job_id=jid,resource_type=typ,resource_id=rid))
-            db.execute('UPDATE jobs SET stops_json=? WHERE id=?',(dumps(stops),jid))
+            next_status='Confirmed' if confirm_requested and j['status']=='Tentative' else j['status']
+            reviewed=int(validate_final)
+            db.execute('UPDATE jobs SET stops_json=?,status=?,capacity_reviewed=? WHERE id=?',(dumps(stops),next_status,reviewed,jid))
             db.execute("UPDATE outbound_messages SET status='Cancelled',error='Plan changed; review reminders' WHERE job_id=? AND category='Preparation' AND status IN ('Draft','Approved')",(jid,))
-            audit(db,u['id'],'Job plan revised','jobs',jid,{'reason':note,'start_at':start,'end_at':end,'crew':crew,'trucks':trucks})
-        return {'ok':True,'status_unchanged':j['status']}
+            after={'title':title,'quote_id':qid,'start_at':start,'end_at':end,'notes':notes,'status':next_status,'stops':stops,'crew_ids':sorted(crew),'truck_ids':sorted(trucks)}
+            audit(db,u['id'],'Job plan confirmed' if confirm_requested else 'Job plan revised','jobs',jid,{'before':before,'after':after,'note':note,'changed_fields':[k for k in before if before[k]!=after[k]],'confirmation_mode':'save-and-confirm' if confirm_requested else 'save'})
+        return {'ok':True,'status':next_status,'confirmed':confirm_requested,'status_unchanged':j['status']}
+
+    @app.get('/api/jobs/{jid}/planning')
+    def job_planning(jid:str,start_at:str='',end_at:str='',u=Depends(auth)):
+        with closing(connect(path)) as db:
+            require_planner(db,u);j=visible_job(db,jid,u)
+            start=local_to_utc(start_at) if start_at else j['start_at'];end=local_to_utc(end_at) if end_at else j['end_at']
+            if end<=start:raise HTTPException(422,'End time must follow the start time.')
+            resources=planning_resources(db,j,start,end)
+            from .ux_features import _job_readiness
+            ready=_job_readiness(db,j)
+            assignments=rows(db,'SELECT resource_type,resource_id FROM assignments WHERE job_id=?',(jid,))
+            job={k:j[k] for k in ('id','lead_id','title','quote_id','start_at','end_at','notes','status','version','capacity_reviewed')}
+            job.update(stops=json.loads(j['stops_json']),crew_ids=[a['resource_id'] for a in assignments if a['resource_type']=='employee'],truck_ids=[a['resource_id'] for a in assignments if a['resource_type']=='vehicle'])
+            accepted=rows(db,"SELECT id,revision FROM quotes WHERE lead_id=? AND status='Accepted' ORDER BY revision DESC",(j['lead_id'],))
+            history=rows(db,"""SELECT a.created_at,a.action,a.details_json,u.name AS actor_name FROM audit a
+                LEFT JOIN users u ON u.id=a.actor WHERE a.object_type='jobs' AND a.object_id=? ORDER BY a.created_at DESC,a.id DESC LIMIT 15""",(jid,))
+        return {'job':job,'resources':resources,'readiness':ready,'accepted_quotes':accepted,'history':history}
 
     @app.get('/api/employees')
     def employees(u=Depends(auth)):

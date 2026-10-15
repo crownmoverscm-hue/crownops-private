@@ -70,14 +70,13 @@ def _job_readiness(db,j):
     if not l.get('phone'):missing.append('client phone')
     if not l.get('pickup'):missing.append('pickup address')
     if not l.get('dropoff'):missing.append('destination address')
-    if not crew:missing.append('assigned crew')
-    if not trucks and j['phase'] not in ('Packing','Unpacking'):missing.append('assigned truck')
     from .security import job_resource_blockers,check_preuse
-    missing.extend(job_resource_blockers(db,j))
-    if crew and trucks:
+    resource_missing=job_resource_blockers(db,j)
+    missing.extend(resource_missing)
+    if crew and trucks and not resource_missing:
         try:check_preuse(db,j['id'])
         except HTTPException as e:missing.append(str(e.detail))
-    if j.get('status')=='Tentative':missing.append('job not confirmed')
+    if j.get('status')=='Tentative' or (j.get('status')=='Confirmed' and not j.get('capacity_reviewed')):missing.append('Confirm the job plan')
     if j.get('quote_id'):
         q=one(db,'SELECT * FROM quotes WHERE id=?',(j['quote_id'],))
         if not q or q['status']!='Accepted':
@@ -99,6 +98,7 @@ def _job_readiness(db,j):
       JOIN time_off_requests o ON o.employee_id=e.id AND o.status='Approved'
       WHERE a.job_id=? AND a.resource_type='employee' AND o.start_date<=? AND o.end_date>=?""",(j['id'],day,day)):
         missing.append(f"{r['name']} is approved OFF")
+    missing=list(dict.fromkeys(missing))
     return {'ready':not missing,'missing':missing}
 
 
