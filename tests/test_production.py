@@ -94,6 +94,25 @@ class ProductionLaunchTests(unittest.TestCase):
             self.assertEqual(self.owner.post('/api/owner-backups',json={}).status_code,409)
         self.assertEqual(list(directory.glob('*.zip')),[])
 
+    def test_low_disk_backup_is_refused_before_snapshot_or_archive_creation(self):
+        from types import SimpleNamespace
+        with patch('app.production.shutil.disk_usage',return_value=SimpleNamespace(free=128*1024*1024)),patch('app.production.make_backup') as make:
+            response=self.owner.post('/api/owner-backups',json={})
+        self.assertEqual(response.status_code,507,response.text);make.assert_not_called()
+        self.assertEqual(list(storage_paths(self.path)[2].glob('*.zip')),[])
+        with closing(connect(self.path)) as db:self.assertEqual(settings(db,'verified_backup',{}),{})
+
+    def test_low_disk_does_not_remove_an_existing_verified_recovery_copy(self):
+        from types import SimpleNamespace
+        from app.platform_common import put_setting
+        record=self.owner.post('/api/owner-backups',json={}).json()
+        with transaction(self.path) as db:
+            old=settings(db,'verified_backup');old['verified_at']='2000-01-01T00:00:00+00:00';put_setting(db,'verified_backup',old)
+        with patch('app.production.shutil.disk_usage',return_value=SimpleNamespace(free=128*1024*1024)):
+            response=self.owner.post('/api/owner-backups',json={})
+        self.assertEqual(response.status_code,507,response.text)
+        self.assertEqual(self.owner.get('/api/owner-backups/'+record['filename']).status_code,200)
+
     def test_production_railway_guard_requires_existing_database_and_all_paths_on_volume(self):
         os.environ.update(CROWNOPS_ENV='production',RAILWAY_PROJECT_ID='test-project',RAILWAY_VOLUME_MOUNT_PATH=str(self.path.parent))
         self.assertTrue(storage_paths(self.path)[3]);validate_runtime_storage(self.path)

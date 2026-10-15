@@ -89,6 +89,12 @@ CREATE TABLE IF NOT EXISTS assignments (
  resource_id TEXT NOT NULL, PRIMARY KEY(job_id,resource_type,resource_id)
 );
 CREATE INDEX IF NOT EXISTS assignment_resource ON assignments(resource_type,resource_id);
+CREATE INDEX IF NOT EXISTS jobs_lead ON jobs(lead_id);
+CREATE INDEX IF NOT EXISTS messages_lead_time ON messages(lead_id,created_at);
+CREATE INDEX IF NOT EXISTS tasks_lead_status ON tasks(lead_id,status);
+CREATE INDEX IF NOT EXISTS tasks_owner_due ON tasks(owner,status,due_date);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS login_attempts_time ON login_attempts(attempted_at);
 CREATE TABLE IF NOT EXISTS payments (
  id TEXT PRIMARY KEY, lead_id TEXT NOT NULL REFERENCES leads(id), amount_cents INTEGER NOT NULL,
  method TEXT NOT NULL, purpose TEXT NOT NULL, reference TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0,

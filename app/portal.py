@@ -186,7 +186,9 @@ def register_portal(app,path,auth,public_url,secure):
         r=one(db,'SELECT * FROM attachments WHERE id=? AND deleted_at IS NULL',(aid,))
         if not r:raise HTTPException(404,'File not found.')
         if lid is not None and r['lead_id']!=lid:raise HTTPException(404,'File not found.')
-        if u:staff_read_project(db,r['lead_id'],u)
+        if u:
+            staff_read_project(db,r['lead_id'],u)
+            if u['role']=='crew' and r['job_id']:assigned(db,r['job_id'],u)
         return r
 
     async def upload_one(file,lid,jid,category,actor):
@@ -242,7 +244,11 @@ def register_portal(app,path,auth,public_url,secure):
     def uploads(lid:str,u=Depends(auth)):
         with closing(connect(path)) as db:
             staff_read_project(db,lid,u)
-            return [safe_attachment(r) for r in rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL',(lid,))]
+            records=rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL',(lid,))
+            if u['role']=='crew':
+                own={r['job_id'] for r in rows(db,"SELECT job_id FROM assignments WHERE resource_type='employee' AND resource_id=?",(u.get('employee_id') or '',))}
+                records=[r for r in records if r['job_id'] is None or r['job_id'] in own]
+            return [safe_attachment(r) for r in records]
 
     def deliver(r):
         if r['scan_status']!='Clean':raise HTTPException(409,'This file is quarantined or rejected. It is not available until safety review.')
