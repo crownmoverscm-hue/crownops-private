@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS attachments (
  size INTEGER NOT NULL, sha256 TEXT NOT NULL, scan_status TEXT NOT NULL DEFAULT 'Quarantined',
  author TEXT NOT NULL, created_at TEXT NOT NULL, deleted_at TEXT
 );
+CREATE INDEX IF NOT EXISTS attachments_lead_live ON attachments(lead_id,deleted_at);
 CREATE TABLE IF NOT EXISTS media_releases (
  id TEXT PRIMARY KEY, lead_id TEXT NOT NULL REFERENCES leads(id), attachment_id TEXT REFERENCES attachments(id),
  customer_name TEXT NOT NULL, email TEXT NOT NULL, release_version TEXT NOT NULL, release_text TEXT NOT NULL,

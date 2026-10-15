@@ -106,6 +106,15 @@ def register_production(app, path, auth, public_url, secure):
             if (recent.get('available') and datetime.fromisoformat(recent['verified_at'])>datetime.now(timezone.utc)-timedelta(seconds=60)
                     and file_hash(directory/recent['filename'])==recent.get('sha256')):
                 return recent
+            # Reserve space for a worst-case archive plus database operating headroom.
+            # Keep existing recovery copies; never delete one to make another fit.
+            source_bytes=Path(path).stat().st_size
+            if uploads.is_dir():
+                source_bytes+=sum(f.stat().st_size for f in uploads.iterdir()
+                                  if f.is_file() and not f.is_symlink() and not f.name.endswith('.upload'))
+            required_bytes=source_bytes+source_bytes//20+1024*1024+256*1024*1024
+            if shutil.disk_usage(directory).free<required_bytes:
+                raise HTTPException(507,'Not enough storage to create a recovery copy while preserving database headroom. Increase storage or review old downloaded backups privately. Existing recovery copies were kept.')
             import secrets
             name = 'crownops-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+secrets.token_hex(8)+'.zip'
             archive = directory/name

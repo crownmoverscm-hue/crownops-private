@@ -28,8 +28,9 @@ def require_role(u,roles):
 def staff_read_project(db,lid,u):
     l=one(db,'SELECT * FROM leads WHERE id=?',(lid,))
     if not l:raise HTTPException(404,'Client project not found.')
-    if u['role']=='crew' and not one(db,'SELECT id FROM jobs WHERE lead_id=?',(lid,)):
-        raise HTTPException(403,'Crew can view scheduled client projects only.')
+    if u['role']=='crew' and not one(db,"""SELECT j.id FROM jobs j JOIN assignments a ON a.job_id=j.id
+            WHERE j.lead_id=? AND a.resource_type='employee' AND a.resource_id=?""",(lid,u.get('employee_id') or '')):
+        raise HTTPException(403,'Crew can view their assigned client projects only.')
     return l
 
 def assigned(db,jid,u):
