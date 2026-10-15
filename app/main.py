@@ -148,6 +148,8 @@ def quote_document(q, lead):
 
 def create_app(database_path=None):
     path=Path(database_path or os.environ.get('CROWNOPS_DB',str(ROOT/'instance'/'crownops.sqlite3')))
+    from .production import validate_runtime_storage
+    validate_runtime_storage(path)
     initialize(path)
     import asyncio
     from contextlib import asynccontextmanager,suppress
@@ -1304,11 +1306,13 @@ def create_app(database_path=None):
     register_security(app,path,auth,public_url,PASSWORDS)
     from .account_access import register_account_access
     register_account_access(app,path,auth,public_url)
+    from .production import register_production
+    register_production(app,path,auth,public_url,secure)
     from .extensions import register_extensions
     register_extensions(app,path,auth,public_url)
     from starlette.middleware.trustedhost import TrustedHostMiddleware
     host=urlparse(public_url).hostname or 'localhost'
-    app.add_middleware(TrustedHostMiddleware,allowed_hosts=[host,'127.0.0.1','localhost']+(['testserver','crownops.test'] if os.getenv('CROWNOPS_ENV','test')!='production' else []))
+    app.add_middleware(TrustedHostMiddleware,allowed_hosts=[host,'127.0.0.1','localhost','healthcheck.railway.app']+(['testserver','crownops.test'] if os.getenv('CROWNOPS_ENV','test')!='production' else []))
 
     from .payroll_adjustments import register_payroll_adjustments
     register_payroll_adjustments(app,path,auth)
