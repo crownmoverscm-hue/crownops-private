@@ -155,18 +155,19 @@ async function crmNewService(cid){
    textArea('inventory','Furniture / inventory','',4)+textArea('heavy_items','Heavy / special items','',3)+
    '</div></form>',btn('close','Cancel')+'<button type="submit" form="crm-new-service" class="btn-primary">Create service & quote</button>',true);
 }
-async function crmQuoteBuilder(leadId){
+async function crmQuoteBuilder(leadId='',options={}){
  const templates=await api('/crm/templates');CRM.templates=templates;
  const firstSetup=await api('/crm/quote-setup?lead_id='+encodeURIComponent(leadId)+'&movers=2');CRM.currentLead=firstSetup.lead;CRM.longDistancePresets=firstSetup.long_distance_presets||[];
- const lead=firstSetup.lead;const lang=String(lead.language||'English').toLowerCase().startsWith('fr')?'French':'English';
- const type=['Moving','Packing','Junk Removal','Long Distance'].includes(lead.lead_type)?lead.lead_type:'Moving';
- const template=templates.find(t=>t.service_type===type&&t.language===lang)||templates[0];
+ const lead=firstSetup.lead||{};const chosen=templates.find(t=>t.template_key===options.templateKey);
+ const lang=chosen?.language||(String(lead.language||'English').toLowerCase().startsWith('fr')?'French':'English');
+ const type=chosen?.service_type||(['Moving','Packing','Junk Removal','Long Distance'].includes(lead.lead_type)?lead.lead_type:'Moving');
+ const template=chosen||templates.find(t=>t.service_type===type&&t.language===lang)||templates[0];
  const materialRows=(firstSetup.materials||[]).map(m=>
    '<div class="crm-material-row"><label class="checkbox-label"><input type="checkbox" class="crm-mat-check" data-code="'+h(m.code)+'" data-name="'+h(m.name)+'" data-price="'+h(m.sell_cents)+'">'+
    '<span><strong>'+h(m.name)+'</strong><br><span class="tiny muted">'+crmCash(m.sell_cents)+' · '+h(m.category)+'</span></span></label>'+
    '<input class="crm-mat-qty" data-code="'+h(m.code)+'" type="number" min="0" step="1" value="1" style="width:85px" disabled></div>').join('');
- showModal('Build a quote · '+h(lead.client_name),
-   '<form id="crm-quote-form" data-crm-form="quote"><input type="hidden" name="lead_id" value="'+h(lead.id)+'"><div class="quote-layout"><div class="stack">'+
+ showModal('Edit quote · '+h(template?.name||lead.client_name||'New estimate'),
+   '<form id="crm-quote-form" data-editor-form="quote"><input type="hidden" name="lead_id" value="'+h(lead.id||'')+'"><div class="quote-layout"><div class="stack">'+
    '<div class="panel panel-body"><div class="eyebrow">1 · SERVICE</div><div class="grid2">'+
    select('service_type','Service type',[['Moving','Moving'],['Packing','Packing'],['Junk Removal','Junk removal'],['Long Distance','Long distance']],type,'required')+
    select('language','Quote language',[['English','English'],['French','Français']],lang,'required')+
@@ -201,7 +202,7 @@ async function crmQuoteBuilder(leadId){
    '</div></div>'+
    '<div class="callout teal"><strong>Protection & liability</strong>Free limited liability coverage is $0.60/lb per article. TVs, large mirrors, glass, marble and other fragile items require suitable protection/boxing. Added packing protection does not by itself increase liability coverage.</div>'+
    '</div><div class="stack"><div id="crm-quote-result" class="quote-summary"><div class="eyebrow">ESTIMATE PREVIEW</div><div class="quote-price">Choose the service details</div><p class="muted">Rates remain editable before saving.</p></div>'+
-   '<div class="panel panel-body"><div class="eyebrow">CLIENT</div><h3>'+h(lead.client_name)+'</h3><p class="small">'+h(lead.email)+'<br>'+h(uxPhoneLabel(lead.phone))+'</p><p class="tiny muted">'+h(lead.pickup||'Pickup needed')+' → '+h(lead.dropoff||'Destination needed')+'</p></div>'+
+   '<div class="panel panel-body" id="crm-builder-client-card"><div class="eyebrow">CLIENT</div><h3>'+h(lead.client_name||'Select a client above')+'</h3><p class="small">'+h(lead.email||'')+'<br>'+h(uxPhoneLabel(lead.phone||''))+'</p><p class="tiny muted">'+h(lead.pickup||'Pickup needed')+' → '+h(lead.dropoff||'Destination needed')+'</p></div>'+
    '</div></div></form>',
    btn('close','Cancel')+'<button type="button" class="btn-soft" data-crm="quote-calc">Calculate</button><button type="submit" form="crm-quote-form" class="btn-primary">Save draft</button>',true);
  crmToggleServiceFields();crmToggleStartTime();
@@ -257,10 +258,11 @@ async function crmOpenQuote(qid){
  const status='<div class="row wrap">'+pill(q.status)+(d.job?pill(d.job.status):'')+(depositRequired?'<span class="pill '+(due<=0?'teal':'orange')+'">Deposit '+(due<=0?'received':crmCash(due)+' due')+'</span>':'')+'</div>';
  const actions=[];
  if(q.status==='Draft'||q.status==='Approved')actions.push('<button class="btn-primary" data-crm="quote-finalize" data-id="'+h(q.id)+'">Finalize & send</button>');
+ if(q.status==='Draft')actions.push('<button class="btn-soft" data-editor="edit" data-id="'+h(q.id)+'">Edit draft</button>');
  if(['Approved','Accepted'].includes(q.status))actions.push('<button class="btn-soft" data-v4="qbo-estimate" data-id="'+h(q.id)+'">QuickBooks draft</button>');
  if(q.status==='Accepted'&&due>0){actions.push('<button class="btn-soft" data-crm="deposit-remind" data-id="'+h(q.id)+'">Deposit reminder</button>');actions.push('<button class="btn-primary" data-crm="deposit-record" data-id="'+h(q.id)+'">Record / approve deposit</button>');}
  showModal('Estimate · '+h(l.client_name),
-   status+'<div class="spacer"></div><div class="quote-layout"><div>'+
+   status+(q.inputs?.quote_title?'<h3 class="crm-quote-title">'+h(q.inputs.quote_title)+'</h3>':'')+(q.inputs?.client_note?'<div class="message-draft">'+h(q.inputs.client_note)+'</div>':'')+'<div class="spacer"></div><div class="quote-layout"><div>'+
    '<div class="quote-summary"><div class="eyebrow">'+h(r.service_type||'Moving').toUpperCase()+'</div><div class="quote-price">'+crmCash(r.low_cents)+' – '+crmCash(r.high_cents)+'</div><p class="muted">Before applicable taxes · Revision '+h(q.revision)+'</p>'+
    '<div class="quote-line"><span>Service date</span><strong>'+h(uxDateLabel(q.inputs?.move_date||l.move_date,'Not set'))+'</strong></div>'+
    '<div class="quote-line"><span>Arrival / start</span><strong>'+h(q.inputs?.start_window_label||q.inputs?.start_time||'Not set')+'</strong></div>'+
