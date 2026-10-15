@@ -81,6 +81,147 @@ class AccountAccessTests(unittest.TestCase):
         with transaction(self.path) as db:
             insert(db, 'oauth_credentials', {'provider':'gmail','ciphertext':encrypt({'access_token':'test-token'}),'updated_at':now()})
 
+    def access_payload(self, user_id, **changes):
+        person = next(p for p in self.owner.get('/api/account-access').json()['accounts'] if p['id']==user_id)
+        payload = {key:person[key] for key in ('role','employee_id')}
+        payload.update(active=bool(person['active']), expected_revision=person['access_revision'])
+        payload.update(changes)
+        return payload
+
+    def test_restore_reuses_the_account_password_authenticator_and_employee_records(self):
+        import time
+        from app.security import totp
+        crew = self.client('CREW'); old_reset = self.reset_link()
+        secret = 'JBSWY3DPEHPK3PXP'
+        with transaction(self.path) as db:
+            insert(db, 'auth_factors', {'user_id':'CREW','secret_ciphertext':encrypt({'secret':secret}),'enabled':1,'created_at':now()})
+        self.owner.post('/api/users/CREW/disable', json={})
+        with patch('app.account_access._send_account_message') as send:
+            restored = self.owner.post('/api/users/CREW/access', json=self.access_payload('CREW',active=True))
+            send.assert_not_called()
+        self.assertEqual(restored.status_code, 200, restored.text)
+        self.assertTrue(restored.json()['restored'])
+        self.assertEqual(crew.get('/api/me').status_code, 401)
+        self.assertEqual(self.public.post('/api/reset-password', json={'token':old_reset,'password':NEW_PASSWORD}).status_code, 401)
+        login = {'email':'crew@example.invalid','password':PASSWORD}
+        self.assertEqual(self.public.post('/api/login', json=login).status_code, 401)
+        login['mfa_code'] = totp(secret,int(time.time()//30))
+        response = self.public.post('/api/login', json=login)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['user']['id'], 'CREW')
+        self.assertEqual(response.json()['user']['employee_id'], 'EMP-TEST')
+        with closing(connect(self.path)) as db:
+            self.assertEqual(one(db,"SELECT * FROM users WHERE id='CREW'")['password_hash'], self.password_hash)
+            self.assertEqual(one(db,"SELECT * FROM employees WHERE id='EMP-TEST'")['hourly_cents'], 2500)
+            self.assertEqual(db.execute("SELECT count(*) FROM users WHERE email='crew@example.invalid'").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM audit WHERE action='Access restored' AND object_id='CREW'").fetchone()[0], 1)
+
+    def test_role_and_employee_reassignment_revokes_old_access_and_pending_links(self):
+        crew = self.client('CREW'); old_reset = self.reset_link()
+        with transaction(self.path) as db:
+            insert(db, 'employees', {'id':'EMP-OTHER','name':'Test Other Employee','role':'Mover','hourly_cents':3000})
+            insert(db, 'invitations', {'token_hash':sha('old-invite'),'name':'Test Crew','email':'crew@example.invalid',
+                'role':'owner','expires_at':'2099-01-01T00:00:00+00:00','created_by':self.master['id']})
+        response = self.owner.post('/api/users/CREW/access', json=self.access_payload('CREW',role='sales',employee_id='EMP-OTHER'))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(crew.get('/api/me').status_code, 401)
+        self.assertEqual(self.public.post('/api/reset-password', json={'token':old_reset,'password':NEW_PASSWORD}).status_code, 401)
+        self.assertEqual(self.public.post('/api/accept-invitation', json={'token':'old-invite','password':NEW_PASSWORD}).status_code, 400)
+        login = self.public.post('/api/login', json={'email':'crew@example.invalid','password':PASSWORD})
+        self.assertEqual(login.status_code, 200, login.text)
+        self.assertEqual(login.json()['user']['role'], 'sales')
+        self.assertEqual(login.json()['user']['employee_id'], 'EMP-OTHER')
+        with closing(connect(self.path)) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM employees').fetchone()[0], 2)
+
+    def test_ordinary_owner_can_restore_and_change_staff_but_cannot_grant_or_manage_owners(self):
+        secondary = self.client('OWNER2')
+        response = secondary.post('/api/users/INACTIVE/access', json=self.access_payload('INACTIVE',active=True,role='dispatch'))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(secondary.post('/api/users/SALES/access', json=self.access_payload('SALES',role='owner')).status_code, 403)
+        self.assertEqual(secondary.post('/api/users/'+self.master['id']+'/access', json=self.access_payload(self.master['id'],role='sales')).status_code, 403)
+        self.assertEqual(secondary.post('/api/users/OWNER2/access', json=self.access_payload('OWNER2',role='sales')).status_code, 422)
+        with transaction(self.path) as db:
+            insert(db, 'users', {'id':'OWNER3','name':'Test Other Owner','email':'owner3@example.invalid','role':'owner',
+                'active':0,'password_hash':self.password_hash,'created_at':now()})
+        self.assertEqual(secondary.post('/api/users/OWNER3/access', json=self.access_payload('OWNER3',active=True)).status_code, 403)
+
+    def test_master_can_promote_demote_and_restore_other_owners_but_cannot_change_self(self):
+        staff = self.client('SALES')
+        self.assertEqual(self.owner.post('/api/users/SALES/access', json=self.access_payload('SALES',role='owner')).status_code, 200)
+        self.assertEqual(staff.get('/api/me').status_code, 401)
+        self.assertEqual(self.owner.post('/api/users/SALES/disable', json={}).status_code, 200)
+        self.assertEqual(self.owner.post('/api/users/SALES/access', json=self.access_payload('SALES',active=True)).status_code, 200)
+        self.assertEqual(self.owner.post('/api/users/SALES/access', json=self.access_payload('SALES',role='sales')).status_code, 200)
+        payload = self.access_payload(self.master['id'],role='sales',active=False)
+        self.assertEqual(self.owner.post('/api/users/'+self.master['id']+'/access', json=payload).status_code, 422)
+        self.assertEqual(self.owner.get('/api/me').json()['user']['role'], 'owner')
+
+    def test_access_edit_requires_owner_authentication_and_csrf(self):
+        payload = self.access_payload('CREW',role='sales')
+        for user_id in ('CREW','SALES','DISPATCH','ACCOUNTING'):
+            self.assertEqual(self.client(user_id).post('/api/users/CREW/access', json=payload).status_code, 403)
+        self.assertEqual(self.public.post('/api/users/CREW/access', json=payload).status_code, 401)
+        self.owner.headers.pop('x-csrf-token')
+        self.assertEqual(self.owner.post('/api/users/CREW/access', json=payload).status_code, 403)
+
+    def test_stale_role_edit_cannot_overwrite_a_more_recent_removal_or_role_change(self):
+        payload = self.access_payload('CREW',role='sales')
+        self.owner.post('/api/users/CREW/disable', json={})
+        self.assertEqual(self.owner.post('/api/users/CREW/access', json=payload).status_code, 409)
+        first = self.access_payload('INACTIVE',role='sales')
+        second = self.access_payload('INACTIVE',active=True)
+        self.assertEqual(self.owner.post('/api/users/INACTIVE/access', json=first).status_code, 200)
+        self.assertEqual(self.owner.post('/api/users/INACTIVE/access', json=second).status_code, 409)
+        with closing(connect(self.path)) as db:
+            self.assertEqual(one(db,"SELECT active FROM users WHERE id='CREW'")['active'], 0)
+            self.assertEqual(one(db,"SELECT role,active FROM users WHERE id='INACTIVE'"), {'role':'sales','active':0})
+
+    def test_access_edit_validates_role_active_state_employee_and_revision(self):
+        payload = self.access_payload('SALES')
+        for changes in ({'role':[]},{'role':'manager'},{'active':'true'},{'active':1},
+                        {'employee_id':[]},{'employee_id':'missing'},{'expected_revision':None},
+                        {'expected_revision':'short'},{'role':'crew','employee_id':None}):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.owner.post('/api/users/SALES/access', json={**payload,**changes}).status_code, 422)
+        with transaction(self.path) as db:
+            db.execute("UPDATE employees SET active=0 WHERE id='EMP-TEST'")
+        self.assertEqual(self.owner.post('/api/users/SALES/access', json={**payload,'role':'crew','employee_id':'EMP-TEST'}).status_code, 422)
+        self.assertEqual(self.owner.post('/api/users/MISSING/access', json=payload).status_code, 404)
+
+    def test_employee_link_change_alone_ends_sessions_and_noop_keeps_them(self):
+        crew = self.client('CREW')
+        unchanged = self.owner.post('/api/users/CREW/access', json=self.access_payload('CREW'))
+        self.assertEqual(unchanged.status_code, 200, unchanged.text)
+        self.assertFalse(unchanged.json()['changed'])
+        self.assertEqual(crew.get('/api/me').status_code, 200)
+        with transaction(self.path) as db:
+            insert(db, 'employees', {'id':'EMP-NEW','name':'Test New Employee','role':'Mover'})
+        response = self.owner.post('/api/users/CREW/access', json=self.access_payload('CREW',employee_id='EMP-NEW'))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(crew.get('/api/me').status_code, 401)
+
+    def test_access_editor_rechecks_owner_authority_and_session_in_the_transaction(self):
+        endpoint = next(route.endpoint for route in self.app.routes if route.path=='/api/users/{user_id}/access')
+        actor = {'id':'OWNER2','role':'owner','csrf':'test-csrf-OWNER2'}
+        self.client('OWNER2')
+        payload = self.access_payload('CREW',role='sales')
+        for change in ("UPDATE users SET role='sales' WHERE id='OWNER2'",
+                       "UPDATE users SET role='owner',active=0 WHERE id='OWNER2'",
+                       "UPDATE users SET role='owner',active=1 WHERE id='OWNER2'"):
+            with transaction(self.path) as db:
+                db.execute(change)
+                if "active=1" in change:
+                    db.execute("DELETE FROM sessions WHERE user_id='OWNER2'")
+            with self.assertRaises(HTTPException) as error:
+                endpoint('CREW',payload,u=actor)
+            self.assertEqual(error.exception.status_code, 403)
+
+    def test_existing_removed_email_directs_owner_to_restore_instead_of_duplicate_signup(self):
+        response = self.owner.post('/api/invitations', json={'email':'inactive@example.invalid','name':'Test Existing','role':'sales'})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('restore access', response.json()['detail'])
+
     def test_master_owner_is_persisted_and_cannot_be_removed_or_managed_by_another_owner(self):
         self.assertTrue(self.master['is_master_owner'])
         restarted = TestClient(create_app(self.path), base_url=PUBLIC_URL)

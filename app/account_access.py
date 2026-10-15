@@ -36,6 +36,10 @@ def protect_owner_account(db, actor, target):
         raise HTTPException(403, 'Only the master owner can manage another owner account.')
 
 
+def access_revision(person):
+    return stamp_hash(dumps({key:person.get(key) for key in ('id','role','active','employee_id')}))
+
+
 def recovery_email_status(path, public_url):
     enabled = os.getenv('CROWNOPS_ALLOW_AUTH_EMAIL', '0') == '1'
     allowed = {x.strip().lower() for x in os.getenv('CROWNOPS_AUTH_EMAIL_TEST_ALLOWLIST', '').split(',') if x.strip()}
@@ -309,8 +313,59 @@ def register_account_access(app, path, auth, public_url):
         for person in accounts:
             person['master_owner'] = person['id'] == master
             person['can_manage'] = person['id'] != u['id'] and not person['master_owner'] and (person['role'] != 'owner' or u['id'] == master)
+            person['access_revision'] = access_revision(person)
         return {'accounts':accounts,'invitations':invitations,'master_owner_id':master,
                 'is_master_owner':u['id']==master,'email_recovery':recovery_email_status(path, public_url)}
+
+    @app.post('/api/users/{user_id}/access')
+    def update_access(user_id:str, data:dict, u=Depends(auth)):
+        require_role(u, {'owner'})
+        from .main import ROLES
+        role, active = data.get('role'), data.get('active')
+        employee = data.get('employee_id')
+        revision = data.get('expected_revision')
+        if not isinstance(role,str) or role not in ROLES or not isinstance(active,bool):
+            raise HTTPException(422, 'Choose an access role and whether access is active.')
+        if employee is not None and (not isinstance(employee,str) or len(employee)>150):
+            raise HTTPException(422, 'Choose an employee record.')
+        employee = employee or None
+        if not isinstance(revision,str) or len(revision)!=64:
+            raise HTTPException(422, 'Refresh Team access and open this account again.')
+        with transaction(path) as db:
+            # Recheck authority inside the write transaction in case another owner changed it.
+            actor = one(db, 'SELECT * FROM users WHERE id=? AND active=1', (u['id'],))
+            if not actor or actor['role']!='owner' or not one(db,
+                    'SELECT user_id FROM sessions WHERE user_id=? AND csrf=? AND expires_at>?',
+                    (u['id'],u['csrf'],now())):
+                raise HTTPException(403, 'Your account no longer has owner access. Sign in again.')
+            target = one(db, 'SELECT * FROM users WHERE id=?', (user_id,))
+            if not target:
+                raise HTTPException(404, 'Account not found.')
+            protect_owner_account(db, actor, target)
+            if user_id==actor['id']:
+                raise HTTPException(422, 'Another authorized owner must change your role or access.')
+            if role=='owner' and actor['id']!=master_owner_id(db):
+                raise HTTPException(403, 'Only the master owner can assign Owner access.')
+            if revision!=access_revision(target):
+                raise HTTPException(409, 'This account changed while you were editing it. Refresh Team access and review it again.')
+            record = one(db, 'SELECT id,active FROM employees WHERE id=?', (employee,)) if employee else None
+            if employee and not record:
+                raise HTTPException(422, 'Employee record does not exist.')
+            if role=='crew' and (not record or (active and not record['active'])):
+                raise HTTPException(422, 'Link an active crew login to an active employee record first.')
+            before = {key:target[key] for key in ('role','active','employee_id')}
+            after = {'role':role,'active':int(active),'employee_id':employee}
+            changed = before!=after
+            if changed:
+                db.execute('UPDATE users SET role=?,active=?,employee_id=? WHERE id=?',
+                           (role,int(active),employee,user_id))
+                db.execute('DELETE FROM sessions WHERE user_id=?', (user_id,))
+                db.execute('DELETE FROM account_resets WHERE user_id=?', (user_id,))
+                db.execute('DELETE FROM invitations WHERE email=? AND used_at IS NULL', (target['email'],))
+                action = 'Access restored' if active and not target['active'] else 'Access revoked' if not active and target['active'] else 'Account access changed'
+                audit(db, actor['id'], action, 'users', user_id, {'before':before,'after':after})
+        return {'ok':True,'changed':changed,'active':active,'role':role,'employee_id':employee,
+                'restored':bool(changed and active and not target['active'])}
 
     @app.post('/api/account-access/invitation-preview')
     def preview_invitation(data:dict, u=Depends(auth)):
