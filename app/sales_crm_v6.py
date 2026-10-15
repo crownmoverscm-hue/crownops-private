@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from email.utils import parsedate_to_datetime
 from math import ceil
 from zoneinfo import ZoneInfo
-import json, re, secrets
+import hashlib, json, re, secrets
 
 from fastapi import Depends, HTTPException
 
@@ -485,6 +485,34 @@ def calculate(db,data):
 def payload(q):
     d=dict(q);d["inputs"]=json.loads(d.pop("inputs_json"));d["result"]=json.loads(d.pop("result_json"));d["lead_snapshot"]=json.loads(d.pop("lead_snapshot_json"));return d
 
+def template_service(db,data,u):
+    """Create the selected client's service inside the draft transaction."""
+    cid=str(data.get("client_id") or "")
+    if cid:
+        a=one(db,"SELECT * FROM client_accounts WHERE id=?",(cid,))
+        if not a:raise HTTPException(404,"Client not found. Select the client again.")
+    else:
+        contact=data.get("new_client")
+        if not isinstance(contact,dict):raise HTTPException(422,"Select a client or enter a new client's details.")
+        name=str(contact.get("client_name") or "").strip();email=norm_email(contact.get("email"));phone=str(contact.get("phone") or "").strip()
+        if not name or len(name)>200:raise HTTPException(422,"Enter a client name of up to 200 characters.")
+        if email and (len(email)>254 or "@" not in email or "." not in email.rsplit("@",1)[-1]):raise HTTPException(422,"Enter a valid client email.")
+        if not email and not norm_phone(phone):raise HTTPException(422,"Enter an email or phone number.")
+        if duplicate_candidates(db,email,phone):raise HTTPException(409,"This contact already exists. Search for their email or phone above and select the existing client.")
+        cid=uid("CLIENT");a=dict(id=cid,identity_key="e:"+email if email else "p:"+norm_phone(phone),client_name=name,email=email,phone=phone,
+            language=data.get("language") or "English",created_at=now(),updated_at=now())
+        insert(db,"client_accounts",a);audit(db,u["id"],"Client account created","client_accounts",cid)
+    details=data.get("service_details") or {}
+    if not isinstance(details,dict):raise HTTPException(422,"Enter the service details.")
+    lid=uid("LEAD");service=str(data.get("service_type") or "Moving")
+    rec=dict(id=lid,client_name=a["client_name"],email=a["email"],phone=a["phone"],move_date=str(data.get("move_date") or ""),
+        **{k:str(details.get(k) or "") for k in ("pickup","dropoff","home_size","boxes","pickup_access","dropoff_access","pickup_walk","dropoff_walk","inventory","heavy_items")},
+        photo_link="",language=data.get("language") or a["language"],source="CrownOps CRM",lead_type=service,stage="New Lead",assigned_to=u["id"],priority="Normal",notes="",
+        archived_import=0,notifications_suppressed=0,raw_json=dumps({"service_type":service}),version=1,created_at=now(),updated_at=now())
+    insert(db,"leads",rec);insert(db,"client_account_leads",dict(client_id=cid,lead_id=lid,created_at=now()))
+    db.execute("UPDATE client_accounts SET updated_at=? WHERE id=?",(now(),cid));audit(db,u["id"],"New service added to client","leads",lid,{"client_id":cid})
+    return rec
+
 def confirmation(lead,q):
     inp=json.loads(q["inputs_json"]);fr=str(inp.get("language") or lead.get("language","")).lower().startswith("fr")
     _,window=quote_start_window(inp)
@@ -622,15 +650,15 @@ def register_sales_crm_v6(app,path,auth,public_url):
         return out
 
     @app.get("/api/crm/quote-setup")
-    def setup(lead_id:str,move_date:str="",movers:int=2,u=Depends(auth)):
+    def setup(lead_id:str="",move_date:str="",movers:int=2,u=Depends(auth)):
         require_role(u,SALES)
         with closing(connect(path)) as db:
-            l=one(db,"SELECT * FROM leads WHERE id=?",(lead_id,))
-            if not l:raise HTTPException(404,"Service record not found.")
-            day=move_date or l["move_date"];rate=source=None
+            l=one(db,"SELECT * FROM leads WHERE id=?",(lead_id,)) if lead_id else None
+            if lead_id and not l:raise HTTPException(404,"Service record not found.")
+            day=move_date or (l or {}).get("move_date","");rate=source=None
             if day:rate,source=rate_for(db,day,int(movers))
             mats=rows(db,"SELECT code,name,category,sell_cents FROM material_catalog WHERE active=1 ORDER BY category,name")
-            a=account_for_lead(db,lead_id)
+            a=account_for_lead(db,lead_id) if lead_id else None
         presets=[]
         for city,province,one_way in LONG_DISTANCE_CITY_PRESETS:
             round_trip=Decimal(str(one_way))*2;adjusted=round_trip*LONG_DISTANCE_KM_BUFFER
@@ -651,15 +679,34 @@ def register_sales_crm_v6(app,path,auth,public_url):
     def create_quote(data:dict,u=Depends(auth)):
         require_role(u,SALES);lid=str(data.get("lead_id") or "")
         with transaction(path) as db:
-            l=one(db,"SELECT * FROM leads WHERE id=?",(lid,))
-            if not l:raise HTTPException(404,"Service record not found.")
-            result=calculate(db,data);day=str(data.get("move_date") or l["move_date"])
+            draft_key=str(data.get("draft_key") or "")
+            if len(draft_key)>80:raise HTTPException(422,"Invalid draft request. Reopen the quote editor.")
+            request_hash=hashlib.sha256(json.dumps(data,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+            if draft_key:
+                prior=one(db,"SELECT * FROM quotes WHERE created_by=? AND json_extract(inputs_json,'$.draft_key')=?",(u['id'],draft_key))
+                if prior:
+                    if json.loads(prior['inputs_json']).get('draft_request_hash')!=request_hash:raise HTTPException(409,"This draft was already saved. Reopen it from Estimates before making another revision.")
+                    return payload(prior)
+            result=calculate(db,data)
+            title=str(data.get("quote_title") or "").strip();note=str(data.get("client_note") or "").strip()
+            if len(title)>160 or len(note)>4000:raise HTTPException(422,"Use up to 160 characters for the quote title and 4,000 for the client note.")
+            if lid:
+                l=one(db,"SELECT * FROM leads WHERE id=?",(lid,))
+                if not l:raise HTTPException(404,"Service record not found.")
+                if data.get('lead_version') is not None and data['lead_version']!=l['version']:raise HTTPException(409,"The service details changed. Reopen the quote editor before saving.")
+                if data.get('client_id'):
+                    account=account_for_lead(db,lid)
+                    if not account or account['id']!=data['client_id']:raise HTTPException(409,"This inquiry belongs to a different client. Select the correct inquiry.")
+            else:l=template_service(db,data,u);lid=l['id']
+            day=str(data.get("move_date") or l["move_date"])
             if day and day!=l["move_date"]:
                 db.execute("UPDATE leads SET move_date=?,version=version+1,updated_at=? WHERE id=?",(day,now(),lid));l=one(db,"SELECT * FROM leads WHERE id=?",(lid,))
             p=one(db,"SELECT * FROM pricing_versions ORDER BY approved DESC,created_at DESC LIMIT 1")
             if not p:raise HTTPException(422,"A pricing snapshot is required for audit history.")
             rev=db.execute("SELECT COALESCE(MAX(revision),0)+1 FROM quotes WHERE lead_id=?",(lid,)).fetchone()[0]
-            inp=dict(data);inp["deposit_required"]=float(data.get("deposit_required",300) or 0);inp["limited_liability"]="$0.60/lb per article"
+            inp={k:v for k,v in data.items() if k not in ('new_client','service_details','draft_request_hash')}
+            inp.update(lead_id=lid,lead_version=l['version'],quote_title=title,client_note=note,draft_request_hash=request_hash)
+            inp["deposit_required"]=float(number(data.get("deposit_required",300) or 0,"Deposit",0,100000));inp["limited_liability"]="$0.60/lb per article"
             service=result["service_type"];language=result["language"];template_key=str(inp.get("template_key") or "").strip()
             tmpl=one(db,"SELECT * FROM crm_quote_templates WHERE template_key=? AND active=1",(template_key,))
             if not tmpl or tmpl["service_type"]!=service or tmpl["language"]!=language:

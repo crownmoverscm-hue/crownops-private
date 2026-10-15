@@ -27,7 +27,7 @@ if(typeof estimates==='function'){
     const pageT=(en,fr)=>pageFrench?fr:en;
     return panel(pageT('Your estimates','Vos devis'),
       P.data.quotes.map(q=>{
-        const r=q.result,template=q.inputs?.template_snapshot||{},service=template.title||q.inputs?.service_type||r.service_type||'Moving';
+        const r=q.result,template=q.inputs?.template_snapshot||{},service=q.inputs?.quote_title||template.title||q.inputs?.service_type||r.service_type||'Moving';
         const arrival=q.inputs?.start_window_label||q.inputs?.start_time||qt(q,'To be confirmed','A confirmer');
         const accept=q.stale?notice(qt(q,'Your details changed. Crown must review this estimate again.','Vos details ont change. Crown doit reviser ce devis.')):
           q.status!=='Accepted'&&terms.approved?
@@ -45,7 +45,7 @@ if(typeof estimates==='function'){
           '<div class="quote-price">'+cash(r.low_cents)+' - '+cash(r.high_cents)+'</div>'+
           '<p><strong>'+qt(q,'Service date','Date du service')+':</strong> '+esc(q.inputs?.move_date||q.move_date||'')+'<br><strong>'+qt(q,'Arrival / start window','Fenetre d arrivee / debut')+':</strong> '+esc(arrival)+'</p>'+
           '<p class="muted small">'+qt(q,'Before applicable taxes. Service is billed under the accepted terms and actual service conditions unless a line is explicitly fixed.','Avant taxes applicables. Le service est facture selon les conditions acceptees et les conditions reelles, sauf lorsqu une ligne est explicitement forfaitaire.')+'</p>'+
-          lineTable(q,r)+'<div class="spacer"></div>'+templateCopy+
+          lineTable(q,r)+'<div class="spacer"></div>'+(q.inputs?.client_note?'<div class="message-draft">'+esc(q.inputs.client_note)+'</div><div class="spacer"></div>':'')+templateCopy+
           '<p><strong>'+qt(q,'Deposit requirement','Depot requis')+':</strong> '+cash(q.deposit_required*100)+'</p>'+
           accept+depositFor(q)+'</div>';
       }).join('')||empty(pageT('Your estimate will appear after review by Crown.','Votre devis apparaitra apres sa revision par Crown.'))
