@@ -59,4 +59,12 @@ If Gmail does not confirm sending, CrownOps records **Unknown** and does not ret
 
 In **Team access**, find the person by name and email, choose **Remove access**, and confirm. Their existing sign-ins end, unused reset links and pending invitations are canceled, and they cannot sign in or use email recovery. Employee, job and payroll records are retained. Removing access does not erase those records.
 
+## Restore access and change roles
+
+In **Team access**, choose **Restore access** beside a removed account. Review the access role and linked employee, then confirm. The same account, email, password and authenticator are retained. The person signs in normally or uses **Forgot your password?**; do not create a second invitation for an existing account. Restoration does not send an email automatically.
+
+For an active account, choose **Change role**, review the role and employee link, then **Save changes**. A crew login requires a linked active employee record. A changed role or employee link ends all previous sign-ins and cancels unused password reset and invitation links, so the person signs in again with the new access. Existing employee, job and payroll records are retained. Access changes are recorded in the audit log. A stale editor must be refreshed rather than overwriting a newer owner decision.
+
+Owners can manage ordinary staff. Only the master owner can assign Owner access or manage another owner. Nobody can change their own role/access or alter the master owner's access through these controls. Available roles remain Owner, Sales, Dispatch, Crew and Accounting; this update does not introduce a separate Manager role.
+
 Use this when someone leaves or their account must be blocked. Disable the affected account before addressing an account takeover. Never share the master owner's login with staff.

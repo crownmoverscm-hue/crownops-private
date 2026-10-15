@@ -346,7 +346,7 @@ def create_app(database_path=None):
                 check_invitation_email(path,public_url,person['email'])
             email=person['email']
             if one(db,'SELECT id FROM users WHERE email=?',(email,)):
-                raise HTTPException(409,'An account already exists for this email.')
+                raise HTTPException(409,'An account already exists for this email. Open Team access to restore access or change its role.')
             db.execute('DELETE FROM invitations WHERE email=? AND used_at IS NULL',(email,))
             invitation=dict(person,token_hash=sha(token),
                 expires_at=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat(timespec='seconds'),created_by=u['id'])
