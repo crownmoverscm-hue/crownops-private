@@ -54,3 +54,24 @@ if(typeof estimates==='function'){
       empty(pageT('No confirmed service is displayed yet.','Aucun service confirme n est encore affiche.')));
   };
 }
+
+// The Files page reflects the server's supported upload mode.
+const clientLegacyFiles=uploads;
+uploads=function(){
+ const policy=P.data.upload_policy;
+ if(!policy||(policy.enabled&&policy.mode!=='photos'))return clientLegacyFiles();
+ const ready=CrownPhotos.ready;
+ const form=policy.enabled?'<form data-photo-client data-max-mb="'+esc(policy.max_file_mb)+'"><div class="grid2"><div class="form-field"><label>'+t('Photo type','Type de photo')+'</label><select name="category"><option value="Move photos">'+t('Furniture / inventory','Meubles / inventaire')+'</option><option value="Access">'+t('Stairs / elevator / parking','Escaliers / ascenseur / stationnement')+'</option><option value="Incident">'+t('Condition / issue','État / problème')+'</option></select></div><div class="form-field"><label>'+t('Choose up to 10 photos','Choisissez jusqu’à 10 photos')+' · '+esc(policy.max_file_mb)+' MB</label><input type="file" name="file" accept="'+esc(policy.accept)+'" multiple required></div></div><p id="client-photo-progress" role="status"></p><button class="btn-primary" type="submit">'+t('Upload photos','Téléverser les photos')+'</button></form>':'';
+ const message=policy.enabled?t('Your photos are private and help the team prepare your move. JPEG, PNG and WebP photos are checked and resized before viewing.','Vos photos sont privées et aident l’équipe à préparer votre déménagement. Les photos JPEG, PNG et WebP sont vérifiées et redimensionnées avant consultation.'):t('Photo uploads are temporarily unavailable. Contact Crown Movers to add photos to your moving file.','Le téléversement est temporairement indisponible. Communiquez avec Crown Movers pour ajouter des photos à votre dossier.');
+ const gallery=P.data.attachments.map(a=>ready(a)&&a.mime.startsWith('image/')?'<a class="photo-tile" href="/api/portal/uploads/'+encodeURIComponent(a.id)+'" target="_blank" rel="noopener"><img src="/api/portal/uploads/'+encodeURIComponent(a.id)+'" alt="'+esc(a.category)+'" loading="lazy"><span>'+esc(a.category)+'</span></a>':'<div class="activity-row"><strong>'+esc(a.original_name)+'</strong> '+(ready(a)?'<a href="/api/portal/uploads/'+encodeURIComponent(a.id)+'" target="_blank" rel="noopener">'+t('Open','Ouvrir')+'</a>':esc(a.scan_status))+'</div>').join('');
+ return panel(t('Move photos','Photos du déménagement'),notice(message)+form)+panel(t('Your files','Vos fichiers'),gallery?'<div class="photo-grid">'+gallery+'</div>':empty(t('No files uploaded.','Aucun fichier téléversé.')));
+};
+document.addEventListener('submit',async e=>{
+ const form=e.target.closest('form[data-photo-client]');if(!form)return;e.preventDefault();
+ const button=form.querySelector('button[type="submit"]');if(button.disabled)return;button.disabled=true;
+ try{
+  const result=await CrownPhotos.batch(form,data=>req('/uploads',{method:'POST',form:data}),msg=>{const el=document.getElementById('client-photo-progress');if(el)el.textContent=msg;});
+  if(result.saved)await load(t(result.saved+' photo(s) saved.',result.saved+' photo(s) enregistrée(s).'));
+  if(result.error)error(new Error(result.saved+' / '+result.total+' · '+result.error));
+ }catch(ex){error(ex);}finally{if(button.isConnected)button.disabled=false;}
+});

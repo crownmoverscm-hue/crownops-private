@@ -2,11 +2,12 @@
 from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-import hashlib, hmac, json, os, secrets, subprocess, shlex
+import asyncio, hashlib, hmac, json, os, secrets, subprocess, shlex
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .platform_common import *
+from .photo_safety import READY_STATUSES, photo_mode, upload_policy, require_room, process_photo
 
 PORTAL_COOKIE='crownops_client'
 CLIENT_FIELDS={'client_name','phone','pickup','dropoff','boxes','inventory','pickup_access','dropoff_access','pickup_walk','dropoff_walk','heavy_items','move_date','home_size'}
@@ -37,6 +38,11 @@ def register_portal(app,path,auth,public_url,secure):
             raise HTTPException(403,'Refresh your portal session before saving.')
         return s
     app.state.client_auth=client_auth
+    upload_lock=asyncio.Lock()
+
+    @app.get('/api/upload-policy')
+    def staff_upload_policy(u=Depends(auth)):
+        return upload_policy()
 
     @app.get('/portal')
     def client_page():return FileResponse(Path(__file__).parent/'static'/'portal.html')
@@ -107,6 +113,7 @@ def register_portal(app,path,auth,public_url,secure):
                   'reference_note':dep.get('reference_note','')}
             return {'csrf':c['csrf'],'client':public_client(l),'quotes':quotes,'jobs':jobs,'invoices':invs,
                 'changes':rows(db,'SELECT id,payload_json,status,created_at,review_note FROM client_changes WHERE lead_id=? ORDER BY created_at DESC',(c['lead_id'],)),
+                'upload_policy':upload_policy(),
                 'attachments':[safe_attachment(r) for r in rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(c['lead_id'],))],
                 'messages':rows(db,"SELECT id,subject,body,created_at FROM outbound_messages WHERE lead_id=? AND status='Sent' ORDER BY created_at DESC LIMIT 30",(c['lead_id'],)),
                 'payment_links':rows(db,"SELECT p.invoice_id,p.url,p.amount_cents FROM payment_links p JOIN job_invoices i ON i.id=p.invoice_id JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND p.status='Active' AND p.revision=i.revision AND i.status='Issued'",(c['lead_id'],)),
@@ -191,54 +198,80 @@ def register_portal(app,path,auth,public_url,secure):
             if u['role']=='crew' and r['job_id']:assigned(db,r['job_id'],u)
         return r
 
-    async def upload_one(file,lid,jid,category,actor):
-        if not uploads_enabled():raise HTTPException(503,'Private file uploads are disabled until production malware scanning is configured.')
+    async def upload_one(file,lid,jid,category,actor,staff_user=None,client_session=None):
+        async with upload_lock:
+            return await save_upload(file,lid,jid,category,actor,staff_user,client_session)
+
+    async def save_upload(file,lid,jid,category,actor,staff_user,client_session):
+        policy=upload_policy()
+        if not policy['enabled']:raise HTTPException(503,policy['message'])
         if category not in ('Move photos','Inventory','Access','Testimonial','Incident'):raise HTTPException(422,'Unsupported file category.')
-        name=Path((file.filename or 'upload').replace('\\','/')).name[:180]
-        if any(ord(c)<32 for c in name):raise HTTPException(422,'Invalid filename.')
-        limit=int(os.getenv('CROWNOPS_MAX_UPLOAD_MB','100'))*1024*1024
-        key=uid('FILE');temp=storage/(key+'.upload');n=0;digest=hashlib.sha256();head=b''
+        name=Path((file.filename or 'upload').replace(chr(92),'/')).name[:180]
+        if any(ord(c)<32 for c in name) or ':' in name:raise HTTPException(422,'Invalid filename.')
+        limit=policy['max_file_mb']*1024*1024
+        key=uid('FILE');temp=storage/(key+'.upload');dest=None;committed=False;n=0;digest=hashlib.sha256();head=b''
         try:
+            require_room(storage,limit)
             with open(temp,'xb') as out:
+                temp.chmod(0o600)
                 while chunk:=await file.read(1024*1024):
                     n+=len(chunk)
-                    if n>limit:raise HTTPException(413,'File too large. Compress or split the video before uploading.')
+                    if n>limit:raise HTTPException(413,'File too large. Choose a smaller file before uploading.')
+                    require_room(storage,len(chunk))
                     if not head:head=chunk[:32]
                     digest.update(chunk);out.write(chunk)
             if n==0:raise HTTPException(422,'File is empty.')
             mime=detect(head,name);status='Quarantined'
-            if category=='Testimonial' and not mime.startswith('video/'):raise HTTPException(422,'Upload a video for a testimonial.')
-            command=os.getenv('CROWNOPS_SCAN_COMMAND','').strip()
-            if command:
-                try:
-                    from starlette.concurrency import run_in_threadpool
-                    scan=await run_in_threadpool(subprocess.run,shlex.split(command)+[str(temp)],capture_output=True,timeout=120,check=False)
-                    status='Clean' if scan.returncode==0 else 'Rejected'
-                except (OSError,subprocess.TimeoutExpired):status='Quarantined'
-            elif os.getenv('CROWNOPS_ENV','test')!='production':
-                # Shared staging remains quarantined until a configured scanner runs
-                # or a manager explicitly reviews the test upload. Local demos can opt
-                # into previews by using the review action rather than silently trusting files.
-                status='Quarantined'
-            dest=storage/(key+Path(name).suffix.lower());temp.rename(dest);dest.chmod(0o600)
+            if photo_mode():
+                if not mime.startswith('image/') or category=='Testimonial':raise HTTPException(422,'This upload mode accepts JPEG, PNG and WebP photos only. Video and PDF uploads are unavailable.')
+                from starlette.concurrency import run_in_threadpool
+                dest=storage/(key+'.jpg')
+                processed=await run_in_threadpool(process_photo,temp,dest)
+                n=processed['size'];digest_value=processed['sha256'];mime='image/jpeg';status='Photo checked'
+                name=Path(name).stem+'.jpg'
+            else:
+                if category=='Testimonial' and not mime.startswith('video/'):raise HTTPException(422,'Upload a video for a testimonial.')
+                command=os.getenv('CROWNOPS_SCAN_COMMAND','').strip()
+                if command:
+                    try:
+                        from starlette.concurrency import run_in_threadpool
+                        scan=await run_in_threadpool(subprocess.run,shlex.split(command)+[str(temp)],capture_output=True,timeout=120,check=False)
+                        status='Clean' if scan.returncode==0 else 'Rejected'
+                    except (OSError,subprocess.TimeoutExpired):status='Quarantined'
+                dest=storage/(key+Path(name).suffix.lower());temp.rename(dest);dest.chmod(0o600)
+                digest_value=digest.hexdigest()
+            require_room(storage)
             with transaction(path) as db:
+                # Recheck access after processing in case an assignment or private link was revoked.
+                if staff_user:project_write(db,lid,jid or '',staff_user)
+                if client_session and not one(db,'SELECT token_hash FROM portal_sessions WHERE token_hash=? AND expires_at>?',(client_session['token_hash'],now())):
+                    raise HTTPException(401,'Your private session expired. Ask Crown for a new link.')
                 total=db.execute('SELECT coalesce(sum(size),0) FROM attachments WHERE lead_id=? AND deleted_at IS NULL',(lid,)).fetchone()[0]
-                if total+n>int(os.getenv('CROWNOPS_PROJECT_UPLOAD_MB','1000'))*1024*1024:
-                    dest.unlink(missing_ok=True);raise HTTPException(413,'Project upload limit reached. Contact Crown.')
-                r=dict(id=key,lead_id=lid,job_id=jid,category=category,original_name=name,stored_name=dest.name,mime=mime,size=n,sha256=digest.hexdigest(),scan_status=status,author=actor,created_at=now())
-                insert(db,'attachments',r);audit(db,actor,'Private file uploaded','attachments',key,{'bytes':n,'scan_status':status})
+                if total+n>int(os.getenv('CROWNOPS_PROJECT_UPLOAD_MB','128' if photo_mode() else '1000'))*1024*1024:
+                    raise HTTPException(413,'This moving file has reached its upload limit. Contact Crown.')
+                global_total=db.execute('SELECT coalesce(sum(size),0) FROM attachments WHERE deleted_at IS NULL').fetchone()[0]
+                if photo_mode() and global_total+n>int(os.getenv('CROWNOPS_PHOTO_STORAGE_MB','128'))*1024*1024:
+                    raise HTTPException(507,'Company photo storage has reached its limit. Contact the owner to increase storage.')
+                if photo_mode():
+                    existing=one(db,'SELECT * FROM attachments WHERE lead_id=? AND job_id IS ? AND sha256=? AND deleted_at IS NULL',(lid,jid,digest_value))
+                    if existing:return safe_attachment(existing)
+                r=dict(id=key,lead_id=lid,job_id=jid,category=category,original_name=name,stored_name=dest.name,mime=mime,size=n,sha256=digest_value,scan_status=status,author=actor,created_at=now())
+                insert(db,'attachments',r);audit(db,actor,'Private file uploaded','attachments',key,{'bytes':n,'scan_status':status,'protection':'photo-reencode' if photo_mode() else 'scanner'})
                 add_task(db,lid,'Review uploaded '+category.lower(),key='upload:'+key)
+            committed=True
             return safe_attachment({**r,'deleted_at':None})
-        finally:temp.unlink(missing_ok=True)
+        finally:
+            temp.unlink(missing_ok=True)
+            if dest and not committed:dest.unlink(missing_ok=True)
 
     @app.post('/api/portal/uploads')
     async def client_upload(file:UploadFile=File(...),category:str=Form('Move photos'),c=Depends(client_auth)):
-        return await upload_one(file,c['lead_id'],None,category,'client:'+c['email'])
+        return await upload_one(file,c['lead_id'],None,category,'client:'+c['email'],client_session=c)
 
     @app.post('/api/leads/{lid}/uploads')
     async def staff_upload(lid:str,file:UploadFile=File(...),category:str=Form('Move photos'),job_id:str=Form(''),u=Depends(auth)):
         with closing(connect(path)) as db:project_write(db,lid,job_id,u)
-        return await upload_one(file,lid,job_id or None,category,u['id'])
+        return await upload_one(file,lid,job_id or None,category,u['id'],staff_user=u)
 
     @app.get('/api/leads/{lid}/uploads')
     def uploads(lid:str,u=Depends(auth)):
@@ -251,10 +284,10 @@ def register_portal(app,path,auth,public_url,secure):
             return [safe_attachment(r) for r in records]
 
     def deliver(r):
-        if r['scan_status']!='Clean':raise HTTPException(409,'This file is quarantined or rejected. It is not available until safety review.')
+        if r['scan_status'] not in READY_STATUSES:raise HTTPException(409,'This file is quarantined or rejected. It is not available until safety review.')
         p=(storage/r['stored_name']).resolve()
         if p.parent!=storage or not p.exists():raise HTTPException(404,'Stored file unavailable.')
-        return FileResponse(p,media_type=r['mime'],filename=r['original_name'],headers={'Cache-Control':'no-store'})
+        return FileResponse(p,media_type=r['mime'],filename=r['original_name'],content_disposition_type='inline' if r['mime'].startswith('image/') else 'attachment',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"})
 
     @app.get('/api/portal/uploads/{aid}')
     def client_download(aid:str,c=Depends(client_auth)):

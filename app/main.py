@@ -184,9 +184,11 @@ def create_app(database_path=None):
             accepted={public_url,str(request.base_url).rstrip('/')}
             if origin and origin not in accepted:
                 return JSONResponse({'detail':'Cross-origin requests are not permitted.'},403)
+        from .photo_safety import photo_mode
+        upload_limit=16_000_000 if photo_mode() else 110_000_000
         length=request.headers.get('content-length','0')
         try:
-            if int(length)>(110_000_000 if request.url.path.endswith('/uploads') else 13_000_000):
+            if int(length)>(upload_limit if request.url.path.endswith('/uploads') else 13_000_000):
                 return JSONResponse({'detail':'Request too large.'},413)
         except ValueError:
             return JSONResponse({'detail':'Invalid request length.'},400)
@@ -238,7 +240,9 @@ def create_app(database_path=None):
     def health():
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.6.0-rc1'}
+        from .photo_safety import photo_mode,upload_policy
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.6.0-rc1',
+                'private_photos_available':photo_mode() and upload_policy()['enabled']}
 
     @app.post('/api/setup-owner')
     def setup_owner(data:dict):

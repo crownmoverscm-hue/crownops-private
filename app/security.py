@@ -13,6 +13,12 @@ def validate_deployment(url,secure):
     if os.getenv('CROWNOPS_ENV','test')=='production':
         if not secure or not url.startswith('https://'):raise RuntimeError('Production requires HTTPS public URL and secure cookies.')
         secret_box()
+        from .photo_safety import photo_mode,photo_processor_ready,photo_processor_self_test
+        if uploads_enabled() and photo_mode():
+            if not photo_processor_ready():raise RuntimeError('Production photo uploads require the restricted image processor.')
+            try:photo_processor_self_test()
+            except Exception as error:raise RuntimeError('The photo processor failed its startup test. Keep uploads disabled until it is working.') from error
+            return
         if uploads_enabled() and not os.getenv('CROWNOPS_SCAN_COMMAND'):
             raise RuntimeError('Production uploads require a malware scanning command. Keep CROWNOPS_UPLOADS_ENABLED=0 until scanning is configured.')
 
