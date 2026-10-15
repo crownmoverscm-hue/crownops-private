@@ -24,6 +24,17 @@ def referenced_uploads(db):
     return names
 
 
+def verify_referenced_files(db, uploads):
+    for table in ('attachments','fleet_documents'):
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            continue
+        for name, size, digest in db.execute('SELECT stored_name,size,sha256 FROM '+table+' WHERE deleted_at IS NULL'):
+            file = uploads/name
+            if (Path(name).name!=name or '\\' in name or not file.is_file() or file.is_symlink() or
+                    file.stat().st_size!=size or file_hash(file)!=digest):
+                raise ValueError('A referenced private upload failed its stored checksum. Repair storage before recovery.')
+
+
 def make_backup(path, dest, uploads):
     path, dest, uploads = Path(path).resolve(), Path(dest).absolute(), Path(uploads).resolve()
     if not path.is_file():
@@ -42,6 +53,7 @@ def make_backup(path, dest, uploads):
                 needed = referenced_uploads(target)
                 if target.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
                     raise ValueError('Source database integrity check failed.')
+                verify_referenced_files(target,uploads)
             files = [f for f in uploads.iterdir() if f.is_file() and not f.is_symlink() and not f.name.endswith('.upload')] if uploads.exists() else []
             if needed-{f.name for f in files}:
                 raise ValueError('A referenced private upload is missing. Repair storage before backing up.')
@@ -116,6 +128,7 @@ def restore_archive(archive, path):
                 raise ValueError('Backup integrity check failed.')
             if referenced_uploads(db)-{f.name for f in (root/'uploads').glob('*')}:
                 raise ValueError('The backup is missing a referenced private upload.')
+            verify_referenced_files(db,root/'uploads')
             for table in ('sessions','invitations','portal_sessions','portal_invites','account_resets','oauth_states'):
                 if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
                     db.execute('DELETE FROM '+table)

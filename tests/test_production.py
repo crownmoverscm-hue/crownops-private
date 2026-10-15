@@ -75,6 +75,9 @@ class ProductionLaunchTests(unittest.TestCase):
         record=self.owner.post('/api/owner-backups',json={}).json();file=storage_paths(self.path)[2]/record['filename']
         content=bytearray(file.read_bytes());content[-1]^=1;file.write_bytes(content)
         self.assertEqual(self.owner.get('/api/owner-backups/'+record['filename']).status_code,409)
+        replacement=self.owner.post('/api/owner-backups',json={}).json()
+        self.assertNotEqual(replacement['filename'],record['filename'])
+        self.assertEqual(self.owner.get('/api/owner-backups/'+replacement['filename']).status_code,200)
         file.unlink();self.assertEqual(self.owner.get('/api/owner-backups/'+record['filename']).status_code,404)
 
     def test_backup_failure_does_not_record_success_or_publish_an_archive(self):

@@ -103,7 +103,8 @@ def register_production(app, path, auth, public_url, secure):
             except BlockingIOError:
                 raise HTTPException(409,'A backup is already running. Wait for it to finish.')
             recent = latest_backup(path)
-            if recent.get('available') and datetime.fromisoformat(recent['verified_at'])>datetime.now(timezone.utc)-timedelta(seconds=60):
+            if (recent.get('available') and datetime.fromisoformat(recent['verified_at'])>datetime.now(timezone.utc)-timedelta(seconds=60)
+                    and file_hash(directory/recent['filename'])==recent.get('sha256')):
                 return recent
             import secrets
             name = 'crownops-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+secrets.token_hex(8)+'.zip'

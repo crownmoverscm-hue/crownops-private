@@ -2,6 +2,7 @@
 from contextlib import closing
 from pathlib import Path
 import json
+import hashlib
 import os
 import tempfile
 import unittest
@@ -75,6 +76,15 @@ class BackupIntegrityTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.backup()
         self.assertFalse(self.archive.exists());self.assertEqual(list(self.root.glob('*.partial')),[])
 
+    def test_file_corruption_before_backup_is_detected_against_the_database_checksum(self):
+        content=b'original-file';file=self.uploads/'inventory.txt';file.write_bytes(content)
+        with transaction(self.db) as db:
+            insert(db,'attachments',dict(id='FILE',lead_id='LEAD',category='Inventory',original_name='inventory.txt',stored_name=file.name,
+                mime='text/plain',size=len(content),sha256=hashlib.sha256(content).hexdigest(),author='OWNER',created_at=now()))
+        self.backup();self.archive.unlink();file.write_bytes(b'changed-bytes')
+        with self.assertRaises(ValueError):self.backup()
+        self.assertFalse(self.archive.exists())
+
     def test_temporary_uploads_and_symlinks_are_excluded(self):
         (self.uploads/'in-flight.upload').write_text('partial')
         (self.uploads/'link.txt').symlink_to(self.uploads/'proof.txt')
@@ -107,4 +117,11 @@ class BackupIntegrityTests(unittest.TestCase):
         with zipfile.ZipFile(self.archive,'w') as z:
             z.write(self.db,'database.sqlite3');info=zipfile.ZipInfo('uploads/link');info.external_attr=(0o120777 << 16)
             z.writestr(info,'/etc/passwd')
+        with self.assertRaises(ValueError):inspect_archive(self.archive)
+        self.archive.unlink()
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore',UserWarning)
+            with zipfile.ZipFile(self.archive,'w') as z:
+                z.write(self.db,'database.sqlite3');z.write(self.db,'database.sqlite3')
         with self.assertRaises(ValueError):inspect_archive(self.archive)
