@@ -12,6 +12,7 @@ from fastapi import Depends, HTTPException
 from fastapi.responses import FileResponse
 from .store import connect, transaction, one, now, audit
 from .platform_common import settings, put_setting, require_role, secret_box, uploads_enabled
+from .photo_safety import upload_policy
 from .account_access import recovery_email_status
 from .backups import make_backup, verify_backup, file_hash
 
@@ -72,7 +73,7 @@ def hosting_status(path, public_url, secure):
         {'key':'encryption','label':'Server encryption key','ready':encrypted,'detail':'Keep the existing key in a separate company password vault. Its value is never shown here.','page':''},
         {'key':'mfa','label':'Owner two-factor authentication','ready':owners>0 and protected==owners,'detail':str(protected)+' of '+str(owners)+' active owners have an authenticator enabled.','page':'account'},
         {'key':'email','label':'Staff invitation and recovery emails','ready':email['available'],'detail':'Configured for '+email['mode']+'. Configuration does not prove inbox delivery.','page':'access'},
-        {'key':'uploads','label':'Private upload protection','ready':not uploads_enabled() or bool(os.getenv('CROWNOPS_SCAN_COMMAND','').strip()),'detail':'Uploads are disabled or have a configured scanner. Scanner operation still needs a real file test.','page':''},
+        {'key':'uploads','label':'Private upload protection','ready':not uploads_enabled() or upload_policy()['enabled'],'detail':upload_policy()['message']+' Test a real photo upload and crew access before marking the workflow verified.','page':''},
         {'key':'space','label':'Storage headroom','ready':free>=256*1024*1024,'detail':str(round(free/1024/1024))+' MB free on the database filesystem.','page':''},
         {'key':'backup','label':'Verified recovery copy','ready':fresh,'detail':'A portable backup passed a separate restore drill within 24 hours.' if fresh else 'Create and download a verified recovery copy. Store a copy outside this Railway volume.','page':''},
     ]

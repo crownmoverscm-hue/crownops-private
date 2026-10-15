@@ -88,15 +88,15 @@
 
   async function openPhotos(jid){
     const jobs=await api('/jobs'); const j=jobs.find(x=>x.id===jid); if(!j)throw Error('Job not found.');
-    const files=await api('/leads/'+encodeURIComponent(j.lead_id)+'/uploads');
+    const [files,policy]=await Promise.all([api('/leads/'+encodeURIComponent(j.lead_id)+'/uploads'),api('/upload-policy')]);
     const imgs=files.filter(f=>String(f.mime||'').startsWith('image/'));
     const others=files.filter(f=>!String(f.mime||'').startsWith('image/'));
     const assigned=S.user.role!=='crew'||j.crew_ids.includes(S.user.employee_id);
-    const canUpload=S.user.role!=='crew'||assigned;
-    const gallery=imgs.length?`<div class="photo-grid">${imgs.map(f=>f.scan_status==='Clean'?`<a class="photo-tile" href="/api/uploads/${encodeURIComponent(f.id)}" target="_blank" rel="noopener"><img src="/api/uploads/${encodeURIComponent(f.id)}" alt="${h(f.category)}"><span>${h(f.category)}</span></a>`:`<div class="photo-tile pending"><div>Photo pending safety review</div><span>${h(f.category)}</span></div>`).join('')}</div>`:`<div class="empty-photo-state"><strong>No photos yet</strong><span>Upload inventory, stairs, elevator, access or in-person estimate photos here.</span></div>`;
-    const extra=others.length?`<div class="spacer"></div><h3>Other files</h3>${others.map(f=>`<div class="activity-row"><div class="grow"><strong>${h(f.original_name)}</strong><div class="tiny muted">${h(f.category)}</div></div>${f.scan_status==='Clean'?`<a href="/api/uploads/${encodeURIComponent(f.id)}" target="_blank">Open</a>`:pill(f.scan_status)}</div>`).join('')}`:'';
-    const upload=canUpload?`<div class="spacer"></div><form id="job-photo-upload" data-jx-form="photo-upload"><input type="hidden" name="job_id" value="${h(jid)}"><input type="hidden" name="lead_id" value="${h(j.lead_id)}"><div class="grid2"><div class="form-field"><label>Photo type</label><select name="category"><option value="Move photos">Furniture / inventory</option><option value="Access">Stairs / elevator / access</option><option value="Inventory">Inventory</option><option value="Incident">Condition / issue</option></select></div><div class="form-field"><label>Add photo or video</label><input type="file" name="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" required></div></div></form>`:'';
-    showModal('Photos · '+h(j.client.client_name),`<p class="small muted">Client uploads and Crown in-person estimate photos live together on this service.</p>${gallery}${extra}${upload}`,canUpload?`${btn('close','Close')}<button class="btn-primary" type="submit" form="job-photo-upload">Upload</button>`:btn('close','Close'),true);
+    const canUpload=(S.user.role!=='crew'||assigned)&&policy.enabled;
+    const gallery=imgs.length?`<div class="photo-grid">${imgs.map(f=>CrownPhotos.ready(f)?`<a class="photo-tile" href="/api/uploads/${encodeURIComponent(f.id)}" target="_blank" rel="noopener"><img src="/api/uploads/${encodeURIComponent(f.id)}" alt="${h(f.category)}"><span>${h(f.category)}</span></a>`:`<div class="photo-tile pending"><div>Photo pending safety review</div><span>${h(f.category)}</span></div>`).join('')}</div>`:`<div class="empty-photo-state"><strong>No photos yet</strong><span>Upload inventory, stairs, elevator, access or in-person estimate photos here.</span></div>`;
+    const extra=others.length?`<div class="spacer"></div><h3>Other files</h3>${others.map(f=>`<div class="activity-row"><div class="grow"><strong>${h(f.original_name)}</strong><div class="tiny muted">${h(f.category)}</div></div>${CrownPhotos.ready(f)?`<a href="/api/uploads/${encodeURIComponent(f.id)}" target="_blank">Open</a>`:pill(f.scan_status)}</div>`).join('')}`:'';
+    const upload=canUpload?`<div class="spacer"></div><form id="job-photo-upload" data-jx-form="photo-upload" data-max-mb="${policy.max_file_mb}"><input type="hidden" name="job_id" value="${h(jid)}"><input type="hidden" name="lead_id" value="${h(j.lead_id)}"><div class="grid2"><div class="form-field"><label>Photo type</label><select name="category"><option value="Move photos">Furniture / inventory</option><option value="Access">Stairs / elevator / access</option><option value="Inventory">Inventory</option><option value="Incident">Condition / issue</option></select></div><div class="form-field"><label>Choose up to 10 photos · ${h(policy.max_file_mb)} MB each</label><input type="file" name="file" accept="${h(policy.accept)}" multiple required></div></div></form>`:'';
+    showModal('Photos · '+h(j.client.client_name),`<p class="small muted">Client uploads and Crown in-person estimate photos live together on this service.</p><p class="small muted">${h(policy.message)}</p><p id="job-photo-progress" role="status"></p>${gallery}${extra}${upload}`,canUpload?`<button data-action="open-job" data-id="${h(jid)}">Back to move</button>${btn('close','Close')}<button class="btn-primary" type="submit" form="job-photo-upload">Upload</button>`:btn('close','Close'),true);
   }
 
   async function openQuoteDetails(jid){
@@ -145,8 +145,11 @@
     const button=document.querySelector(`button[form="${f.id}"]`);if(button)button.disabled=true;
     try{
       if(f.dataset.jxForm==='photo-upload'){
-        const fd=new FormData(f);const lid=fd.get('lead_id'),jid=fd.get('job_id');fd.delete('lead_id');
-        await api('/leads/'+encodeURIComponent(lid)+'/uploads',{method:'POST',form:fd});toast('Photo uploaded.');return openPhotos(jid);
+        const lid=f.elements.lead_id.value,jid=f.elements.job_id.value;
+        const result=await CrownPhotos.batch(f,fd=>api('/leads/'+encodeURIComponent(lid)+'/uploads',{method:'POST',form:fd}),msg=>{const el=document.getElementById('job-photo-progress');if(el)el.textContent=msg;});
+        if(result.saved){toast(result.saved+' photo(s) saved.');await openPhotos(jid);}
+        if(result.error)modalError(new Error(result.saved+' of '+result.total+' saved. '+result.error));
+        return;
       }
       if(f.dataset.jxForm==='quote-revise'){
         const jid=d.job_id;await api('/jobs/'+jid+'/quote-revision',{method:'POST',data:{hours_low:Number(d.hours_low),hours_high:Number(d.hours_high),transport_hours:Number(d.transport_hours)}});toast('New draft quote revision created. Resend it for approval.');return openQuoteDetails(jid);

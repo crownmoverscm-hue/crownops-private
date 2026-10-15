@@ -8,3 +8,4 @@ argon2-cffi==25.1.0
 jsonschema==4.26.0
 cryptography==46.0.4
 httpx==0.28.1
+Pillow==12.3.0

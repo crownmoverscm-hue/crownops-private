@@ -153,6 +153,8 @@ def register_operations(app,path,auth):
         return r
 
     async def save_fleet_doc(file,vid,category,actor):
+        from .photo_safety import photo_mode
+        if photo_mode():raise HTTPException(503,'Fleet document uploads require the separate document-scanning setup. Client photo uploads are available from the moving file.')
         if not uploads_enabled():raise HTTPException(503,'Private file uploads are disabled until production malware scanning is configured.')
         allowed_categories=('Registration','GVWR / door sticker','Insurance','Inspection','Maintenance','Other')
         if category not in allowed_categories:raise HTTPException(422,'Unsupported fleet document category.')
