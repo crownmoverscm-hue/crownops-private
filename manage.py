@@ -23,16 +23,21 @@ s=sub.add_parser('import',help='Import workbook inquiries into historical review
 s=sub.add_parser('import-schedule',help='Import schedule source rows into read-only review');s.add_argument('workbook');s.add_argument('--start',default='2026-09-27');s.add_argument('--end',default='2027-12-31')
 s=sub.add_parser('backup',help='Back up database and immutable uploads to a NEW private ZIP');s.add_argument('destination')
 s=sub.add_parser('restore',help='Restore to an EMPTY database/instance path only');s.add_argument('archive')
+s=sub.add_parser('verify-backup',help='Verify checksums and restore privately to a disposable directory');s.add_argument('archive')
 s=sub.add_parser('reset-mfa',help='Emergency local account recovery after verifying identity');s.add_argument('--email',required=True);s.add_argument('--reason',required=True)
 s=sub.add_parser('worker',help='Generate approved-rule tasks and unsent drafts; no automatic external writes');s.add_argument('--once',action='store_true');s.add_argument('--interval',type=int,default=60)
 s=sub.add_parser('doctor',help='Show configuration switches without exposing secrets')
 a=p.parse_args();path=Path(a.db).expanduser().resolve()
 try:
+    if a.command=='verify-backup':
+        from app.backups import verify_backup
+        print(json.dumps(verify_backup(Path(a.archive)),indent=2));sys.exit(0)
     if a.command=='restore':
         if path.exists():raise ValueError('Restoration never overwrites a database. Stop the server and choose a NEW empty instance path.')
         from app.backups import restore_archive
         print(restore_archive(Path(a.archive),path));sys.exit(0)
-    initialize(path)
+    if a.command not in ('serve','backup','doctor'):
+        initialize(path)
     if a.command=='init':
         from app.main import create_user
         password=getpass.getpass('New owner password (12+ characters): ')

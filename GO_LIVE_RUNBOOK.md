@@ -1,6 +1,8 @@
 # CrownOps Go-Live Runbook
 
-This is the controlled path from the current private review installation to production. Do not skip stages.
+For the permanent **team workspace** launch, follow [RAILWAY_SETUP.md](RAILWAY_SETUP.md#permanent-team-launch). Core team use can launch with customer email, Square and QuickBooks production writes still disabled. Their separate provider activations below do not block staff invitations, CRM work, draft estimates or schedule review. Account invitation/recovery emails use `CROWNOPS_ALLOW_AUTH_EMAIL`, independently of general customer email.
+
+The stages below cover additional customer-facing and financial integrations; perform the applicable checks when activating each provider.
 
 ## Stage 0 - Keep the working app safe
 
