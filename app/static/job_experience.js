@@ -21,14 +21,14 @@
   function safeEmailLink(v){return v?`<a href="mailto:${h(v)}">${h(v)}</a>`:'Not supplied';}
   function safePhoneLink(v){return v?`<a href="tel:${h(v.replace(/[^+\d]/g,''))}">${h(v)}</a>`:'Not supplied';}
   function info(label,value){return `<div class="job-kv"><div class="info-label">${h(label)}</div><div class="job-value">${value}</div></div>`;}
-  function roleCanEdit(){return may(['owner','sales','dispatch']);}
+  function roleCanEdit(){return canPlanJobs();}
   function roleCanQuote(){return may(['owner','sales']);}
 
   openJob=async function(jid){
     const jobs=await api('/jobs'); const j=jobs.find(x=>x.id===jid); if(!j)throw Error('Job not found.');
     S.modalContext={job:j};
     const q=j.quote_summary||null;
-    const assigned=S.user.role!=='crew'||j.crew_ids.includes(S.user.employee_id);
+    const assigned=canPlanJobs()||S.user.role!=='crew'||j.crew_ids.includes(S.user.employee_id);
     const readOnlyCrew=S.user.role==='crew'&&!assigned;
     const quoteAccepted=qStatus(j)==='Accepted';
     const canInvoice=quoteAccepted && !readOnlyCrew;
@@ -91,7 +91,7 @@
     const [files,policy]=await Promise.all([api('/leads/'+encodeURIComponent(j.lead_id)+'/uploads'),api('/upload-policy')]);
     const imgs=files.filter(f=>String(f.mime||'').startsWith('image/'));
     const others=files.filter(f=>!String(f.mime||'').startsWith('image/'));
-    const assigned=S.user.role!=='crew'||j.crew_ids.includes(S.user.employee_id);
+    const assigned=canPlanJobs()||S.user.role!=='crew'||j.crew_ids.includes(S.user.employee_id);
     const canUpload=(S.user.role!=='crew'||assigned)&&policy.enabled;
     const gallery=imgs.length?`<div class="photo-grid">${imgs.map(f=>CrownPhotos.ready(f)?`<a class="photo-tile" href="/api/uploads/${encodeURIComponent(f.id)}" target="_blank" rel="noopener"><img src="/api/uploads/${encodeURIComponent(f.id)}" alt="${h(f.category)}"><span>${h(f.category)}</span></a>`:`<div class="photo-tile pending"><div>Photo pending safety review</div><span>${h(f.category)}</span></div>`).join('')}</div>`:`<div class="empty-photo-state"><strong>No photos yet</strong><span>Upload inventory, stairs, elevator, access or in-person estimate photos here.</span></div>`;
     const extra=others.length?`<div class="spacer"></div><h3>Other files</h3>${others.map(f=>`<div class="activity-row"><div class="grow"><strong>${h(f.original_name)}</strong><div class="tiny muted">${h(f.category)}</div></div>${CrownPhotos.ready(f)?`<a href="/api/uploads/${encodeURIComponent(f.id)}" target="_blank">Open</a>`:pill(f.scan_status)}</div>`).join('')}`:'';
@@ -123,7 +123,8 @@
     const el=e.target.closest('[data-jx]'); if(!el)return; e.preventDefault();
     const a=el.dataset.jx,id=el.dataset.id;
     try{
-      if(a==='confirm'){
+      if(a==='confirm')return CrownPlanning.open(id,'timing');
+      if(a==='legacy-confirm'){
         const jobs=await api('/jobs'); const j=jobs.find(x=>x.id===id); if(!j)throw Error('Job not found.');
         await api('/jobs/'+id+'/confirm',{method:'POST',data:{version:j.version}});toast('Job confirmed.');await navigate('schedule');return openJob(id);
       }
@@ -134,7 +135,7 @@
         return openJobInvoice(id);
       }
       if(a==='edit-client'){const jobs=await api('/jobs');const j=jobs.find(x=>x.id===id);return editLead(j.lead_id);}
-      if(a==='edit-plan-simple'){const b=document.createElement('button');b.dataset.v4='edit-plan';b.dataset.id=id;document.body.appendChild(b);b.click();b.remove();return;}
+      if(a==='edit-plan-simple')return CrownPlanning.open(id);
       if(a==='full-quote')return openQuote(id);
     }catch(ex){modal.open?modalError(ex):toast(ex.message);}
   });

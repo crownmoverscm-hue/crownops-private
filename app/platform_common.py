@@ -6,6 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import json, hashlib, os, secrets, re
 from fastapi import HTTPException
 from .store import connect, transaction, rows, one, insert, audit, uid, now, dumps
+from .job_planning import can_plan_jobs
 
 MANAGERS={'owner'}
 OFFICE={'owner','sales','dispatch','accounting'}
@@ -28,7 +29,7 @@ def require_role(u,roles):
 def staff_read_project(db,lid,u):
     l=one(db,'SELECT * FROM leads WHERE id=?',(lid,))
     if not l:raise HTTPException(404,'Client project not found.')
-    if u['role']=='crew' and not one(db,"""SELECT j.id FROM jobs j JOIN assignments a ON a.job_id=j.id
+    if u['role']=='crew' and not can_plan_jobs(db,u) and not one(db,"""SELECT j.id FROM jobs j JOIN assignments a ON a.job_id=j.id
             WHERE j.lead_id=? AND a.resource_type='employee' AND a.resource_id=?""",(lid,u.get('employee_id') or '')):
         raise HTTPException(403,'Crew can view their assigned client projects only.')
     return l
@@ -36,13 +37,13 @@ def staff_read_project(db,lid,u):
 def assigned(db,jid,u):
     j=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
     if not j:raise HTTPException(404,'Job not found.')
-    if u['role']=='crew' and not one(db,"SELECT job_id FROM assignments WHERE job_id=? AND resource_type='employee' AND resource_id=?",(jid,u.get('employee_id') or '')):
+    if u['role']=='crew' and not can_plan_jobs(db,u) and not one(db,"SELECT job_id FROM assignments WHERE job_id=? AND resource_type='employee' AND resource_id=?",(jid,u.get('employee_id') or '')):
         raise HTTPException(403,'Only the assigned team can change this job.')
     return j
 
 def project_write(db,lid,jid,u):
     l=staff_read_project(db,lid,u)
-    if jid or u['role']=='crew':
+    if jid or (u['role']=='crew' and not can_plan_jobs(db,u)):
         j=assigned(db,jid,u)
         if j['lead_id']!=lid:raise HTTPException(403,'Job belongs to another project.')
     return l

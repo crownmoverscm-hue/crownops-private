@@ -48,6 +48,7 @@
       <div class="weekly-client">${h(j.client?.client_name||j.title)}</div>
       <div class="weekly-service">${h(phaseName(j.phase))} · ${h(crewLabel)}</div>
       <div class="weekly-truck">${truckDots(j)}<span>${h((j.trucks||[]).map(x=>x.name).join(' + ')||truckName)}</span></div>
+      ${j.readiness?.missing?.length?`<span class="pill orange" ${canPlanJobs()?`data-plan="review" data-id="${h(j.id)}"`:""}>Needs attention · ${j.readiness.missing.length}</span>`:""}
     </button>`;
   }
 

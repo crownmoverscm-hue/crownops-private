@@ -152,7 +152,7 @@ def register_portal(app,path,auth,public_url,secure):
     def review(cid:str,data:dict,u=Depends(auth)):
         require_role(u,SALES)
         note=text(data.get('note',''),'Review note',2000)
-        if not note or data.get('decision') not in ('Approve','Reject'):raise HTTPException(422,'Choose a decision and enter a review note.')
+        if data.get('decision') not in ('Approve','Reject'):raise HTTPException(422,'Choose Approve or Reject.')
         with transaction(path) as db:
             cr=one(db,'SELECT * FROM client_changes WHERE id=?',(cid,))
             if not cr or cr['status']!='Pending':raise HTTPException(409,'Request no longer pending.')
@@ -195,7 +195,7 @@ def register_portal(app,path,auth,public_url,secure):
         if lid is not None and r['lead_id']!=lid:raise HTTPException(404,'File not found.')
         if u:
             staff_read_project(db,r['lead_id'],u)
-            if u['role']=='crew' and r['job_id']:assigned(db,r['job_id'],u)
+            if u['role']=='crew' and not can_plan_jobs(db,u) and r['job_id']:assigned(db,r['job_id'],u)
         return r
 
     async def upload_one(file,lid,jid,category,actor,staff_user=None,client_session=None):
@@ -278,7 +278,7 @@ def register_portal(app,path,auth,public_url,secure):
         with closing(connect(path)) as db:
             staff_read_project(db,lid,u)
             records=rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL',(lid,))
-            if u['role']=='crew':
+            if u['role']=='crew' and not can_plan_jobs(db,u):
                 own={r['job_id'] for r in rows(db,"SELECT job_id FROM assignments WHERE resource_type='employee' AND resource_id=?",(u.get('employee_id') or '',))}
                 records=[r for r in records if r['job_id'] is None or r['job_id'] in own]
             return [safe_attachment(r) for r in records]

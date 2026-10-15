@@ -51,8 +51,8 @@ def job_resource_blockers(db,j):
         required_crew=max(required_crew,int(result.get('movers') or 0))
         if j['phase'] not in ('Packing','Unpacking'):
             required_trucks=max(required_trucks,int(result.get('trucks') or 0))
-    if len(crew)<required_crew:missing.append(f'Assign {required_crew} crew members')
-    if len(trucks)<required_trucks:missing.append(f'Assign {required_trucks} trucks')
+    if len(crew)<required_crew:missing.append(f'Assign {required_crew} crew member'+('s' if required_crew!=1 else ''))
+    if len(trucks)<required_trucks:missing.append(f'Assign {required_trucks} truck'+('s' if required_trucks!=1 else ''))
     drivers=0
     for a in crew:
         e=one(db,'SELECT * FROM employees WHERE id=?',(a['resource_id'],))
