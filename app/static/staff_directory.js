@@ -26,7 +26,7 @@ teamPage=async function(){
  ]);
  return head('Employee directory','Contacts and assigned services. Pay rates are visible only to owners and the employee concerned.',actions)+
   (owner?'<div class="filterbar"><label class="small">Hours from <input id="ux-dir-start" type="date" value="'+h(d.start)+'"></label><label class="small">to <input id="ux-dir-end" type="date" value="'+h(d.end)+'"></label><button data-ux="directory-load">Load</button></div>':'')+
-  panel('Team',xtable(['Employee','Phone','Emergency contact','Services',...(owner?['Pay rate','Hours']:[]),''],records));
+  '<div class="staff-directory-table">'+panel('Team',xtable(['Employee','Phone','Emergency contact','Services',...(owner?['Pay rate','Hours']:[]),''],records))+'</div>'+  '<div class="staff-directory-cards">'+d.employees.map(e=>'<article class="panel panel-body"><div class="row wrap"><strong class="grow">'+h(e.full_name)+'</strong>'+pill(e.active?'Active':'Inactive')+'</div><p class="small muted">'+h(e.role)+'</p><p class="small">Phone: '+h(e.phone||'Not provided')+'</p><p class="small">Emergency: '+h(e.emergency_contact?.name||'Not provided')+'<br>'+h(e.emergency_contact?.phone||'')+'</p>'+(e.can_view_pay?'<p class="staff-own-pay">'+(owner?'Pay rate':'Your pay')+' · '+h(staffRate(e))+'</p>':'')+(Array.isArray(e.assigned_services)?'<p class="small">'+e.assigned_services.length+' assigned services</p>':'')+'<button type="button" data-ux="employee-open" data-id="'+h(e.id)+'">Open employee</button></article>').join('')+'</div>';
 };
 X.pageRenderers.payroll=async()=>{
  if(!UX.payStart)[UX.payStart,UX.payEnd]=uxDefaultRange();
