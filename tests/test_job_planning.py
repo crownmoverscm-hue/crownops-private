@@ -137,10 +137,9 @@ class JobPlanningTests(unittest.TestCase):
         with transaction(self.path) as db:db.execute("UPDATE jobs SET status='Confirmed' WHERE id='J1'")
         r=self.staff('dispatch').put('/api/jobs/J1/plan',json=self.plan(confirm=True));self.assertEqual(r.status_code,200,r.text)
         self.assertEqual(r.json()['status'],'Confirmed');self.assertEqual(self.snapshot()[0]['capacity_reviewed'],1)
-        before=self.snapshot();r=self.staff('sales').put('/api/jobs/J1/plan',json=self.plan(version=2,crew_ids=['E1']));self.assertEqual(r.status_code,422,r.text)
-        self.assertEqual(before,self.snapshot())
-        r=self.staff('sales').put('/api/jobs/J1/plan',json=self.plan(version=2,notes='Routine update without an explanation'));self.assertEqual(r.status_code,200,r.text)
-        self.assertEqual(self.snapshot()[0]['capacity_reviewed'],1)
+        r=self.staff('sales').put('/api/jobs/J1/plan',json=self.plan(version=2,crew_ids=['E1']));self.assertEqual(r.status_code,200,r.text)
+        self.assertEqual(self.snapshot()[0]['capacity_reviewed'],0)
+        self.assertEqual(self.snapshot()[0]['plan_review_required'],1)
 
     def test_confirmed_job_timing_cannot_shorten_accepted_service_during_partial_save(self):
         with transaction(self.path) as db:db.execute("UPDATE jobs SET status='Confirmed' WHERE id='J1'")

@@ -263,9 +263,9 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
         require_role(u,MANAGERS)
         name=text(data.get('name',''),'Name',200)
         if not name:raise HTTPException(422,'Enter employee name.')
-        try:rate=cents(number(data.get('hourly_rate',0),'Employee hourly rate',0,500))
+        try:rate=cents(number((data.get('hourly_rate') or 0),'Employee hourly rate',0,500))
         except ValueError as ex:raise HTTPException(422,str(ex))
-        rec=dict(id=uid('EMP'),name=name,role=text(data.get('role','Mover'),'Work role',150),hourly_cents=rate,driver_verified=0)
+        rec=dict(id=uid('EMP'),name=name,role=text(data.get('role','Mover'),'Work role',150),hourly_cents=rate,driver_verified=0,raw_json=dumps({'contact_import_pay_pending':data.get('hourly_rate') in (None,'')}))
         with transaction(path) as db:insert(db,'employees',rec);audit(db,u['id'],'Employee directory record created; no account yet','employees',rec['id'])
         return rec
 
@@ -279,7 +279,7 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
                 _,c=invoice_current(db,inv['id']);tot+=c['total_cents'];paid+=c['deposit_cents']
             return {'pipeline':stages,'issued_invoice_total_cents':tot,'verified_allocated_payments_cents':paid,'balance_cents':tot-paid,
                 'unverified_payments':db.execute('SELECT count(*) FROM payments WHERE verified=0').fetchone()[0],
-                'open_cases':db.execute("SELECT count(*) FROM cases WHERE status!='Resolved'").fetchone()[0],
+                'open_cases':db.execute("SELECT count(*) FROM incident_reports WHERE status!='Completed'").fetchone()[0],
                 'pending_portal_changes':db.execute("SELECT count(*) FROM client_changes WHERE status='Pending'").fetchone()[0],
                 'quarantined_files':db.execute("SELECT count(*) FROM attachments WHERE scan_status='Quarantined' AND deleted_at IS NULL").fetchone()[0],
                 'note':'Operational invoice totals, not profit, bank cash or accounting-certified revenue. Imported source bookings are excluded.'}

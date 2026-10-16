@@ -43,6 +43,8 @@ SETUP_TOKEN_HASH='a2f107444f141c2a3d61af99ec02063038c77b60c0f639ef6bf7f5304fa21b
 from .pricing import calculate_with_overrides
 from .operations import check_fleet_dispatch, require_hos_dispatch_verification
 from .job_planning import can_plan_jobs, require_planner, planning_resources
+from .staff_records import can_view_pay, resolve_invited_employee
+from .job_routes import job_route, validate_route
 from .platform_common import settings as platform_settings
 from .account_access import (master_owner_id, remember_master_owner, protect_owner_account,
     check_invitation_email, invitation_request_id, previous_invitation_email,
@@ -349,8 +351,7 @@ def create_app(database_path=None):
             emp=person['employee_id']
             if emp and not one(db,'SELECT id FROM employees WHERE id=?',(emp,)):
                 raise HTTPException(422,'Employee record does not exist.')
-            if role=='crew' and not emp:
-                raise HTTPException(422,'Link a crew login to an employee record first.')
+            person['employee_id']=resolve_invited_employee(db,person,u)
             if send_email:
                 previous=previous_invitation_email(db,request_id,u,person)
                 if previous:return invitation_email_result(previous)
@@ -759,7 +760,9 @@ def create_app(database_path=None):
         return {'subject':subject,'body':body,'sent':False}
 
     def decorate_job(db,j,u):
+        j['route_stops']=job_route(j,get_lead(db,j['lead_id']))
         j['stops']=json.loads(j.pop('stops_json'))
+        j.pop('route_stops_json',None)
         a=rows(db,'SELECT * FROM assignments WHERE job_id=?',(j['id'],))
         j['crew_ids']=[x['resource_id'] for x in a if x['resource_type']=='employee']
         j['truck_ids']=[x['resource_id'] for x in a if x['resource_type']=='vehicle']
@@ -890,7 +893,7 @@ def create_app(database_path=None):
             lead=get_lead(db,j['lead_id'])
             q=one(db,'SELECT * FROM quotes WHERE id=?',(j['quote_id'],)) if j['quote_id'] else None
             check_confirmation(db,lead,q,crew,trucks,start,end,j['exception_reason'],u,True)
-            db.execute("UPDATE jobs SET status='Confirmed',capacity_reviewed=1,version=version+1 WHERE id=?",(jid,))
+            db.execute("UPDATE jobs SET status='Confirmed',capacity_reviewed=1,plan_review_required=0,version=version+1 WHERE id=?",(jid,))
             audit(db,u['id'],'Pilot job confirmed','jobs',jid,{'note':note,'live_schedule_changed':False,'confirmation_mode':'one-click'})
         return {'ok':True,'live_schedule_changed':False}
 
@@ -911,6 +914,7 @@ def create_app(database_path=None):
                 require_hos_dispatch_verification(db,jid)
                 from .security import check_preuse
                 check_preuse(db,jid)
+                if j.get('plan_review_required'):raise HTTPException(409,'Finish and confirm the job plan before starting. Saved individual assignments are kept.')
             if u['role']=='crew' and not can_plan_jobs(db,u) and status not in ('In progress','Completed'):
                 raise HTTPException(403,'Crew can only start or complete assigned confirmed jobs.')
             if u['role']!='crew':require_planner(db,u)
@@ -944,6 +948,7 @@ def create_app(database_path=None):
             confirm_requested=data.get('confirm') is True
             before={k:j[k] for k in ('title','quote_id','start_at','end_at','notes','status')}
             before['stops']=json.loads(j['stops_json'])
+            before['route_stops']=job_route(j,get_lead(db,j['lead_id']))
             previous=rows(db,'SELECT resource_type,resource_id FROM assignments WHERE job_id=?',(jid,))
             before['crew_ids']=sorted(x['resource_id'] for x in previous if x['resource_type']=='employee')
             before['truck_ids']=sorted(x['resource_id'] for x in previous if x['resource_type']=='vehicle')
@@ -954,7 +959,7 @@ def create_app(database_path=None):
             if qid!=j['quote_id'] and one(db,'SELECT id FROM job_invoices WHERE job_id=?',(jid,)):raise HTTPException(409,'Invoice terms already exist. Have management reconcile billing before changing the accepted estimate link.')
             exception=bounded(data.get('exception_reason',j['exception_reason']),'Manager exception',3000)
             if exception!=j['exception_reason'] and u['role']!='owner':raise HTTPException(403,'Only management can change a booking exception.')
-            validate_final=confirm_requested or data.get('capacity_reviewed') is True or j['status'] in ('Confirmed','In progress')
+            validate_final=confirm_requested or data.get('capacity_reviewed') is True or j['status']=='In progress'
             if q and q['status']=='Accepted' and (start!=j['start_at'] or end!=j['end_at']):
                 result=json.loads(q['result_json'])
                 hours=(datetime.fromisoformat(end)-datetime.fromisoformat(start)).total_seconds()/3600
@@ -965,6 +970,8 @@ def create_app(database_path=None):
             stops=data.get('stops',[])
             if not isinstance(stops,list) or len(stops)>30:raise HTTPException(422,'Invalid stop list.')
             stops=[bounded(v,'Stop address',1000) for v in stops]
+            route=validate_route(data['route_stops']) if 'route_stops' in data else job_route({**j,'stops_json':dumps(stops),'route_stops_json':'[]'},get_lead(db,j['lead_id']))
+            if 'route_stops' in data:stops=[r['address'] for r in route]
             notes=bounded(data.get('notes',j['notes']),'Instructions',12000)
             title=bounded(data.get('title',j['title']),'Title',300)
             db.execute('UPDATE jobs SET title=?,quote_id=?,start_at=?,end_at=?,notes=?,exception_reason=?,version=version+1 WHERE id=?',(title,qid,start,end,notes,exception,jid))
@@ -973,9 +980,9 @@ def create_app(database_path=None):
                 for rid in ids:insert(db,'assignments',dict(job_id=jid,resource_type=typ,resource_id=rid))
             next_status='Confirmed' if confirm_requested and j['status']=='Tentative' else j['status']
             reviewed=int(validate_final)
-            db.execute('UPDATE jobs SET stops_json=?,status=?,capacity_reviewed=? WHERE id=?',(dumps(stops),next_status,reviewed,jid))
+            db.execute('UPDATE jobs SET stops_json=?,route_stops_json=?,status=?,capacity_reviewed=?,plan_review_required=? WHERE id=?',(dumps(stops),dumps(route),next_status,reviewed,int(not validate_final),jid))
             db.execute("UPDATE outbound_messages SET status='Cancelled',error='Plan changed; review reminders' WHERE job_id=? AND category='Preparation' AND status IN ('Draft','Approved')",(jid,))
-            after={'title':title,'quote_id':qid,'start_at':start,'end_at':end,'notes':notes,'status':next_status,'stops':stops,'crew_ids':sorted(crew),'truck_ids':sorted(trucks)}
+            after={'title':title,'quote_id':qid,'start_at':start,'end_at':end,'notes':notes,'status':next_status,'stops':stops,'route_stops':route,'crew_ids':sorted(crew),'truck_ids':sorted(trucks)}
             audit(db,u['id'],'Job plan confirmed' if confirm_requested else 'Job plan revised','jobs',jid,{'before':before,'after':after,'note':note,'changed_fields':[k for k in before if before[k]!=after[k]],'confirmation_mode':'save-and-confirm' if confirm_requested else 'save'})
         return {'ok':True,'status':next_status,'confirmed':confirm_requested,'status_unchanged':j['status']}
 
@@ -990,7 +997,7 @@ def create_app(database_path=None):
             ready=_job_readiness(db,j)
             assignments=rows(db,'SELECT resource_type,resource_id FROM assignments WHERE job_id=?',(jid,))
             job={k:j[k] for k in ('id','lead_id','title','quote_id','start_at','end_at','notes','status','version','capacity_reviewed')}
-            job.update(stops=json.loads(j['stops_json']),crew_ids=[a['resource_id'] for a in assignments if a['resource_type']=='employee'],truck_ids=[a['resource_id'] for a in assignments if a['resource_type']=='vehicle'])
+            job.update(stops=json.loads(j['stops_json']),route_stops=job_route(j,get_lead(db,j['lead_id'])),crew_ids=[a['resource_id'] for a in assignments if a['resource_type']=='employee'],truck_ids=[a['resource_id'] for a in assignments if a['resource_type']=='vehicle'])
             accepted=rows(db,"SELECT id,revision FROM quotes WHERE lead_id=? AND status='Accepted' ORDER BY revision DESC",(j['lead_id'],))
             history=rows(db,"""SELECT a.created_at,a.action,a.details_json,u.name AS actor_name FROM audit a
                 LEFT JOIN users u ON u.id=a.actor WHERE a.object_type='jobs' AND a.object_id=? ORDER BY a.created_at DESC,a.id DESC LIMIT 15""",(jid,))
@@ -1002,7 +1009,7 @@ def create_app(database_path=None):
             result=rows(db,'SELECT * FROM employees ORDER BY name')
         for e in result:
             e.pop('raw_json',None)
-            if u['role'] not in ('owner','accounting'):e.pop('hourly_cents',None)
+            if not can_view_pay(u,e['id']):e.pop('hourly_cents',None)
         if u['role']=='crew':result=[e for e in result if e['id']==u.get('employee_id')]
         return result
 
@@ -1123,7 +1130,7 @@ def create_app(database_path=None):
             args=(u.get('employee_id') or '',) if u['role']=='crew' else ()
             result=rows(db,'SELECT t.*,e.name AS employee_name,e.hourly_cents,j.title AS job_title FROM times t JOIN employees e ON e.id=t.employee_id JOIN jobs j ON j.id=t.job_id'+clause+' ORDER BY t.created_at DESC',args)
         for r in result:
-            if u['role'] not in ('owner','sales','accounting'):r.pop('hourly_cents',None)
+            if not can_view_pay(u,r['employee_id']):r.pop('hourly_cents',None)
         return result
 
     @app.post('/api/times')
@@ -1356,6 +1363,8 @@ def create_app(database_path=None):
 
     from .payroll_adjustments import register_payroll_adjustments
     register_payroll_adjustments(app,path,auth)
+    from .incidents import register_incidents
+    register_incidents(app,path,auth,local_to_utc)
     from .review_features import register_review_features, seed_review_defaults
     seed_review_defaults(path)
     register_review_features(app,path,auth,public_url)

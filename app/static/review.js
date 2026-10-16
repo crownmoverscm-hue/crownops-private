@@ -12,7 +12,7 @@ const order=['dashboard','sales','quotes','schedule','invoices','followups','pay
 nav.sort((a,b)=>order.indexOf(a[0])-order.indexOf(b[0]));
 allowedPages=function(){
  if(S.user.role==='owner'||S.user.role==='sales')return nav.map(x=>x[0]);
- if(S.user.role==='crew')return ['schedule','timeoff','invoices','team','documents','account'];
+ if(S.user.role==='crew')return ['schedule','timeoff','invoices','team','payroll','care','documents','account'];
  if(S.user.role==='dispatch')return ['schedule','invoices','team','timeoff','inventory','documents','fleet','care','portalhub','account'];
  return ['schedule','invoices','payments','team','timeoff','inventory','documents','portalhub','fleet','payroll','care','connections','policies','account'];
 };
@@ -22,7 +22,7 @@ const reviewBaseShell=shell;
 shell=function(){
  const role=S.user.role,allowed=allowedPages();
  if(role!=='crew')return reviewBaseShell();
- const crewOrder=['schedule','timeoff','invoices','team','documents','account'];
+ const crewOrder=['schedule','timeoff','invoices','team','payroll','care','documents','account'];
  const items=crewOrder.map(k=>nav.find(n=>n[0]===k)).filter(Boolean);
  const navHtml='<div class="nav-label">FIELD WORK</div>'+items.map(n=>{const label=n[0]==='schedule'?'Jobs':n[2];return `<button class="nav-button ${S.page===n[0]?'active':''}" data-page="${n[0]}">${icon(n[1])}<span>${h(label)}</span></button>`;}).join('');
  root.innerHTML=`<div class="app"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-icon">${crown}</div><div><strong>CrownOps</strong><small>CROWN MOVERS</small></div></div>${navHtml}<div class="sidebar-foot"><div class="workspace-label"><span class="dot"></span>Private review workspace<div class="tiny" style="color:#91aacd;margin-top:4px">Your assigned jobs open first. Live systems remain unchanged.</div></div><div class="profile"><div class="avatar">${h(initials(S.user.name))}</div><div><div style="color:white;font-size:12px;font-weight:600">${h(S.user.name)}</div><div style="font-size:10px">Mover access</div></div>${btn('logout',icon('logout'),'logout','aria-label="Sign out"')}</div></div></aside><main class="main"><header class="topbar">${btn('menu',icon('menu'),'mobile-toggle btn-icon','aria-label="Open navigation"')}<div class="breadcrumb">Crown Movers ${icon('right')} <b id="crumb">Jobs</b></div><div class="top-right"><span class="date-label">Montr&eacute;al time &middot; ET</span><div class="avatar">${h(initials(S.user.name))}</div></div></header><div class="pilot-strip" id="pilot-strip">${icon('shield')}<span>Private review build v5.0. Test only; live schedule, Gmail, accounting and payments are not synchronized.</span></div><section class="content" id="content"></section></main></div>`;

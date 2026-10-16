@@ -265,3 +265,21 @@ CREATE TABLE IF NOT EXISTS action_outcomes (
 );
 CREATE INDEX IF NOT EXISTS action_outcomes_action ON action_outcomes(action_type,action_id,created_at);
 CREATE INDEX IF NOT EXISTS action_outcomes_lead ON action_outcomes(lead_id,created_at);
+
+-- Employee incident reports retain immutable submissions and account-based review history.
+CREATE TABLE IF NOT EXISTS incident_reports (
+ id TEXT PRIMARY KEY, category TEXT NOT NULL, title TEXT NOT NULL, detail TEXT NOT NULL,
+ location TEXT NOT NULL DEFAULT '', occurred_at TEXT NOT NULL, job_id TEXT REFERENCES jobs(id), lead_id TEXT REFERENCES leads(id),
+ vehicle_id TEXT REFERENCES vehicles(id), other_vehicle TEXT NOT NULL DEFAULT '',
+ reported_by TEXT NOT NULL, submitted_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Submitted',
+ reviewed_by TEXT, reviewed_at TEXT, verified_by TEXT, verified_at TEXT, completed_by TEXT, completed_at TEXT,
+ resolution TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
+ request_key TEXT NOT NULL, payload_hash TEXT NOT NULL, legacy_case_id TEXT UNIQUE,
+ UNIQUE(reported_by,request_key)
+);
+CREATE INDEX IF NOT EXISTS incident_submitted ON incident_reports(submitted_at DESC,id);
+CREATE INDEX IF NOT EXISTS incident_reporter ON incident_reports(reported_by,submitted_at DESC);
+CREATE TABLE IF NOT EXISTS incident_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, incident_id TEXT NOT NULL REFERENCES incident_reports(id),
+ actor TEXT NOT NULL, action TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);

@@ -7,6 +7,7 @@ from contextlib import closing
 import json
 from fastapi import Depends, HTTPException
 
+from .job_routes import job_route
 from .store import connect, rows, one
 from .platform_common import require_role, OFFICE, invoice_current
 from .ux_features import _job_readiness, _local_date
@@ -118,6 +119,7 @@ def register_final_features(app, path, auth):
             return {
                 'job': {k: j[k] for k in ('id','lead_id','title','phase','start_at','end_at','status','notes','capacity_reviewed','version')},
                 'client': lead,
+                'route_stops':job_route(j,lead),
                 'crew': crew,
                 'trucks': trucks,
                 'quote': quote,

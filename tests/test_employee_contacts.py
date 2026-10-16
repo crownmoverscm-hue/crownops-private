@@ -207,8 +207,9 @@ class EmployeeContactImportTests(unittest.TestCase):
             endpoint(employee['id'], {'hourly_rate': '', 'active': False, 'phone': '514-555-3000'}, u=owner)
             still_pending = endpoints['/api/ux/employee-directory'](u=owner)
             self.assertTrue(next(e for e in still_pending['employees'] if e['id']==employee['id'])['pay_rate_pending'])
-            with self.assertRaises(HTTPException):
-                endpoint(employee['id'], {'hourly_rate': '', 'active': True}, u=owner)
+            endpoint(employee['id'], {'hourly_rate': '', 'active': True}, u=owner)
+            pending = endpoints['/api/ux/employee-directory'](u=owner)
+            self.assertTrue(next(e for e in pending['employees'] if e['id']==employee['id'])['pay_rate_pending'])
             endpoint(employee['id'], {'hourly_rate': '26.50', 'active': True}, u=owner)
             after = endpoints['/api/ux/employee-directory'](u=owner)
             employee = next(e for e in after['employees'] if e['full_name'] == 'New Worker')

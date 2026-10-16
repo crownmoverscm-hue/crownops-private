@@ -58,8 +58,6 @@ def job_resource_blockers(db,j):
         e=one(db,'SELECT * FROM employees WHERE id=?',(a['resource_id'],))
         if not e or not e['active']:
             missing.append('An assigned employee is inactive or missing');continue
-        if json.loads(e['raw_json']).get('contact_import_pay_pending'):
-            missing.append(e['name']+' needs a reviewed pay rate')
         drivers+=int(bool(e['driver_verified']))
     if drivers<len(trucks):missing.append('Assign a verified driver for every truck')
     return missing
