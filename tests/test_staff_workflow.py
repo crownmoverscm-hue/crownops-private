@@ -106,3 +106,12 @@ class StaffWorkflowTests(unittest.TestCase):
     def test_client_page_with_no_jobs_still_opens(self):
         with transaction(self.path) as db:insert(db,'leads',dict(id='EMPTY',client_name='No services yet',created_at=now(),updated_at=now()))
         r=self.owner.get('/api/ux/final/client/EMPTY');self.assertEqual(r.status_code,200,r.text);self.assertEqual(r.json()['services'],[])
+
+    def test_older_assignment_client_keeps_stop_access_and_instructions(self):
+        route=[{'kind':'Pickup','address':'Test A','access':'Elevator booking','notes':'Call the client first'},
+               {'kind':'Delivery','address':'Test B','access':'Dock','notes':'Use the side door'}]
+        first=self.owner.put('/api/jobs/J1/plan',json=self.plan(route_stops=route));self.assertEqual(first.status_code,200,first.text)
+        # An already-open older screen knows only the unchanged address list.
+        second=self.staff('dispatch').put('/api/jobs/J1/plan',json=self.plan(version=2,crew_ids=['E1'],truck_ids=[],stops=['Test A','Test B']))
+        self.assertEqual(second.status_code,200,second.text)
+        self.assertEqual(self.owner.get('/api/jobs/J1/planning').json()['job']['route_stops'],route)
