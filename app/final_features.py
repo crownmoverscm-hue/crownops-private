@@ -8,6 +8,7 @@ import json
 from fastapi import Depends, HTTPException
 
 from .job_routes import job_route
+from .staff_records import schedule_identity
 from .store import connect, rows, one
 from .platform_common import require_role, OFFICE, invoice_current
 from .ux_features import _job_readiness, _local_date
@@ -134,11 +135,18 @@ def register_final_features(app, path, auth):
             }
 
 
+    @app.get('/api/schedule-identity')
+    def personal_schedule_identity(u=Depends(auth)):
+        require_role(u, STAFF)
+        with closing(connect(path)) as db:return schedule_identity(db,u)
+
     @app.get('/api/ux/final/schedule')
-    def final_schedule(start: str='', end: str='', u=Depends(auth)):
+    def final_schedule(start: str='', end: str='', scope: str='all', u=Depends(auth)):
         if u['role'] not in STAFF:
             raise HTTPException(403, 'Crown staff only.')
+        if scope not in ('all','mine'):raise HTTPException(422,'Choose My Jobs or All Jobs.')
         with closing(connect(path)) as db:
+            identity=schedule_identity(db,u)
             all_jobs = rows(db, "SELECT * FROM jobs WHERE status!='Cancelled' ORDER BY start_at")
             result=[]
             for j in all_jobs:
@@ -147,6 +155,8 @@ def register_final_features(app, path, auth):
                 if start and day < start: continue
                 if end and day > end: continue
                 crew = rows(db, "SELECT e.id,e.name,e.driver_verified FROM assignments a JOIN employees e ON e.id=a.resource_id WHERE a.job_id=? AND a.resource_type='employee' ORDER BY e.name", (j['id'],))
+                is_mine=bool(identity['id'] and any(e['id']==identity['id'] for e in crew))
+                if scope=='mine' and not is_mine:continue
                 trucks = rows(db, "SELECT v.id,v.name,v.active,v.color_hex,v.display_order FROM assignments a JOIN vehicles v ON v.id=a.resource_id WHERE a.job_id=? AND a.resource_type='vehicle' ORDER BY v.name", (j['id'],))
                 if u['role']=='crew' and j['id'] and not any(e['id']==u.get('employee_id') for e in crew):
                     # All Jobs remains visible to crew; edits are still controlled elsewhere.
@@ -158,7 +168,7 @@ def register_final_features(app, path, auth):
                 photos=one(db,"SELECT count(*) n FROM attachments WHERE lead_id=? AND deleted_at IS NULL AND mime LIKE 'image/%'",(j['lead_id'],))
                 result.append({
                     'id':j['id'],'lead_id':j['lead_id'],'title':j['title'],'phase':j['phase'],'start_at':j['start_at'],'end_at':j['end_at'],'status':j['status'],
-                    'client':lead,'crew':crew,'trucks':trucks,'quote':q,'invoice':inv,'payments':pay,'readiness':_job_readiness(db,j),'photo_count':int((photos or {}).get('n') or 0)
+                    'client':lead,'crew':crew,'trucks':trucks,'quote':q,'invoice':inv,'payments':pay,'readiness':_job_readiness(db,j),'photo_count':int((photos or {}).get('n') or 0),'assigned_to_me':is_mine
                 })
             return result
 

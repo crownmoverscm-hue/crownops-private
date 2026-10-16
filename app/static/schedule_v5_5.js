@@ -47,7 +47,9 @@
       <div class="weekly-card-top"><span>${h(timeLabel(j.start_at))}</span><strong>${h(estimateCode(j))}</strong></div>
       <div class="weekly-client">${h(j.client?.client_name||j.title)}</div>
       <div class="weekly-service">${h(phaseName(j.phase))} · ${h(crewLabel)}</div>
+      <div class="weekly-crew">${h((j.crew||[]).map(x=>x.name).join(' · ')||'Crew not assigned')}</div>
       <div class="weekly-truck">${truckDots(j)}<span>${h((j.trucks||[]).map(x=>x.name).join(' + ')||truckName)}</span></div>
+      ${j.assigned_to_me?'<span class="pill blue weekly-personal">You are assigned</span>':''}
       ${j.readiness?.missing?.length?`<span class="pill orange" ${canPlanJobs()?`data-plan="review" data-id="${h(j.id)}"`:""}>Needs attention · ${j.readiness.missing.length}</span>`:""}
     </button>`;
   }
@@ -83,16 +85,22 @@
   }
 
   schedulePage=async function(){
-    if(S.user.role==='crew')return previousSchedulePage();
+    if(S.scheduleUser!==S.user.id){S.scheduleUser=S.user.id;S.jobScope=S.user.role==='crew'?'mine':'all';}
+    if(!['mine','all'].includes(S.jobScope))S.jobScope=S.user.role==='crew'?'mine':'all';
     const days=weekDays(),start=dateIso(days[0]),end=dateIso(days[6]);
-    const [jobs,off,vehicles]=await Promise.all([
-      api(`/ux/final/schedule?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),
+    const [jobs,allOff,vehicles,identity]=await Promise.all([
+      api(`/ux/final/schedule?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&scope=${S.jobScope}`),
       api('/time-off').catch(()=>[]),
-      api('/vehicles').catch(()=>[])
+      api('/vehicles').catch(()=>[]),
+      api('/schedule-identity')
     ]);
+    const off=S.jobScope==='mine'?allOff.filter(r=>identity.id&&r.employee_id===identity.id):allOff;
+    const scope=`<div class="segmented job-scope" aria-label="Schedule scope"><button type="button" data-v5="jobs-mine" class="${S.jobScope==='mine'?'selected':''}" aria-pressed="${S.jobScope==='mine'}">My Jobs</button><button type="button" data-v5="jobs-all" class="${S.jobScope==='all'?'selected':''}" aria-pressed="${S.jobScope==='all'}">All Jobs</button></div>`;
+    const missingIdentity=S.jobScope==='mine'&&!identity.matched?`<div class="callout orange schedule-identity-notice"><strong>Your login is not matched to an employee yet.</strong><p class="small">An owner can add your sign-in email (${h(S.user.email)}) to the correct employee profile. My Jobs will then show that employee’s assignments. Use All Jobs in the meantime.</p><button type="button" data-page="team">Open employee directory</button></div>`:'';
+    const noJobs=!jobs.length?`<div class="callout schedule-empty"><strong>${S.jobScope==='mine'?'No jobs assigned to you this week.':'No jobs scheduled this week.'}</strong><span class="small">${S.jobScope==='mine'?'Switch to All Jobs or choose another week.':'Choose another week to see more services.'}</span></div>`:'';
     const navTools=`<div class="calendar-tools weekly-tools"><div class="weekly-nav-main"><div class="weekly-nav-buttons">${btn('week-prev',icon('left'),'btn-icon')}${btn('week-today','Today')}${btn('week-next',icon('right'),'btn-icon')}</div><div class="weekly-range-label">${h(compactWeekLabel(start,end))}</div></div><div class="weekly-nav-side"><label class="weekly-jump"><span>Jump to</span><input type="date" id="calendar-jump" value="${h(start)}" aria-label="Jump to schedule date"></label><div class="weekly-capacity">${vehicles.filter(v=>v.active).length} active trucks</div></div></div>`;
-    return head('Schedule','Weekly dispatch. Jobs stay grouped by truck colour, with larger services first and that truck’s later service directly underneath.',btn('new-job',icon('plus')+'New job','btn-primary'))+
-      navTools+legend(vehicles)+weekCalendar(jobs,off,vehicles)+
+    return head('Schedule',S.jobScope==='mine'?'Your assigned services, crew and trucks.':'Company services. Select a move to see its details, team and truck.',canPlanJobs()?btn('new-job',icon('plus')+'New job','btn-primary'):'')+
+      scope+missingIdentity+navTools+legend(vehicles)+noJobs+weekCalendar(jobs,off,vehicles)+
       `<p class="source-warning">Example: 5–7 + 1 means 5–7 estimated service hours plus 1 transportation hour. CrownOps allows the same crew/truck on another service later that day when the time blocks do not overlap.</p>`;
   };
 
