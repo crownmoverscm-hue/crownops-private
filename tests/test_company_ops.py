@@ -252,7 +252,7 @@ class DispatchStartTests(unittest.TestCase):
             self.assertIn('Assign 2 trucks',problems)
             self.assertTrue(any('verified driver' in x for x in problems))
             db.execute("UPDATE employees SET driver_verified=1,raw_json=? WHERE id='E'", (dumps({'contact_import_pay_pending': True}),))
-            self.assertTrue(any('pay rate' in x for x in job_resource_blockers(db, one(db, 'SELECT * FROM jobs'))))
+            self.assertFalse(any('pay rate' in x for x in job_resource_blockers(db, one(db, 'SELECT * FROM jobs'))))
             db.execute("UPDATE employees SET raw_json='{}' WHERE id='E'")
             db.execute("UPDATE jobs SET phase='Packing' WHERE id='JOB'")
             db.execute("DELETE FROM assignments WHERE resource_type='vehicle'")

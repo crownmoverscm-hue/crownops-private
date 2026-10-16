@@ -11,6 +11,7 @@ from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .pricing import number,cents
 from .platform_common import *
 from .portal import detect
+from .staff_records import can_view_pay, PAY_PENDING
 
 
 def prefill_payroll(db,inv,doc,actor):
@@ -542,7 +543,7 @@ def register_operations(app,path,auth):
             if cfg.get('period_anchor'):
                 anchor=date.fromisoformat(cfg['period_anchor']);day=datetime.fromisoformat(r['start_at']).astimezone(ZoneInfo('America/Toronto')).date()
                 r['period_start']=(anchor+timedelta(days=((day-anchor).days//14)*14)).isoformat()
-            if u['role']=='crew':r.pop('hourly_cents',None);r.pop('estimated_pay_cents',None)
+            if not can_view_pay(u,r['employee_id']):r.pop('hourly_cents',None);r.pop('estimated_pay_cents',None)
         return result
 
     @app.patch('/api/payroll-drafts/{pid}')
@@ -577,13 +578,15 @@ def register_operations(app,path,auth):
             if inv['status']!='Issued' or inv['revision']!=r['invoice_revision']:raise HTTPException(409,'Invoice revision changed; use the new payroll review.')
             if one(db,"SELECT id FROM payroll_drafts WHERE job_id=? AND employee_id=? AND status IN ('Approved','Locked')",(r['job_id'],r['employee_id'])):raise HTTPException(409,'Pay already approved for this worker/job. Reconcile an adjustment instead of duplicating wages.')
             total=r['service_minutes']+r['transport_minutes']+r['extra_minutes']-r['break_minutes']
+            employee=one(db,'SELECT raw_json FROM employees WHERE id=?',(r['employee_id'],))
+            if employee and json.loads(employee['raw_json']).get(PAY_PENDING):raise HTTPException(422,'An owner must complete the employee pay rate before payroll approval.')
             if not 0<total<=1440 or r['hourly_cents']<=0:raise HTTPException(422,'Confirm valid paid hours and employee pay rate.')
             db.execute("UPDATE payroll_drafts SET status='Approved',approved_by=?,approved_at=?,version=version+1 WHERE id=?",(u['id'],now(),pid));audit(db,u['id'],'Individual hours approved; deductions and payout not processed','payroll_drafts',pid)
         return {'ok':True,'payroll_paid':False}
 
     @app.get('/api/payroll-export')
     def export(period_start:str,u=Depends(auth)):
-        require_role(u,{'owner','accounting'})
+        require_role(u,{'owner'})
         try:start=date.fromisoformat(period_start)
         except ValueError:raise HTTPException(422,'Use a valid period date.')
         with closing(connect(path)) as db:

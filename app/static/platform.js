@@ -10,7 +10,7 @@ const xtable=(heads,rows_)=>rows_.length?`<div class="table-wrap"><table><thead>
 function xnote(t,kind='orange'){return `<div class="callout ${kind}">${t}</div><div class="spacer"></div>`;}
 function checkedField(name,label,on=false){return `<label class="checkbox-label full"><input type="checkbox" name="${name}" ${on?'checked':''}>${label}</label>`;}
 function parseHours(v){return Number(v||0)/60;}
-const customNav=[['calls','phone','Calls & intake'],['outbox','mail','Email outbox'],['portalhub','users','Client portal'],['fleet','truck','Fleet & checks'],['payroll','clock','Payroll drafts'],['care','shield','Aftercare & videos'],['rates','file','Daily rates'],['connections','plug','Connections'],['policies','settings','Operating rules'],['account','shield','My account']];
+const customNav=[['calls','phone','Calls & intake'],['outbox','mail','Email outbox'],['portalhub','users','Client portal'],['fleet','truck','Fleet & checks'],['payroll','clock','Payroll drafts'],['care','shield','Incident reports'],['rates','file','Daily rates'],['connections','plug','Connections'],['policies','settings','Operating rules'],['account','shield','My account']];
 customNav.forEach(n=>nav.push(n));
 allowedPages=function(){if(S.user.role==='owner'||S.user.role==='sales')return nav.map(x=>x[0]);if(S.user.role==='crew')return ['schedule','invoices','portalhub','fleet','team','payroll','care','account'];return ['schedule','invoices','payments','team','inventory','portalhub','fleet','payroll','care','connections','policies','account'];};
 const baseNavigate=navigate;

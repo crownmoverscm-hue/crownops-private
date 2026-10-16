@@ -13,13 +13,15 @@ from fastapi import Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
 from .store import connect, transaction, rows, one, insert, audit, uid, now
+from .staff_records import can_view_pay
+from .job_planning import can_plan_jobs
 from .platform_common import require_role, OFFICE, MANAGERS, text, settings, put_setting, invoice_current
 from .operations import hos_dispatch_status
 from .crm_backlog import callback_backlog_preview, archive_callbacks, restore_callback
 from .employee_contacts import register_employee_contacts, PAY_PENDING
 
 TORONTO=ZoneInfo('America/Toronto')
-PRIVATE_HR={'owner','accounting'}
+PRIVATE_HR={'owner'}
 
 
 def _local_date(value):
@@ -76,7 +78,7 @@ def _job_readiness(db,j):
     if crew and trucks and not resource_missing:
         try:check_preuse(db,j['id'])
         except HTTPException as e:missing.append(str(e.detail))
-    if j.get('status')=='Tentative' or (j.get('status')=='Confirmed' and not j.get('capacity_reviewed')):missing.append('Confirm the job plan')
+    if j.get('status')=='Tentative' or (j.get('status')=='Confirmed' and (j.get('plan_review_required') or not j.get('capacity_reviewed'))):missing.append('Confirm the job plan')
     if j.get('quote_id'):
         q=one(db,'SELECT * FROM quotes WHERE id=?',(j['quote_id'],))
         if not q or q['status']!='Accepted':
@@ -609,6 +611,8 @@ def register_ux_features(app,path,auth):
             employees=rows(db,"""SELECT e.*,p.email,p.phone,p.home_address,p.emergency_name,p.emergency_phone,p.start_date,p.notes,
                 p.license_original_name,p.license_mime,p.team_lead FROM employees e LEFT JOIN employee_directory_profiles p ON p.employee_id=e.id ORDER BY e.name""")
             times=rows(db,"""SELECT t.*,j.start_at FROM times t JOIN jobs j ON j.id=t.job_id WHERE j.status!='Cancelled'""")
+            can_plan_jobs_for_directory=can_plan_jobs(db,u)
+            service_rows=rows(db,"""SELECT a.resource_id employee_id,j.id,j.title,j.start_at,j.end_at,j.status FROM assignments a JOIN jobs j ON j.id=a.job_id WHERE a.resource_type='employee' AND j.status NOT IN ('Completed','Cancelled') ORDER BY j.start_at""")
         by={e['id']:{'minutes':0,'jobs':set(),'pending':0} for e in employees}
         for t in times:
             day=_local_date(t['start_at'])
@@ -621,6 +625,9 @@ def register_ux_features(app,path,auth):
             base={'id':e['id'],'full_name':e['name'],'phone':e.get('phone') or '',
                   'emergency_contact':{'name':e.get('emergency_name') or '', 'phone':e.get('emergency_phone') or ''},
                   'role':e['role'],'active':bool(e['active'])}
+            if can_view_pay(u,e['id']):base.update(hourly_cents=e['hourly_cents'],pay_rate_pending=bool(json.loads(e.get('raw_json') or '{}').get(PAY_PENDING)),can_view_pay=True)
+            if can_plan_jobs_for_directory or u.get('employee_id')==e['id']:
+                base['assigned_services']=[r for r in service_rows if r['employee_id']==e['id']]
             if private:
                 base.update({'email':e.get('email') or '','home_address':e.get('home_address') or '',
                   'start_date':e.get('start_date') or '','driver_verified':bool(e['driver_verified']),
@@ -641,17 +648,14 @@ def register_ux_features(app,path,auth):
             _profile_seed(db,emp)
             rate=data.get('hourly_rate')
             raw=json.loads(emp.get('raw_json') or '{}')
-            if raw.get(PAY_PENDING) and rate in (None,''):
-                if data.get('active',bool(emp['active'])):
-                    raise HTTPException(422,'Confirm an hourly pay rate before activating this imported employee.')
-                rate=None
-            if rate is not None:
+            if rate not in (None,''):
                 try:rate_cents=round(float(rate)*100)
                 except Exception:raise HTTPException(422,'Enter a valid hourly pay rate.')
                 if rate_cents<0 or rate_cents>100000:raise HTTPException(422,'Review the hourly pay rate.')
                 db.execute('UPDATE employees SET hourly_cents=?,role=?,active=?,driver_verified=? WHERE id=?',(rate_cents,text(data.get('role',emp['role']),'Role',120),int(data.get('active',bool(emp['active']))),int(data.get('driver_verified',bool(emp['driver_verified']))),eid))
                 if raw.pop(PAY_PENDING,False):
                     db.execute('UPDATE employees SET raw_json=? WHERE id=?',(json.dumps(raw),eid))
+            db.execute('UPDATE employees SET role=?,active=?,driver_verified=? WHERE id=?',(text(data.get('role',emp['role']),'Role',120),int(data.get('active',bool(emp['active']))),int(data.get('driver_verified',bool(emp['driver_verified']))),eid))
             db.execute("""UPDATE employee_directory_profiles SET email=?,phone=?,home_address=?,emergency_name=?,emergency_phone=?,start_date=?,team_lead=?,notes=?,updated_by=?,updated_at=? WHERE employee_id=?""",
               (text(data.get('email',''),'Email',240),text(data.get('phone',''),'Phone',80),text(data.get('home_address',''),'Home address',500),
                text(data.get('emergency_name',''),'Emergency contact',180),text(data.get('emergency_phone',''),'Emergency phone',80),
@@ -692,7 +696,7 @@ def register_ux_features(app,path,auth):
 
     @app.get('/api/ux/payroll-summary')
     def payroll_summary(start:str='',end:str='',u=Depends(auth)):
-        if u['role'] not in OFFICE:raise HTTPException(403,'Payroll summary is restricted to office staff.')
+        if u['role'] not in OFFICE|{'crew'}:raise HTTPException(403,'Payroll summary is restricted to staff.')
         end_d=_date_arg(end,'end date') if end else date.today();start_d=_date_arg(start,'start date') if start else end_d-timedelta(days=13)
         if end_d<start_d or (end_d-start_d).days>366:raise HTTPException(422,'Choose a payroll range up to one year.')
         private=u['role'] in PRIVATE_HR
@@ -707,15 +711,16 @@ def register_ux_features(app,path,auth):
                 details[t['employee_id']].append({'time_id':t['id'],'job_id':t['job_id'],'job_title':t['title'],'date':day,'hours':round(mins/60,2),'status':t['status']})
         out=[]
         for e in emps:
+            if u['role']=='crew' and e['id']!=u.get('employee_id'):continue
             d=details[e['id']];hours=round(sum(x['hours'] for x in d),2);pending=sum(x['status']!='Approved' for x in d)
             r={'employee_id':e['id'],'employee_name':e['name'],'jobs':len({x['job_id'] for x in d}),'hours':hours,'pending_entries':pending,'status':'Ready' if d and not pending else ('Needs review' if d else 'No hours'),'details':d}
-            if private:r.update({'hourly_cents':e['hourly_cents'],'gross_cents':round(hours*e['hourly_cents'])})
+            if can_view_pay(u,e['id']):r.update({'hourly_cents':e['hourly_cents'],'gross_cents':round(hours*e['hourly_cents']),'pay_rate_pending':bool(json.loads(e['raw_json']).get(PAY_PENDING))})
             out.append(r)
-        return {'start':start_d.isoformat(),'end':end_d.isoformat(),'private':private,'employees':out,'total_hours':round(sum(x['hours'] for x in out),2)}
+        return {'start':start_d.isoformat(),'end':end_d.isoformat(),'private':private,'can_manage_hours':u['role'] in {'owner','accounting'},'employees':out,'total_hours':round(sum(x['hours'] for x in out),2)}
 
     @app.post('/api/ux/payroll-summary/approve')
     def payroll_approve(data:dict,u=Depends(auth)):
-        if u['role'] not in PRIVATE_HR:raise HTTPException(403,'Only payroll managers can approve hours.')
+        if u['role'] not in {'owner','accounting'}:raise HTTPException(403,'Only payroll managers can approve hours.')
         start=_date_arg(data.get('start'),'start date').isoformat();end=_date_arg(data.get('end'),'end date').isoformat()
         with transaction(path) as db:
             items=rows(db,"SELECT t.id,j.start_at FROM times t JOIN jobs j ON j.id=t.job_id WHERE t.status!='Approved' AND j.status!='Cancelled'")
@@ -727,7 +732,7 @@ def register_ux_features(app,path,auth):
 
     @app.patch('/api/ux/payroll-time/{tid}')
     def payroll_time_edit(tid:str,data:dict,u=Depends(auth)):
-        if u['role'] not in PRIVATE_HR:raise HTTPException(403,'Only payroll managers can correct payroll hours.')
+        if u['role'] not in {'owner','accounting'}:raise HTTPException(403,'Only payroll managers can correct payroll hours.')
         try:hours=float(data.get('hours'))
         except Exception:raise HTTPException(422,'Enter valid total hours.')
         if hours<0 or hours>24 or round(hours*60)!=hours*60:raise HTTPException(422,'Hours must resolve to whole minutes.')

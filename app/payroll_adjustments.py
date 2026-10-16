@@ -8,20 +8,21 @@ from fastapi.responses import Response
 from .store import connect,transaction,rows,one,insert,audit,now,uid
 from .platform_common import require_role,settings,text
 from .pricing import number
+from .staff_records import can_view_pay
 
 
 def register_payroll_adjustments(app,path,auth):
     @app.get('/api/payroll-adjustments')
     def listing(u=Depends(auth)):
         with closing(connect(path)) as db:
-            data=rows(db,'SELECT a.*,e.name employee_name FROM payroll_adjustments a JOIN employees e ON e.id=a.employee_id'+(' WHERE a.employee_id=?' if u['role']=='crew' else '')+' ORDER BY approved_at DESC',(u.get('employee_id'),) if u['role']=='crew' else ())
-        if u['role']=='crew':
-            for r in data:r.pop('pay_delta_cents',None)
+            data=rows(db,'SELECT a.*,e.name employee_name FROM payroll_adjustments a JOIN employees e ON e.id=a.employee_id'+(' WHERE a.employee_id=?' if u['role']!='owner' else '')+' ORDER BY approved_at DESC',(u.get('employee_id'),) if u['role']!='owner' else ())
+        for r in data:
+            if not can_view_pay(u,r['employee_id']):r.pop('pay_delta_cents',None)
         return data
 
     @app.post('/api/payroll-drafts/{pid}/reconcile')
     def reconcile(pid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'})
+        require_role(u,{'owner'})
         if data.get('reviewed') is not True:raise HTTPException(422,'Explicit payroll reconciliation approval is required.')
         note=text(data.get('note',''),'Reconciliation explanation',3000)
         if len(note)<12:raise HTTPException(422,'Explain the actual work adjustment.')
@@ -54,7 +55,7 @@ def register_payroll_adjustments(app,path,auth):
 
     @app.get('/api/payroll-adjustments/export')
     def export(period_start:str,u=Depends(auth)):
-        require_role(u,{'owner','accounting'})
+        require_role(u,{'owner'})
         try:start=date.fromisoformat(period_start)
         except ValueError:raise HTTPException(422,'Invalid period date.')
         with closing(connect(path)) as db:

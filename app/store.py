@@ -36,6 +36,9 @@ def initialize(path):
     db.executescript(Path(__file__).with_name('schema.sql').read_text())
     db.executescript(Path(__file__).with_name('platform_schema.sql').read_text())
     # Lightweight forward migration for the private review builds.
+    job_cols={r[1] for r in db.execute('PRAGMA table_info(jobs)').fetchall()}
+    for column,definition in [('plan_review_required','INTEGER NOT NULL DEFAULT 0'),('route_stops_json',"TEXT NOT NULL DEFAULT '[]'")]:
+        if column not in job_cols:db.execute('ALTER TABLE jobs ADD COLUMN '+column+' '+definition)
     vehicle_cols={r[1] for r in db.execute('PRAGMA table_info(vehicles)').fetchall()}
     added_color=False
     if 'color_hex' not in vehicle_cols:

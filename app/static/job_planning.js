@@ -18,7 +18,7 @@ function jpResourceList(kind,selected){
  }).join(''):'<p class="small muted">No '+(kind==='crew'?'employees':'trucks')+' have been added yet. Use the setup button below.</p>';
 }
 function jpHistory(){
- const labels={crew_ids:'Crew',truck_ids:'Trucks',start_at:'Start time',end_at:'End time',notes:'Instructions',stops:'Stops',title:'Title',status:'Status',quote_id:'Accepted estimate'};
+ const labels={crew_ids:'Crew',truck_ids:'Trucks',start_at:'Start time',end_at:'End time',notes:'Instructions',stops:'Stops',route_stops:'Route locations',title:'Title',status:'Status',quote_id:'Accepted estimate'};
  return '<details class="jp-history"><summary>Recent changes · account and time recorded automatically</summary>'+
  (JP.data.history.length?JP.data.history.map(item=>{
   let details={};try{details=JSON.parse(item.details_json);}catch{}
@@ -40,12 +40,13 @@ async function openJobPlan(id,focus=''){
   '<section id="jp-timing" class="jp-section"><h3>Timing & service</h3><div class="grid2">'+field('title','Job title',j.title,'text','required')+
   field('start_at','Start · Montréal time',local(j.start_at),'datetime-local','required')+field('end_at','End · Montréal time',local(j.end_at),'datetime-local','required')+
   select('quote_id','Accepted estimate',[['','No accepted estimate linked'],...data.accepted_quotes.map(q=>[q.id,'Revision '+q.revision])],j.quote_id||'')+'</div><p id="jp-availability" class="tiny muted" role="status"></p></section>'+
-  '<details class="jp-section"><summary>Stops & crew instructions</summary><div class="grid2">'+textArea('stops','Ordered stops · one per line',j.stops.join('\n'),3)+textArea('notes','Crew instructions',notes,4)+'</div></details>'+jpHistory()+'</form><p class="tiny muted">Changes are recorded under your account. Tentative jobs can be saved unfinished. Confirmed jobs must keep their required crew, truck and timing coverage.</p>',
+  '<section id="jp-route" class="jp-section"><h3>Locations · in service order</h3>'+routeEditor(j.route_stops||[])+'</section><details class="jp-section"><summary>Crew instructions</summary>'+textArea('notes','Crew instructions',notes,4)+'</details>'+jpHistory()+'</form><p class="tiny muted">Changes are recorded under your account. Save each assignment as you add it. Use Save & confirm when the crew, truck and job plan are complete.</p>',
   '<button type="button" data-plan="back" data-id="'+h(id)+'">Back to move</button><button type="submit" form="job-plan-form" class="btn-soft" value="save">Save plan</button>'+
   (j.status!=='In progress'?'<button type="submit" form="job-plan-form" class="btn-primary" value="confirm">Save & confirm</button>':''),true);
  const draft=JP.drafts[id],form=document.getElementById('job-plan-form');
  if(draft&&draft.version===j.version){
   for(const [name,value] of Object.entries(draft.fields))if(form.elements[name]&&!['crew_ids','truck_ids','job_id'].includes(name))form.elements[name].value=value;
+  if(draft.route_stops)document.querySelector('[data-route-editor]').outerHTML=routeEditor(draft.route_stops);
   for(const kind of ['crew','trucks'])document.getElementById('jp-options-'+kind).innerHTML=jpResourceList(kind,draft[kind]);
   form.dispatchEvent(new Event('change',{bubbles:true}));
   jpRefreshAvailability(form);
@@ -55,7 +56,7 @@ async function openJobPlan(id,focus=''){
 function jpRemember(){
  const form=document.getElementById('job-plan-form');if(!form||!JP.data)return;
  const checked=name=>[...form.querySelectorAll('[name="'+name+'"]:checked')].map(x=>x.value);
- JP.drafts[JP.data.job.id]={version:JP.data.job.version,fields:Object.fromEntries(new FormData(form)),crew:checked('crew_ids'),trucks:checked('truck_ids')};
+ JP.drafts[JP.data.job.id]={version:JP.data.job.version,fields:Object.fromEntries(new FormData(form)),crew:checked('crew_ids'),trucks:checked('truck_ids'),route_stops:readRouteEditor(form)};
 }
 function jpFocus(target){
  const el=document.getElementById('jp-'+target);if(!el)return;
@@ -110,10 +111,10 @@ document.addEventListener('submit',async e=>{
  data.version=JP.data.job.version;data.confirm=confirmPlan;
  data.crew_ids=[...form.querySelectorAll('[name=crew_ids]:checked')].map(x=>x.value);
  data.truck_ids=[...form.querySelectorAll('[name=truck_ids]:checked')].map(x=>x.value);
- data.stops=data.stops.split('\n').map(x=>x.trim()).filter(Boolean);
+ data.route_stops=readRouteEditor(form);data.stops=data.route_stops.map(r=>r.address);
  JP.busy=true;const buttons=[...modal.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);
  try{
-  await api('/jobs/'+encodeURIComponent(id)+'/plan',{method:'PUT',data});delete JP.drafts[id];toast(confirmPlan?'Job plan confirmed.':'Job plan saved.');
+  await api('/jobs/'+encodeURIComponent(id)+'/plan',{method:'PUT',data});delete JP.drafts[id];toast(confirmPlan?'Job plan confirmed.':'Assignments saved. You can add the next team member later.');
   await navigate('schedule');await openJob(id);
  }catch(ex){modalError(ex);}finally{JP.busy=false;buttons.filter(b=>b.isConnected).forEach(b=>b.disabled=false);}
 });
