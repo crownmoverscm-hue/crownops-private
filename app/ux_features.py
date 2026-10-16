@@ -78,7 +78,7 @@ def _job_readiness(db,j):
     if crew and trucks and not resource_missing:
         try:check_preuse(db,j['id'])
         except HTTPException as e:missing.append(str(e.detail))
-    if j.get('status')=='Tentative' or (j.get('status')=='Confirmed' and (j.get('plan_review_required') or not j.get('capacity_reviewed'))):missing.append('Confirm the job plan')
+    if j.get('status')=='Tentative' or (j.get('status')=='Confirmed' and (j.get('plan_review_required') or not j.get('capacity_reviewed'))):missing.append('Save the completed job plan')
     if j.get('quote_id'):
         q=one(db,'SELECT * FROM quotes WHERE id=?',(j['quote_id'],))
         if not q or q['status']!='Accepted':
