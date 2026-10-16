@@ -970,7 +970,9 @@ def create_app(database_path=None):
             stops=data.get('stops',[])
             if not isinstance(stops,list) or len(stops)>30:raise HTTPException(422,'Invalid stop list.')
             stops=[bounded(v,'Stop address',1000) for v in stops]
-            route=validate_route(data['route_stops']) if 'route_stops' in data else job_route({**j,'stops_json':dumps(stops),'route_stops_json':'[]'},get_lead(db,j['lead_id']))
+            if 'route_stops' in data:route=validate_route(data['route_stops'])
+            elif stops==json.loads(j['stops_json']):route=job_route(j,get_lead(db,j['lead_id']))
+            else:route=job_route({**j,'stops_json':dumps(stops),'route_stops_json':'[]'},get_lead(db,j['lead_id']))
             if 'route_stops' in data:stops=[r['address'] for r in route]
             notes=bounded(data.get('notes',j['notes']),'Instructions',12000)
             title=bounded(data.get('title',j['title']),'Title',300)
