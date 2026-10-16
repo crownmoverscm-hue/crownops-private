@@ -35,6 +35,8 @@ def initialize(path):
     db.execute('PRAGMA journal_mode=WAL')
     db.executescript(Path(__file__).with_name('schema.sql').read_text())
     db.executescript(Path(__file__).with_name('platform_schema.sql').read_text())
+    lead_cols={r[1] for r in db.execute('PRAGMA table_info(leads)').fetchall()}
+    if 'intake_json' not in lead_cols:db.execute("ALTER TABLE leads ADD COLUMN intake_json TEXT NOT NULL DEFAULT '{}'")
     # Lightweight forward migration for the private review builds.
     job_cols={r[1] for r in db.execute('PRAGMA table_info(jobs)').fetchall()}
     for column,definition in [('plan_review_required','INTEGER NOT NULL DEFAULT 0'),('route_stops_json',"TEXT NOT NULL DEFAULT '[]'")]:

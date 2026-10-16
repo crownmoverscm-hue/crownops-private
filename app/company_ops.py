@@ -326,8 +326,9 @@ def apply_reference(path, batch_id, actor):
 
 
 def fleet_reference_blockers(db, vid):
-    r = one(db, 'SELECT * FROM fleet_reference WHERE vehicle_id=?', (vid,))
-    return ['Review imported truck information and unresolved repairs'] if r and r['review_required'] else []
+    # Profile completion is advisory. Availability is an explicit office decision;
+    # known major defects and expired inspections have their own dispatch checks.
+    return []
 
 
 def register_company_ops(app, path, auth):
@@ -389,13 +390,69 @@ def register_company_ops(app, path, auth):
             for v in rows(db, 'SELECT * FROM vehicles ORDER BY display_order,name'):
                 p, warnings, latest = fleet_warnings(db, v)
                 ref = one(db, 'SELECT * FROM fleet_reference WHERE vehicle_id=?', (v['id'],)) or {}
-                history = rows(db, '''SELECT h.*,m.status repair_status FROM fleet_service_history h
-                    LEFT JOIN maintenance m ON m.id=h.maintenance_id WHERE h.vehicle_id=? ORDER BY h.service_date DESC,h.rowid DESC''', (v['id'],))
+                history = rows(db, '''SELECT h.*,m.status repair_status,u.name recorded_by_name FROM fleet_service_history h
+                    LEFT JOIN maintenance m ON m.id=h.maintenance_id LEFT JOIN users u ON u.id=h.imported_by
+                    WHERE h.vehicle_id=? ORDER BY h.service_date DESC,h.rowid DESC''', (v['id'],))
                 result.append({**v, 'profile': p, 'reference': ref, 'warnings': warnings, 'latest_check': latest,
+                    'assigned_services': rows(db, '''SELECT j.id,j.title,j.phase,j.start_at,j.end_at,j.status,l.client_name
+                        FROM assignments a JOIN jobs j ON j.id=a.job_id JOIN leads l ON l.id=j.lead_id
+                        WHERE a.resource_type='vehicle' AND a.resource_id=? ORDER BY j.start_at DESC LIMIT 200''',(v['id'],)),
                     'history': history, 'maintenance': rows(db, 'SELECT * FROM maintenance WHERE vehicle_id=? ORDER BY created_at DESC', (v['id'],)),
                     'documents': rows(db, '''SELECT id,category,original_name,scan_status FROM fleet_documents
                         WHERE vehicle_id=? AND deleted_at IS NULL ORDER BY created_at DESC''', (v['id'],))})
             return {'editable': u['role'] in EDITORS, 'trucks': result}
+
+    @app.patch('/api/company/fleet/{vid}/availability')
+    def truck_availability(vid: str, data: dict, u=Depends(auth)):
+        require_role(u, EDITORS)
+        if type(data.get('active')) is not bool:raise HTTPException(422,'Choose Active or Inactive.')
+        with transaction(path) as db:
+            v=one(db,'SELECT * FROM vehicles WHERE id=?',(vid,))
+            if not v:raise HTTPException(404,'Truck not found.')
+            if data.get('version')!=v['version']:raise HTTPException(409,'Truck changed. Refresh before saving availability.')
+            if data['active']:
+                if one(db,"SELECT id FROM inspections WHERE vehicle_id=? AND severity='Major' AND cleared_at IS NULL",(vid,)):
+                    raise HTTPException(409,'Clear the recorded major defect before making this truck active.')
+                p=one(db,'SELECT inspection_due FROM fleet_profiles WHERE vehicle_id=?',(vid,)) or {}
+                if p.get('inspection_due') and p['inspection_due']<datetime.now(ZoneInfo('America/Toronto')).date().isoformat():
+                    raise HTTPException(409,'Update the recorded expired inspection before making this truck active.')
+            affected=rows(db,"""SELECT j.id FROM assignments a JOIN jobs j ON j.id=a.job_id
+                WHERE a.resource_type='vehicle' AND a.resource_id=? AND j.status NOT IN ('Completed','Cancelled')""",(vid,))
+            db.execute('UPDATE vehicles SET active=?,version=version+1 WHERE id=?',(int(data['active']),vid))
+            if not data['active']:
+                for job in affected:
+                    db.execute('UPDATE jobs SET plan_review_required=1,capacity_reviewed=0,version=version+1 WHERE id=?',(job['id'],))
+            audit(db,u['id'],'Truck availability changed','vehicles',vid,{'before':bool(v['active']),'active':data['active'],'affected_jobs':[j['id'] for j in affected]})
+        return {'ok':True,'active':data['active'],'affected_jobs':len(affected)}
+
+    @app.post('/api/company/fleet/{vid}/service-history')
+    def add_service_history(vid: str, data: dict, u=Depends(auth)):
+        require_role(u, EDITORS)
+        work=text(data.get('work',''),'Work performed',2000)
+        notes=text(data.get('notes',''),'Service notes',5000)
+        day=text(data.get('service_date',''),'Service date',10)
+        try:date.fromisoformat(day)
+        except ValueError:raise HTTPException(422,'Enter the service date as YYYY-MM-DD.')
+        if day>datetime.now(ZoneInfo('America/Toronto')).date().isoformat():raise HTTPException(422,'Use a maintenance task for future work. Service history records completed work.')
+        if not work:raise HTTPException(422,'Describe the work performed.')
+        key=text(data.get('request_id',''),'Request ID',100)
+        if not re.fullmatch(r'[a-zA-Z0-9-]{8,100}',key):raise HTTPException(422,'Refresh the service form before saving.')
+        try:reading=numeric(data.get('odometer_km'),'Odometer km')
+        except ReferenceError as e:raise HTTPException(e.status,str(e)) from None
+        source='manual:'+vid+':'+key
+        with transaction(path) as db:
+            v=one(db,'SELECT * FROM vehicles WHERE id=?',(vid,))
+            if not v:raise HTTPException(404,'Truck not found.')
+            old=one(db,'SELECT * FROM fleet_service_history WHERE source_key=?',(source,))
+            if old:
+                if (old['work'],old['notes'],old['service_date'],old['odometer_km'])!=(work,notes,day,reading):raise HTTPException(409,'This saved service entry differs. Open a new service form.')
+                return {'ok':True,'id':old['id'],'already_saved':True}
+            if data.get('version')!=v['version']:raise HTTPException(409,'Truck changed. Reopen the service form.')
+            rec=dict(id=uid('HISTORY'),vehicle_id=vid,source_key=source,service_date=day,odometer_km=reading,work=work,notes=notes,imported_by=u['id'],imported_at=now())
+            insert(db,'fleet_service_history',rec)
+            db.execute('UPDATE vehicles SET version=version+1 WHERE id=?',(vid,))
+            audit(db,u['id'],'Truck service recorded','vehicles',vid,{'service_id':rec['id'],'service_date':day,'work':work})
+        return {'ok':True,'id':rec['id']}
 
     @app.put('/api/company/fleet/{vid}/reference')
     def update_reference(vid: str, data: dict, u=Depends(auth)):

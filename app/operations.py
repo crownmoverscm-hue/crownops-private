@@ -38,6 +38,8 @@ def fleet_warnings(db,v):
     if not v['active']:warnings.append('Unavailable')
     from .company_ops import fleet_reference_blockers
     warnings.extend(fleet_reference_blockers(db,v['id']))
+    ref=one(db,'SELECT review_required FROM fleet_reference WHERE vehicle_id=?',(v['id'],))
+    if ref and ref['review_required']:warnings.append('Profile details need review — this does not restrict scheduling')
     if p.get('next_service_date') and p['next_service_date']<=now()[:10]:warnings.append('Maintenance due')
     if p.get('next_service_km') is not None and p.get('odometer_km',0)>=p['next_service_km']:warnings.append('Mileage service due')
     if p.get('inspection_due') and p['inspection_due']<now()[:10]:warnings.append('Inspection overdue')

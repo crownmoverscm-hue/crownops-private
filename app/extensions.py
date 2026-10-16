@@ -129,7 +129,7 @@ def register_extensions(app,path,auth,public_url):
         with closing(connect(path)) as db:
             if u['role']=='crew':
                 r=rows(db,"SELECT DISTINCT l.id,l.client_name,l.email,l.phone,l.pickup,l.dropoff,l.inventory,l.boxes,l.pickup_access,l.dropoff_access,l.pickup_walk,l.dropoff_walk,l.heavy_items,l.move_date,l.language,l.version FROM leads l JOIN jobs j ON j.lead_id=l.id ORDER BY l.move_date DESC")
-            else:r=rows(db,'SELECT id,client_name,email,phone,pickup,dropoff,inventory,boxes,pickup_access,dropoff_access,move_date,language,version FROM leads ORDER BY move_date DESC LIMIT 1000')
+            else:r=rows(db,'SELECT id,client_name,email,phone,pickup,dropoff,inventory,boxes,pickup_access,dropoff_access,move_date,language,version,photo_link FROM leads ORDER BY move_date DESC LIMIT 1000')
             return r
 
     @app.put('/api/employees/{eid}/qualification')

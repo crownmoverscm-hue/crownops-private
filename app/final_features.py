@@ -102,6 +102,7 @@ def register_final_features(app, path, auth):
                 # Crew may view All Jobs, but this endpoint remains read-only by convention.
                 pass
             lead = one(db, 'SELECT * FROM leads WHERE id=?', (j['lead_id'],))
+            if u['role']=='crew' and not any(r['resource_id']==u.get('employee_id') for r in crew):lead.pop('photo_link',None)
             quote = _quote_summary(db, j)
             inv = one(db, 'SELECT id,number,status,revision,updated_at FROM job_invoices WHERE job_id=?', (jid,))
             pay = _payment_summary(db, j['lead_id'], inv['id'] if inv else None, quote['deposit_required_cents'] if quote else 0)
