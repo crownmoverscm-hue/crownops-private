@@ -71,7 +71,7 @@
     </section>`;
 
     let primary='';
-    if(j.status==='Tentative'&&roleCanEdit()) primary+=`<button class="btn-primary" data-jx="confirm" data-id="${h(jid)}">Confirm job</button>`;
+    if(j.status==='Tentative'&&roleCanEdit()) primary+=`<button class="btn-primary" data-jx="confirm" data-id="${h(jid)}">Review job setup</button>`;
     if(j.status==='Confirmed'&&!readOnlyCrew) primary+=btn('job-status','Start job','btn-primary',`data-id="${h(jid)}" data-version="${j.version}" data-status="In progress"`);
     if(j.status==='In progress'&&!readOnlyCrew) primary+=btn('job-status','Mark completed','btn-primary',`data-id="${h(jid)}" data-version="${j.version}" data-status="Completed"`);
 

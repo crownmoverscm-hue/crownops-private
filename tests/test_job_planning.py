@@ -145,3 +145,75 @@ class JobPlanningTests(unittest.TestCase):
         with transaction(self.path) as db:db.execute("UPDATE jobs SET status='Confirmed' WHERE id='J1'")
         r=self.owner.put('/api/jobs/J1/plan',json=self.plan(end_at='2026-11-15T15:00:00+00:00'))
         self.assertEqual(r.status_code,422,r.text);self.assertEqual(self.snapshot()[0]['version'],1)
+
+    def test_one_save_confirms_complete_plans_for_every_authorized_planner(self):
+        for version,user in enumerate(('owner','sales','dispatch','accounting','lead'),1):
+            with self.subTest(user=user):
+                r=self.staff(user).put('/api/jobs/J1/plan',json=self.plan(version=version,auto_confirm=True))
+                self.assertEqual(r.status_code,200,r.text)
+                self.assertEqual(r.json()['status'],'Confirmed');self.assertTrue(r.json()['confirmed'])
+                job,assigned,history=self.snapshot()
+                self.assertEqual((job['capacity_reviewed'],job['plan_review_required']),(1,0))
+                self.assertEqual(history[-1]['actor'],user)
+                self.assertEqual(json.loads(history[-1]['details_json'])['confirmation_mode'],'save-auto')
+                self.assertEqual(len(assigned),3)
+        self.assertTrue(self.owner.get('/api/jobs/J1/planning').json()['readiness']['ready'])
+        with closing(connect(self.path)) as db:self.assertEqual(db.execute('SELECT count(*) FROM outbound_messages').fetchone()[0],0)
+
+    def test_one_save_keeps_partial_assignments_then_clears_review_when_complete(self):
+        with transaction(self.path) as db:db.execute("UPDATE jobs SET status='Confirmed' WHERE id='J1'")
+        r=self.staff('dispatch').put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True,crew_ids=['E1'],truck_ids=[]))
+        self.assertEqual(r.status_code,200,r.text);self.assertFalse(r.json()['confirmed'])
+        self.assertTrue(r.json()['confirmation_pending'])
+        job,assigned,_=self.snapshot();self.assertEqual(job['plan_review_required'],1)
+        self.assertEqual([a['resource_id'] for a in assigned],['E1'])
+        self.assertEqual(self.owner.patch('/api/jobs/J1',json={'version':2,'status':'In progress'}).status_code,409)
+        r=self.owner.put('/api/jobs/J1/plan',json=self.plan(version=2,auto_confirm=True))
+        self.assertEqual(r.status_code,200,r.text);self.assertTrue(r.json()['confirmed'])
+        self.assertEqual(self.snapshot()[0]['plan_review_required'],0)
+        self.assertEqual(self.owner.patch('/api/jobs/J1',json={'version':3,'status':'In progress'}).status_code,200)
+
+    def test_one_save_keeps_deposit_pending_until_it_is_verified(self):
+        with transaction(self.path) as db:db.execute('UPDATE payments SET verified=0')
+        r=self.owner.put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True))
+        self.assertEqual(r.status_code,200,r.text);self.assertFalse(r.json()['confirmed'])
+        self.assertEqual(r.json()['status'],'Tentative');self.assertIn('deposit',r.json()['confirmation_pending'][0])
+        self.assertEqual(len(self.snapshot()[1]),3)
+        with transaction(self.path) as db:db.execute('UPDATE payments SET verified=1')
+        r=self.owner.put('/api/jobs/J1/plan',json=self.plan(version=2,auto_confirm=True))
+        self.assertEqual(r.status_code,200,r.text);self.assertTrue(r.json()['confirmed'])
+
+    def test_one_save_does_not_confirm_missing_quote_or_stale_client_details(self):
+        r=self.staff('sales').put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True,quote_id=None))
+        self.assertEqual(r.status_code,200,r.text);self.assertFalse(r.json()['confirmed'])
+        with transaction(self.path) as db:db.execute("UPDATE leads SET version=version+1 WHERE id='L1'")
+        r=self.owner.put('/api/jobs/J1/plan',json=self.plan(version=2,auto_confirm=True))
+        self.assertEqual(r.status_code,200,r.text);self.assertFalse(r.json()['confirmed'])
+        self.assertIn('Client details changed',r.json()['confirmation_pending'][0])
+
+    def test_one_save_retains_driver_and_duration_requirements(self):
+        with transaction(self.path) as db:db.execute('UPDATE employees SET driver_verified=0')
+        r=self.owner.put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True))
+        self.assertEqual(r.status_code,200,r.text);self.assertFalse(r.json()['confirmed'])
+        self.assertIn('verified driver',r.json()['confirmation_pending'][0])
+        before=self.snapshot()
+        r=self.owner.put('/api/jobs/J1/plan',json=self.plan(version=2,auto_confirm=True,end_at='2026-11-15T15:00:00+00:00'))
+        self.assertEqual(r.status_code,422,r.text);self.assertEqual(before,self.snapshot())
+
+    def test_one_save_does_not_bypass_access_conflicts_or_stale_versions(self):
+        self.assertEqual(self.staff('crew').put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True)).status_code,403)
+        self.assertEqual(self.owner.put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True,version=0)).status_code,409)
+        with transaction(self.path) as db:
+            insert(db,'time_off_requests',dict(id='OFF',employee_id='E1',start_date='2026-11-15',end_date='2026-11-15',status='Approved',requested_by='crew',requested_at=now()))
+        before=self.snapshot()
+        self.assertEqual(self.owner.put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True)).status_code,409)
+        self.assertEqual(before,self.snapshot())
+
+    def test_one_save_keeps_in_progress_plan_validation_strict(self):
+        with transaction(self.path) as db:db.execute("UPDATE jobs SET status='In progress' WHERE id='J1'")
+        before=self.snapshot()
+        r=self.owner.put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True,crew_ids=['E1']))
+        self.assertEqual(r.status_code,422,r.text);self.assertEqual(before,self.snapshot())
+        r=self.owner.put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True))
+        self.assertEqual(r.status_code,200,r.text);self.assertEqual(r.json()['status'],'In progress')
+        self.assertTrue(r.json()['plan_reviewed']);self.assertFalse(r.json()['confirmed'])

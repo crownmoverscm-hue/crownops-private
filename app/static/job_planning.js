@@ -35,14 +35,13 @@ async function openJobPlan(id,focus=''){
  const attention=issues.length?'<div class="callout orange jp-attention"><strong>Finish the job setup</strong><div class="row wrap">'+issues.map(issue=>'<button type="button" data-plan="fix" data-target="'+h(jpTarget(issue))+'">'+h(issue)+'</button>').join('')+'</div></div>':'<div class="callout teal"><strong>Job setup is ready</strong>Review or change the assignments below.</div>';
  const section=(kind,title,selected)=>'<section id="jp-'+kind+'" class="jp-section"><div class="row wrap"><h3 class="grow">'+title+'</h3><span id="jp-count-'+kind+'" class="pill blue">'+selected.length+' selected</span><button type="button" data-plan="focus" data-target="'+kind+'">Choose '+title.toLowerCase()+'</button></div><label class="jp-search-label" for="jp-search-'+kind+'">Search '+title.toLowerCase()+'</label><input type="search" id="jp-search-'+kind+'" data-plan-search="'+kind+'" placeholder="Search by name or availability"><div id="jp-options-'+kind+'" class="jp-options">'+jpResourceList(kind,selected)+'</div>'+(S.user.role!=='crew'?'<button type="button" data-plan="setup" data-target="'+kind+'">'+(kind==='crew'?'Employee setup & availability':'Truck setup & availability')+'</button>':'<p class="tiny muted">An owner can complete setup for unavailable resources.</p>')+'</section>';
  const notes=j.status==='Confirmed'?j.notes.replace('Accepted estimate - awaiting deposit / booking confirmation. ',''):j.notes;
- showModal('Assign crew, trucks & confirm',attention+'<form id="job-plan-form" data-job-plan><input type="hidden" name="job_id" value="'+h(id)+'">'+
+ showModal('Assign crew & trucks',attention+'<form id="job-plan-form" data-job-plan><input type="hidden" name="job_id" value="'+h(id)+'">'+
   section('crew','Crew',j.crew_ids)+section('trucks','Trucks',j.truck_ids)+
   '<section id="jp-timing" class="jp-section"><h3>Timing & service</h3><div class="grid2">'+field('title','Job title',j.title,'text','required')+
   field('start_at','Start · Montréal time',local(j.start_at),'datetime-local','required')+field('end_at','End · Montréal time',local(j.end_at),'datetime-local','required')+
   select('quote_id','Accepted estimate',[['','No accepted estimate linked'],...data.accepted_quotes.map(q=>[q.id,'Revision '+q.revision])],j.quote_id||'')+'</div><p id="jp-availability" class="tiny muted" role="status"></p></section>'+
-  '<section id="jp-route" class="jp-section"><h3>Locations · in service order</h3>'+routeEditor(j.route_stops||[])+'</section><details class="jp-section"><summary>Crew instructions</summary>'+textArea('notes','Crew instructions',notes,4)+'</details>'+jpHistory()+'</form><p class="tiny muted">Changes are recorded under your account. Save each assignment as you add it. Use Save & confirm when the crew, truck and job plan are complete.</p>',
-  '<button type="button" data-plan="back" data-id="'+h(id)+'">Back to move</button><button type="submit" form="job-plan-form" class="btn-soft" value="save">Save plan</button>'+
-  (j.status!=='In progress'?'<button type="submit" form="job-plan-form" class="btn-primary" value="confirm">Save & confirm</button>':''),true);
+  '<section id="jp-route" class="jp-section"><h3>Locations · in service order</h3>'+routeEditor(j.route_stops||[])+'</section><details class="jp-section"><summary>Crew instructions</summary>'+textArea('notes','Crew instructions',notes,4)+'</details>'+jpHistory()+'</form><p class="tiny muted">Save at any time. The plan is confirmed automatically when the booking requirements are complete. Remaining setup stays under Needs attention. Changes are recorded under your account.</p>',
+  '<button type="button" data-plan="back" data-id="'+h(id)+'">Back to move</button><button type="submit" form="job-plan-form" class="btn-primary">Save</button>',true);
  const draft=JP.drafts[id],form=document.getElementById('job-plan-form');
  if(draft&&draft.version===j.version){
   for(const [name,value] of Object.entries(draft.fields))if(form.elements[name]&&!['crew_ids','truck_ids','job_id'].includes(name))form.elements[name].value=value;
@@ -107,14 +106,14 @@ document.addEventListener('change',e=>{
 });
 document.addEventListener('submit',async e=>{
  const form=e.target.closest('form[data-job-plan]');if(!form)return;e.preventDefault();if(JP.busy)return;
- const confirmPlan=e.submitter?.value==='confirm',data=Object.fromEntries(new FormData(form)),id=data.job_id;delete data.job_id;
- data.version=JP.data.job.version;data.confirm=confirmPlan;
+ const data=Object.fromEntries(new FormData(form)),id=data.job_id;delete data.job_id;
+ data.version=JP.data.job.version;data.auto_confirm=true;
  data.crew_ids=[...form.querySelectorAll('[name=crew_ids]:checked')].map(x=>x.value);
  data.truck_ids=[...form.querySelectorAll('[name=truck_ids]:checked')].map(x=>x.value);
  data.route_stops=readRouteEditor(form);data.stops=data.route_stops.map(r=>r.address);
  JP.busy=true;const buttons=[...modal.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);
  try{
-  await api('/jobs/'+encodeURIComponent(id)+'/plan',{method:'PUT',data});delete JP.drafts[id];toast(confirmPlan?'Job plan confirmed.':'Assignments saved. You can add the next team member later.');
+  const result=await api('/jobs/'+encodeURIComponent(id)+'/plan',{method:'PUT',data});delete JP.drafts[id];toast(result.confirmed?'Saved. Booking plan confirmed.':result.plan_reviewed?'Saved.':'Saved. Remaining setup is shown under Needs attention.');
   await navigate('schedule');await openJob(id);
  }catch(ex){modalError(ex);}finally{JP.busy=false;buttons.filter(b=>b.isConnected).forEach(b=>b.disabled=false);}
 });

@@ -914,7 +914,7 @@ def create_app(database_path=None):
                 require_hos_dispatch_verification(db,jid)
                 from .security import check_preuse
                 check_preuse(db,jid)
-                if j.get('plan_review_required'):raise HTTPException(409,'Finish and confirm the job plan before starting. Saved individual assignments are kept.')
+                if j.get('plan_review_required'):raise HTTPException(409,'Finish the remaining job setup and save before starting. Saved individual assignments are kept.')
             if u['role']=='crew' and not can_plan_jobs(db,u) and status not in ('In progress','Completed'):
                 raise HTTPException(403,'Crew can only start or complete assigned confirmed jobs.')
             if u['role']!='crew':require_planner(db,u)
@@ -946,6 +946,8 @@ def create_app(database_path=None):
             if data.get('version')!=j['version']:raise HTTPException(409,'Job changed. Refresh before editing.')
             note=bounded(data.get('reason',''),'Planning change reason',3000)
             confirm_requested=data.get('confirm') is True
+            auto_confirm=data.get('auto_confirm') is True
+            confirmation_pending=[]
             before={k:j[k] for k in ('title','quote_id','start_at','end_at','notes','status')}
             before['stops']=json.loads(j['stops_json'])
             before['route_stops']=job_route(j,get_lead(db,j['lead_id']))
@@ -967,6 +969,15 @@ def create_app(database_path=None):
                     raise HTTPException(422,'Reserve the full high-end service duration plus base travel. Shorten only by revising the estimate.')
             if validate_final:
                 check_confirmation(db,get_lead(db,j['lead_id']),q,crew,trucks,start,end,exception,u,True)
+            elif auto_confirm:
+                # One Save keeps partial assignments and confirms a complete plan in
+                # this same transaction. Invalid resources still fail above.
+                try:
+                    check_confirmation(db,get_lead(db,j['lead_id']),q,crew,trucks,start,end,exception,u,True)
+                except HTTPException as ex:
+                    if ex.status_code not in (409,422):raise
+                    confirmation_pending.append(str(ex.detail))
+                else:validate_final=True
             stops=data.get('stops',[])
             if not isinstance(stops,list) or len(stops)>30:raise HTTPException(422,'Invalid stop list.')
             stops=[bounded(v,'Stop address',1000) for v in stops]
@@ -980,13 +991,14 @@ def create_app(database_path=None):
             db.execute('DELETE FROM assignments WHERE job_id=?',(jid,))
             for typ,ids in [('employee',crew),('vehicle',trucks)]:
                 for rid in ids:insert(db,'assignments',dict(job_id=jid,resource_type=typ,resource_id=rid))
-            next_status='Confirmed' if confirm_requested and j['status']=='Tentative' else j['status']
+            confirmed=confirm_requested or (auto_confirm and validate_final and j['status']!='In progress')
+            next_status='Confirmed' if confirmed and j['status']=='Tentative' else j['status']
             reviewed=int(validate_final)
             db.execute('UPDATE jobs SET stops_json=?,route_stops_json=?,status=?,capacity_reviewed=?,plan_review_required=? WHERE id=?',(dumps(stops),dumps(route),next_status,reviewed,int(not validate_final),jid))
             db.execute("UPDATE outbound_messages SET status='Cancelled',error='Plan changed; review reminders' WHERE job_id=? AND category='Preparation' AND status IN ('Draft','Approved')",(jid,))
             after={'title':title,'quote_id':qid,'start_at':start,'end_at':end,'notes':notes,'status':next_status,'stops':stops,'route_stops':route,'crew_ids':sorted(crew),'truck_ids':sorted(trucks)}
-            audit(db,u['id'],'Job plan confirmed' if confirm_requested else 'Job plan revised','jobs',jid,{'before':before,'after':after,'note':note,'changed_fields':[k for k in before if before[k]!=after[k]],'confirmation_mode':'save-and-confirm' if confirm_requested else 'save'})
-        return {'ok':True,'status':next_status,'confirmed':confirm_requested,'status_unchanged':j['status']}
+            audit(db,u['id'],'Job plan confirmed' if confirmed else 'Job plan revised','jobs',jid,{'before':before,'after':after,'note':note,'changed_fields':[k for k in before if before[k]!=after[k]],'confirmation_mode':'save-auto' if auto_confirm else 'save-and-confirm' if confirm_requested else 'save'})
+        return {'ok':True,'status':next_status,'confirmed':confirmed,'plan_reviewed':bool(reviewed),'confirmation_pending':confirmation_pending,'status_unchanged':j['status']}
 
     @app.get('/api/jobs/{jid}/planning')
     def job_planning(jid:str,start_at:str='',end_at:str='',u=Depends(auth)):
