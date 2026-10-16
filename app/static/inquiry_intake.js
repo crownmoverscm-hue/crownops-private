@@ -73,10 +73,12 @@ const inquirySetDetails=qeSetDetails;
 qeSetDetails=function(lead={},readonly=false){inquirySetDetails(lead,readonly);inquiryQuoteSummary(lead);};
 function inquiryQuoteSummary(lead=CRM.currentLead){
  const box=document.getElementById('inquiry-quote-summary');if(!box)return;
- if(!lead?.id){box.innerHTML='<p class="small muted">Select an inquiry to use its photos and calculator details.</p>';return;}
+ const photoFields=field('photo_link','Client photo / file link · Google Drive, Dropbox or another HTTPS link',lead?.photo_link||'','url','maxlength="3000" placeholder="https://drive.google.com/..."')+'<div data-photo-link-preview>'+inquiryFolderButton(lead?.photo_link)+'</div><p class="tiny muted">Saved with this moving file when you save the draft. Assigned crew can open the link. The folder’s sharing permissions still apply.</p>';
+ if(!lead?.id){box.innerHTML='<h3>Client photos & files</h3>'+photoFields+'<p class="small muted">Save the draft to upload photos to its moving file.</p>';return;}
  const m=inquiryMeta(lead);
- box.innerHTML='<h3>Inquiry photos & calculator</h3><div class="row wrap"><button type="button" data-inquiry-action="photos" data-id="'+h(lead.id)+'">View inquiry photos</button>'+(inquiryPhotoLink(lead.photo_link)?'<a class="button-link" href="'+h(inquiryPhotoLink(lead.photo_link))+'" target="_blank" rel="noopener noreferrer">Open photo folder</a>':'')+'</div><p class="small">'+h([...(m.additional_services||[]),...(m.heavy_items||[]),m.service_details].filter(Boolean).join(' · ')||'Review the recorded inventory and access above.')+'</p>'+field('calculator_drive_minutes','Driving time between stops · minutes',m.between_stops_minutes||'','number','min="0" max="1440"')+'<button type="button" data-inquiry-action="suggest">Preview calculator suggestion</button><div id="inquiry-suggestion" aria-live="polite"></div><p class="tiny muted">Uses your residential calculator’s labour rules. Current CrownOps rates remain editable. Photos and folder links require staff review.</p>';
+ box.innerHTML='<h3>Inquiry photos & calculator</h3>'+photoFields+'<div class="row wrap"><button type="button" data-inquiry-action="photos" data-id="'+h(lead.id)+'">View inquiry photos</button></div><p class="small">'+h([...(m.additional_services||[]),...(m.heavy_items||[]),m.service_details].filter(Boolean).join(' · ')||'Review the recorded inventory and access above.')+'</p>'+field('calculator_drive_minutes','Driving time between stops · minutes',m.between_stops_minutes||'','number','min="0" max="1440"')+'<button type="button" data-inquiry-action="suggest">Preview calculator suggestion</button><div id="inquiry-suggestion" aria-live="polite"></div><p class="tiny muted">Uses your residential calculator’s labour rules. Current CrownOps rates remain editable. Photos and folder links require staff review.</p>';
 }
+function inquiryFolderButton(value){const link=inquiryPhotoLink(value);return link?'<a class="button-link" href="'+h(link)+'" target="_blank" rel="noopener noreferrer">Open client photo / file link</a>':'';}
 let inquirySuggestion=null;
 document.addEventListener('click',async e=>{
  const b=e.target.closest('[data-inquiry-action]');if(!b)return;e.preventDefault();
@@ -84,7 +86,9 @@ document.addEventListener('click',async e=>{
   const a=b.dataset.inquiryAction,id=b.dataset.id;
   if(a==='estimate')return crmQuoteBuilder(id);
   if(a==='photos'){inquiryPhotoReturn={state:modalSnapshot(),label:document.getElementById('crm-quote-form')?'Back to estimate':'Back to inquiry'};return clientFiles(id);}
-  if(a==='return'){const saved=inquiryPhotoReturn;inquiryPhotoReturn=null;if(saved){const state=saved.state;modal.innerHTML=state.html;modal.style.width=state.width;S.modalContext=state.context;if(state.root)modal.dataset.moveRoot=state.root;else delete modal.dataset.moveRoot;requestAnimationFrame(()=>{const body=modal.querySelector('.modal-body');if(body)body.scrollTop=state.scroll.body;modal.scrollTop=state.scroll.dialog;});}return;}
+  if(a==='return'){const saved=inquiryPhotoReturn;inquiryPhotoReturn=null;if(saved){const state=saved.state;modal.innerHTML=state.html;modal.style.width=state.width;S.modalContext=state.context;if(state.root)modal.dataset.moveRoot=state.root;else delete modal.dataset.moveRoot;
+   const form=document.getElementById('crm-quote-form');if(saved.updatedLink!==undefined&&form){if(CRM.currentLead)CRM.currentLead.photo_link=saved.updatedLink;form.elements.photo_link.value=saved.updatedLink;form.elements.photo_link.dispatchEvent(new Event('input',{bubbles:true}));}
+   requestAnimationFrame(()=>{const body=modal.querySelector('.modal-body');if(body)body.scrollTop=state.scroll.body;modal.scrollTop=state.scroll.dialog;});}return;}
   const f=document.getElementById('crm-quote-form');if(!f)return;
   if(a==='suggest'){
    const lead=CRM.currentLead||{},meta={...inquiryMeta(lead),between_stops_minutes:f.elements.calculator_drive_minutes.value};
@@ -110,15 +114,31 @@ document.addEventListener('click',async e=>{
  }catch(ex){modalError(ex);}
 });
 document.addEventListener('input',e=>{if(e.target.name==='calculator_drive_minutes'){inquirySuggestion=null;const box=document.getElementById('inquiry-suggestion');if(box)box.innerHTML='';}});
+document.addEventListener('input',e=>{if(e.target.name==='photo_link'){const box=e.target.closest('form')?.querySelector('[data-photo-link-preview]');if(box)box.innerHTML=inquiryFolderButton(e.target.value);}});
 const inquiryQuoteData=crmQuoteData;
-crmQuoteData=function(){const d=inquiryQuoteData();if(!d)return d;const f=document.getElementById('crm-quote-form');delete d.calculator_drive_minutes;if(f?.dataset.calculatorBasis)d.calculator_basis=JSON.parse(f.dataset.calculatorBasis);return d;};
+crmQuoteData=function(){const d=inquiryQuoteData();if(!d)return d;if(d.photo_link?.trim()&&!inquiryPhotoLink(d.photo_link))throw Error('Use a complete HTTPS photo or file link.');const f=document.getElementById('crm-quote-form');delete d.calculator_drive_minutes;if(f?.dataset.calculatorBasis)d.calculator_basis=JSON.parse(f.dataset.calculatorBasis);return d;};
 
 let inquiryPhotoReturn=null;
 document.addEventListener('click',e=>{if(e.target.closest('[data-action="close"],[data-action="logout"],[data-page]'))inquiryPhotoReturn=null;},true);
 const inquiryClientFiles=clientFiles;
 clientFiles=async function(id){
  await inquiryClientFiles(id);
- const link=inquiryPhotoLink(X.formContext?.l?.photo_link);
- if(link)modal.querySelector('.modal-body')?.insertAdjacentHTML('afterbegin','<p><a class="button-link" href="'+h(link)+'" target="_blank" rel="noopener noreferrer">Open photo folder</a></p>');
+ if(may(['owner','sales'])){
+  const lead=await api('/leads/'+encodeURIComponent(id));
+  modal.querySelector('.modal-body')?.insertAdjacentHTML('afterbegin','<section class="panel panel-body"><h3>Client photo / file link</h3><form data-inquiry-photo-link data-lead-id="'+h(id)+'" data-previous-link="'+h(lead.photo_link||'')+'">'+field('photo_link','Paste a Google Drive, Dropbox or other HTTPS link',lead.photo_link||'','url','maxlength="3000" placeholder="https://drive.google.com/..."')+'<div class="row wrap"><button type="submit">Save link</button><span data-photo-link-preview>'+inquiryFolderButton(lead.photo_link)+'</span></div><p class="tiny muted">Available to this moving file’s assigned crew. The folder’s sharing permissions still apply. Clear the field and save to remove the link.</p></form></section>');
+ }else{const link=inquiryFolderButton(X.formContext?.l?.photo_link);if(link)modal.querySelector('.modal-body')?.insertAdjacentHTML('afterbegin','<p>'+link+'</p>');}
  if(inquiryPhotoReturn)modal.querySelector('.modal-foot')?.insertAdjacentHTML('afterbegin','<button type="button" data-inquiry-action="return">'+h(inquiryPhotoReturn.label)+'</button>');
 };
+document.addEventListener('submit',async e=>{
+ const f=e.target.closest('form[data-inquiry-photo-link]');if(!f)return;e.preventDefault();
+ const button=f.querySelector('button[type=submit]');if(button.disabled)return;
+ try{
+  const value=f.elements.photo_link.value.trim();if(value&&!inquiryPhotoLink(value))throw Error('Use a complete HTTPS photo or file link.');
+  button.disabled=true;
+  await api('/crm/services/'+encodeURIComponent(f.dataset.leadId)+'/photo-link',{method:'PATCH',data:{expected_link:f.dataset.previousLink,photo_link:value}});
+  f.dataset.previousLink=value;
+  if(inquiryPhotoReturn)inquiryPhotoReturn.updatedLink=value;
+  if(CRM.currentLead?.id===f.dataset.leadId)CRM.currentLead.photo_link=value;
+  toast(value?'Photo link saved for the assigned crew.':'Photo link removed.');
+ }catch(ex){modalError(ex);}finally{if(button.isConnected)button.disabled=false;}
+});

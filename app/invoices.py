@@ -55,7 +55,7 @@ def validate_terms(data):
     if not isinstance(cat,list) or len(cat)>100:raise ValueError('Invalid approved material/extra catalogue.')
     out['catalogue']=[];seen=set()
     for item in cat:
-        code=short(item.get('code',''),'Item code',60);name=short(item.get('name',''),'Item name',150)
+        code=short(item.get('code',''),'Item code',60);name=short(item.get('name',''),'Item name',160)
         if not re.fullmatch(r'[A-Za-z0-9_-]+',code) or code in seen or not name:raise ValueError('Catalogue item codes must be unique.')
         seen.add(code)
         out['catalogue'].append({'code':code,'name':name,'unit_cents':cents(number(item.get('unit_price'),'Unit price',0,10000))})

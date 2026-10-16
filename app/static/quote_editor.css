@@ -7,4 +7,7 @@
 #qe-service-choice:not(:empty){margin-top:14px}#qe-new-contact:not([hidden]){margin-top:12px}.qe-details{margin-bottom:16px}
 .qe-details input[readonly],.qe-details textarea[readonly]{background:#f4f6fa;color:#596b83}.crm-quote-title{margin-top:14px}
 .qe-template span,.qe-template strong{max-width:100%;overflow-wrap:anywhere}
+#crm-material-fields .qe-material{display:grid;gap:10px;border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:10px;min-width:0}.qe-material-fields{display:grid;grid-template-columns:minmax(0,2fr) minmax(65px,1fr) minmax(85px,1fr);gap:10px}.qe-material-fields label{display:grid;gap:5px;font-size:12px;color:var(--muted);min-width:0}.qe-material-fields input{width:100%;min-width:0}.qe-material>button{justify-self:start}.qe-material .grow{min-width:0}#crm-transport-fields [hidden]{display:none!important}
+.qe-material>.row>.checkbox-label{flex:1 1 145px}.qe-material>.row>button{flex:0 0 auto;width:auto;min-width:0}[data-inquiry-photo-link]>.row{margin-top:10px}
+@media(max-width:600px){.qe-material-fields{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.qe-material-fields label:first-child{grid-column:1/-1}#crm-material-fields>.row{align-items:flex-start;flex-direction:column}#crm-material-fields>.row>button{width:100%}.qe-material>.row{gap:8px}.qe-material>.row>.checkbox-label{flex-basis:100%}}
 @media(max-width:760px){.qe-templates{grid-template-columns:minmax(0,1fr)}.qe-template{padding:18px}#qe-client-search-box .row>button{width:100%}.qe-client-result{padding:12px}.qe-client .row{align-items:flex-start}}

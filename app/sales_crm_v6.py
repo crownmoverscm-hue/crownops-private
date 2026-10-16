@@ -392,14 +392,24 @@ def rate_for(db,day,movers):
     except Exception as e:raise HTTPException(422,str(e))
 
 def materials(db,requested):
+    if requested is None:requested=[]
+    if not isinstance(requested,list) or len(requested)>100:raise HTTPException(422,'Use up to 100 material lines.')
     cat={r["code"]:r for r in rows(db,"SELECT * FROM material_catalog WHERE active=1")}
-    out=[];total=0
+    out=[];total=0;seen=set()
     for raw in requested or []:
-        qty=Decimal(str(raw.get("qty",0) or 0))
+        if not isinstance(raw,dict):raise HTTPException(422,'Review the material lines.')
+        try:qty=number(raw.get('qty',0),'Material quantity',0,10000)
+        except ValueError as ex:raise HTTPException(422,str(ex))
+        if qty!=qty.to_integral():raise HTTPException(422,'Material quantities must be whole units.')
         if qty<=0:continue
-        code=str(raw.get("code","")).strip();item=cat.get(code)
-        name=item["name"] if item else str(raw.get("name") or "Other material")[:160]
-        unit=int(item["sell_cents"]) if item else money(raw.get("unit_price",0))
+        code=str(raw.get('code') or uid('QUOTE_MAT')).strip();item=cat.get(code)
+        if len(code)>60 or not re.fullmatch(r'[A-Za-z0-9_-]+',code) or code in seen:raise HTTPException(422,'Each material line needs a unique simple code under 60 characters.')
+        seen.add(code)
+        name=str(raw.get('name') or (item or {}).get('name') or '').strip()
+        if not name or len(name)>160:raise HTTPException(422,'Enter a material name under 160 characters.')
+        price=raw.get('unit_price',Decimal(item['sell_cents'])/100 if item else None)
+        try:unit=money(number(price,'Material selling price',0,10000))
+        except ValueError as ex:raise HTTPException(422,str(ex))
         line=int((Decimal(unit)*qty).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
         out.append({"code":code,"name":name,"qty":float(qty),"unit_cents":unit,"total_cents":line});total+=line
     return out,total
@@ -411,14 +421,20 @@ def calculate(db,data):
         tier=str(data.get("junk_tier") or "quarter")
         if tier not in JUNK:raise HTTPException(422,"Choose a valid junk-removal tier.")
         name,base=JUNK[tier];units=int(number(data.get("junk_extra_half_hours",0),"Extra labour units",0,50))
-        extra=JUNK_LABOUR*units;total=base+extra
+        mats,mat_total=materials(db,data.get('materials',[]))
+        other=number(data.get('other_amount',0),'Other agreed charges',0,100000);discount=number(data.get('discount_amount',0),'Discount',0,100000)
+        extra=JUNK_LABOUR*units;total=base+extra+Decimal(mat_total)/100+other-discount
+        if total<0:raise HTTPException(422,'Discount exceeds the estimate.')
         junk_names={"single":"Disposition d'un article","quarter":"1/4 camion - env. 5 pi","half":"1/2 camion - env. 10 pi","three_quarter":"3/4 camion - env. 15 pi","full":"Camion complet - conteneur 20 pi"} if language=="French" else {}
         lines=[{"name":junk_names.get(tier,name),"qty":1,"unit_cents":money(base),"total_cents":money(base)}]
         if units:lines.append({"name":"Main-d'oeuvre supplementaire - 30 minutes / 2 demenageurs" if language=="French" else "Additional on-site labour - 30 minutes / 2 crew","qty":units,"unit_cents":money(JUNK_LABOUR),"total_cents":money(extra)})
+        lines.extend(mats)
+        if other:lines.append({'name':'Autres frais convenus' if language=='French' else 'Other agreed charges','qty':1,'unit_cents':money(other),'total_cents':money(other)})
+        if discount:lines.append({'name':'Rabais approuve' if language=='French' else 'Approved discount','qty':1,'unit_cents':-money(discount),'total_cents':-money(discount)})
         return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":0,
           "service_low":0,"service_high":0,"minimum_hours":0,"transport_hours":0,"transport_cents":0,
-          "fuel_cents":0,"materials_cents":0,"other_cents":0,"discount_cents":0,"service_low_cents":money(base),
-          "service_high_cents":money(base),"low_cents":money(total),"high_cents":money(total),"movers":2,"trucks":1,
+          "fuel_cents":0,"materials_cents":mat_total,"materials":mats,"other_cents":money(other),"discount_cents":money(discount),"service_low_cents":money(base+extra),
+          "service_high_cents":money(base+extra),"low_cents":money(total),"high_cents":money(total),"movers":2,"trucks":1,
           "season":"Junk removal pricing","line_items":lines,
           "tax_note":"Before applicable taxes. Final junk price is based on actual truck space and approved extra labour."}
     day=str(data.get("move_date") or "")
@@ -449,8 +465,11 @@ def calculate(db,data):
         show_transport_hours=transport_hours
     km=number(data.get("distance_km",0),"Actual round-trip distance km",0,10000);km_rate=number(data.get("distance_rate",LONG_KM),"Distance rate",0,20)
     adjusted_km=km*LONG_DISTANCE_KM_BUFFER if service=="Long Distance" else km
-    fuel=adjusted_km*km_rate*trucks if service=="Long Distance" else LOCAL_FUEL*trucks
-    mats,mat_total=materials(db,data.get("materials") or [])
+    local_fuel=data.get('local_fuel_per_truck')
+    try:local_fuel=number(LOCAL_FUEL if local_fuel in (None,'') else local_fuel,'Local fuel fee per truck',0,10000)
+    except ValueError as ex:raise HTTPException(422,str(ex))
+    fuel=adjusted_km*km_rate*trucks if service=="Long Distance" else local_fuel*trucks
+    mats,mat_total=materials(db,data.get("materials",[]))
     hos_plan=long_distance_hos_plan(transport_hours,high) if service=="Long Distance" else None
     other=number(data.get("other_amount",0),"Other agreed charges",0,100000);discount=number(data.get("discount_amount",0),"Discount",0,100000)
     slo=rate*low;shi=rate*high;fixed_total=transport+fuel+Decimal(mat_total)/100+other
@@ -466,7 +485,7 @@ def calculate(db,data):
     if service=="Long Distance":
         lines.append({"name":"Carburant / distance longue distance" if fr else "Long-distance fuel / distance fee","qty":1,"unit_cents":money(fuel),"total_cents":money(fuel),"note":(f"{float(km):g} km aller-retour + 5 % = {float(adjusted_km):g} km ajustes a {float(km_rate):.2f} $ CA/km x {trucks} camion(s)." if fr else f"{float(km):g} actual round-trip km + 5% = {float(adjusted_km):g} adjusted km at CAD {float(km_rate):.2f}/km x {trucks} truck(s).")})
     else:
-        lines.append({"name":"Frais de carburant" if fr else "Fuel fee","qty":trucks,"unit_cents":money(LOCAL_FUEL),"total_cents":money(fuel),"note":"Frais de carburant local." if fr else "Local fuel charge."})
+        lines.append({"name":"Frais de carburant" if fr else "Fuel fee","qty":trucks,"unit_cents":money(local_fuel),"total_cents":money(fuel),"note":"Frais de carburant local." if fr else "Local fuel charge."})
     lines.extend(mats)
     if other:lines.append({"name":"Autres frais convenus" if fr else "Other agreed charges","qty":1,"unit_cents":money(other),"total_cents":money(other)})
     if discount:lines.append({"name":"Rabais approuve" if fr else "Approved discount","qty":1,"unit_cents":-money(discount),"total_cents":-money(discount)})
@@ -476,7 +495,7 @@ def calculate(db,data):
       "transport_multiplier":float(LONG_TRANSPORT_MULTIPLIER) if service=="Long Distance" and fixed in (None,"") and transport_hours>=1 else 1.0,
       "fuel_cents":money(fuel),"truck_fee_cents":money(EXTRA_TRUCK*max(0,trucks-1)),"distance_km":float(km),
       "adjusted_distance_km":float(adjusted_km),"distance_buffer_percent":5.0 if service=="Long Distance" else 0.0,
-      "distance_rate_cents":money(km_rate),"materials_cents":mat_total,"other_cents":money(other),"discount_cents":money(discount),
+      "distance_rate_cents":money(km_rate),"local_fuel_per_truck":float(local_fuel),"materials":mats,"materials_cents":mat_total,"other_cents":money(other),"discount_cents":money(discount),
       "service_low_cents":money(slo),"service_high_cents":money(shi),"low_cents":money(tlo),"high_cents":money(thi),
       "movers":movers,"trucks":trucks,"season":source,"line_items":lines,"small_afternoon_job":small_afternoon,
       "hos_plan":hos_plan,
@@ -676,6 +695,20 @@ def register_sales_crm_v6(app,path,auth,public_url):
         require_role(u,SALES)
         with closing(connect(path)) as db:return calculate(db,data)
 
+    @app.patch('/api/crm/services/{lid}/photo-link')
+    def update_photo_link(lid:str,data:dict,u=Depends(auth)):
+        require_role(u,SALES)
+        link=photo_link(data.get('photo_link',''))
+        expected=photo_link(data.get('expected_link'))
+        with transaction(path) as db:
+            lead=one(db,'SELECT * FROM leads WHERE id=?',(lid,))
+            if not lead:raise HTTPException(404,'Moving file not found.')
+            if (lead.get('photo_link') or '')!=expected:raise HTTPException(409,'The photo link changed. Reopen the photos before saving.')
+            # A reference link does not revise agreed scope, prices or acceptance.
+            db.execute('UPDATE leads SET photo_link=?,updated_at=? WHERE id=?',(link,now(),lid))
+            audit(db,u['id'],'Client photo link updated','leads',lid,{'has_link':bool(link)})
+        return {'photo_link':link}
+
     @app.post("/api/crm/quotes")
     def create_quote(data:dict,u=Depends(auth)):
         require_role(u,SALES);lid=str(data.get("lead_id") or "")
@@ -689,6 +722,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
                     if json.loads(prior['inputs_json']).get('draft_request_hash')!=request_hash:raise HTTPException(409,"This draft was already saved. Reopen it from Estimates before making another revision.")
                     return payload(prior)
             result=calculate(db,data)
+            link=photo_link(data['photo_link']) if 'photo_link' in data else None
             title=str(data.get("quote_title") or "").strip();note=str(data.get("client_note") or "").strip()
             if len(title)>160 or len(note)>4000:raise HTTPException(422,"Use up to 160 characters for the quote title and 4,000 for the client note.")
             if lid:
@@ -700,13 +734,23 @@ def register_sales_crm_v6(app,path,auth,public_url):
                     if not account or account['id']!=data['client_id']:raise HTTPException(409,"This inquiry belongs to a different client. Select the correct inquiry.")
             else:l=template_service(db,data,u);lid=l['id']
             day=str(data.get("move_date") or l["move_date"])
-            if day and day!=l["move_date"]:
-                db.execute("UPDATE leads SET move_date=?,version=version+1,updated_at=? WHERE id=?",(day,now(),lid));l=one(db,"SELECT * FROM leads WHERE id=?",(lid,))
+            updates={}
+            if day and day!=l['move_date']:updates['move_date']=day
+            if link is not None and link!=l.get('photo_link',''):
+                if data.get('lead_id') and data.get('lead_version') is None:raise HTTPException(409,'Reopen the quote before changing its photo link.')
+                updates['photo_link']=link
+            if updates:
+                db.execute('UPDATE leads SET '+','.join(k+'=?' for k in updates)+',version=version+1,updated_at=? WHERE id=?',list(updates.values())+[now(),lid])
+                audit(db,u['id'],'Moving file updated from quote','leads',lid,{'fields':list(updates)})
+                l=one(db,'SELECT * FROM leads WHERE id=?',(lid,))
             p=one(db,"SELECT * FROM pricing_versions ORDER BY approved DESC,created_at DESC LIMIT 1")
             if not p:raise HTTPException(422,"A pricing snapshot is required for audit history.")
             rev=db.execute("SELECT COALESCE(MAX(revision),0)+1 FROM quotes WHERE lead_id=?",(lid,)).fetchone()[0]
             inp={k:v for k,v in data.items() if k not in ('new_client','service_details','draft_request_hash')}
             inp.update(lead_id=lid,lead_version=l['version'],quote_title=title,client_note=note,draft_request_hash=request_hash)
+            inp['materials']=[{'code':m['code'],'name':m['name'],'qty':m['qty'],'unit_price':m['unit_cents']/100} for m in result['materials']]
+            if result['service_type']!='Junk Removal':inp['local_fuel_per_truck']=result['local_fuel_per_truck']
+            if link is not None:inp['photo_link']=link
             inp["deposit_required"]=float(number(data.get("deposit_required",300) or 0,"Deposit",0,100000));inp["limited_liability"]="$0.60/lb per article"
             service=result["service_type"];language=result["language"];template_key=str(inp.get("template_key") or "").strip()
             tmpl=one(db,"SELECT * FROM crm_quote_templates WHERE template_key=? AND active=1",(template_key,))

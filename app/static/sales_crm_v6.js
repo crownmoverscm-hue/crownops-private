@@ -155,6 +155,14 @@ async function crmNewService(cid){
    textArea('inventory','Furniture / inventory','',4)+textArea('heavy_items','Heavy / special items','',3)+
    '</div></form>',btn('close','Cancel')+'<button type="submit" form="crm-new-service" class="btn-primary">Create service & quote</button>',true);
 }
+function crmMaterialRow(m,selected=false,custom=false){
+ const code=m.code||'CUSTOM_'+crypto.randomUUID(),disabled=selected?'':' disabled';
+ return '<div class="crm-material-row qe-material" data-material-code="'+h(code)+'"><div class="row wrap"><label class="checkbox-label grow"><input type="checkbox" class="crm-mat-check" data-code="'+h(code)+'" '+(selected?'checked':'')+'><span>'+h(m.category||'Quote material')+'</span></label>'+(custom?'<button type="button" data-quote-material="remove" class="btn-small">Remove</button>':'')+'</div><div class="qe-material-fields">'+
+ '<label>Material name<input class="crm-mat-name" value="'+h(m.name||'')+'" maxlength="160" required'+disabled+'></label>'+
+ '<label>Quantity<input class="crm-mat-qty" data-code="'+h(code)+'" type="number" min="1" max="10000" step="1" value="'+h(m.qty??1)+'" required'+disabled+'></label>'+
+ '<label>Price each · CAD<input class="crm-mat-price" type="number" min="0" max="10000" step="0.01" value="'+h(m.unit_price??(m.sell_cents!==undefined?m.sell_cents/100:''))+'" required'+disabled+'></label></div>'+
+ (custom&&may(['owner'])?'<button type="button" data-quote-material="catalogue" class="btn-small">Save to Materials for reuse</button>':'')+'</div>';
+}
 async function crmQuoteBuilder(leadId='',options={}){
  const templates=await api('/crm/templates');CRM.templates=templates;
  const firstSetup=await api('/crm/quote-setup?lead_id='+encodeURIComponent(leadId)+'&movers=2');CRM.currentLead=firstSetup.lead;CRM.longDistancePresets=firstSetup.long_distance_presets||[];
@@ -162,10 +170,7 @@ async function crmQuoteBuilder(leadId='',options={}){
  const lang=chosen?.language||(String(lead.language||'English').toLowerCase().startsWith('fr')?'French':'English');
  const type=chosen?.service_type||(['Moving','Packing','Junk Removal','Long Distance'].includes(lead.lead_type)?lead.lead_type:'Moving');
  const template=chosen||templates.find(t=>t.service_type===type&&t.language===lang)||templates[0];
- const materialRows=(firstSetup.materials||[]).map(m=>
-   '<div class="crm-material-row"><label class="checkbox-label"><input type="checkbox" class="crm-mat-check" data-code="'+h(m.code)+'" data-name="'+h(m.name)+'" data-price="'+h(m.sell_cents)+'">'+
-   '<span><strong>'+h(m.name)+'</strong><br><span class="tiny muted">'+crmCash(m.sell_cents)+' · '+h(m.category)+'</span></span></label>'+
-   '<input class="crm-mat-qty" data-code="'+h(m.code)+'" type="number" min="0" step="1" value="1" style="width:85px" disabled></div>').join('');
+ const materialRows=(firstSetup.materials||[]).map(m=>crmMaterialRow(m)).join('');
  showModal('Edit quote · '+h(template?.name||lead.client_name||'New estimate'),
    '<form id="crm-quote-form" data-editor-form="quote"><input type="hidden" name="lead_id" value="'+h(lead.id||'')+'"><div class="quote-layout"><div class="stack">'+
    '<div class="panel panel-body"><div class="eyebrow">1 · SERVICE</div><div class="grid2">'+
@@ -186,17 +191,22 @@ async function crmQuoteBuilder(leadId='',options={}){
    '<label id="crm-small-afternoon-wrap" class="checkbox-label full"><input type="checkbox" name="small_afternoon_job"><span><strong>Small afternoon job</strong><br><span class="tiny muted">Use only for a small local Moving/Packing job. Sets Afternoon 1:00-4:00 PM and a 1.5-hour service minimum.</span></span></label>'+
    field('deposit_required','Deposit required',300,'number','step="0.01" min="0"')+
    '</div></div>'+
-   '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted">Local: transportation hours × team rate, plus $25 per extra truck. Long distance: enter true total driving time from 700 Rue Hodge through the route and back to base. Driving time of 1 hour+ is billed at 1.15×. Gas/distance uses actual round-trip road KM + 5%, then $0.94/km per truck.</p><div class="grid2">'+
+   '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION & FUEL</div>'+select('transport_mode','Travel type',[['local','Local'],['long','Long distance']],type==='Long Distance'?'long':'local')+
+   '<p class="small muted" data-transport-mode="local">Transportation hours × team rate, plus $25 per extra truck, or enter an agreed fixed transportation fee. The local fuel fee below is separate and applies per truck.</p><p class="small muted" data-transport-mode="long">Enter true total driving time from 700 Rue Hodge through the route and back to base. Driving time of 1 hour+ is billed at 1.15×. Fuel/distance uses actual round-trip road KM + 5%, then the rate per km per truck.</p><div class="grid2">'+
+   '<div data-transport-mode="long">'+
    select('distance_preset','Long-distance city preset',[['','Manual / exact route']].concat((firstSetup.long_distance_presets||[]).map(p=>[p.key,p.city+', '+p.province+' · '+p.round_trip_km+' km round trip'])),'')+
+   '</div>'+
    field('transport_hours','True driving / transportation hours',1,'number','step="0.25" min="0"')+
    field('fixed_transport','OR fixed transportation fee','','number','step="0.01" min="0"')+
+   '<div data-transport-mode="local">'+field('local_fuel_per_truck','Local fuel fee · CAD per truck',firstSetup.defaults?.local_fuel_per_truck??35,'number','step="0.01" min="0" max="10000" placeholder="35.00"')+'</div><div data-transport-mode="long">'+
    field('distance_km','Actual round-trip road km',0,'number','step="1" min="0"')+
+   '</div><div data-transport-mode="long">'+
    field('distance_rate','Long-distance rate / km',0.94,'number','step="0.01" min="0"')+
-   '</div></div>'+
+   '</div></div></div>'+
    '<div class="panel panel-body" id="crm-junk-fields" style="display:none"><div class="eyebrow">JUNK REMOVAL</div><div class="grid2">'+
    select('junk_tier','Truck space',[['single','$175 · Single item'],['quarter','$400 · 1/4 truck · approx. 5 ft'],['half','$800 · 1/2 truck · approx. 10 ft'],['three_quarter','$1,200 · 3/4 truck · approx. 15 ft'],['full','$1,600 · Full 20 ft truck']],'quarter')+
    field('junk_extra_half_hours','Extra labour · $80 per 30 min / 2 crew',0,'number','step="1" min="0"')+'</div></div>'+
-   '<div class="panel panel-body"><div class="eyebrow">4 · MATERIALS / PROTECTION</div><p class="small muted">Select only what applies. TV protection is preset at $35. Other prices come from Materials and can be maintained there.</p>'+
+   '<div class="panel panel-body" id="crm-material-fields"><div class="row wrap"><div class="eyebrow grow">4 · MATERIALS / PROTECTION</div><button type="button" data-quote-material="add">Add material</button></div><p class="small muted">Select a catalogue item or add a material. Edit its quantity and selling price for this quote. Owners can save new items to Materials for future quotes.</p>'+
    '<div class="crm-material-list">'+materialRows+'</div><div class="grid2" style="margin-top:14px">'+
    field('other_amount','Other agreed charges',0,'number','step="0.01" min="0"')+field('discount_amount','Approved discount',0,'number','step="0.01" min="0"')+
    '</div></div>'+
@@ -211,8 +221,9 @@ function crmQuoteData(){
  const f=document.getElementById('crm-quote-form');if(!f||!f.reportValidity())return null;
  const d=Object.fromEntries(new FormData(f));d.materials=[];
  d.small_afternoon_job=Boolean(f.elements.small_afternoon_job?.checked);
- document.querySelectorAll('.crm-mat-check:checked').forEach(ch=>{const qty=document.querySelector('.crm-mat-qty[data-code="'+CSS.escape(ch.dataset.code)+'"]');d.materials.push({code:ch.dataset.code,name:ch.dataset.name,qty:Number(qty?.value||1),unit_price:Number(ch.dataset.price||0)/100});});
- for(const k of ['movers','trucks','hourly_rate','hours_low','hours_high','minimum_hours','deposit_required','transport_hours','fixed_transport','distance_km','distance_rate','junk_extra_half_hours','other_amount','discount_amount']){
+ f.querySelectorAll('.crm-mat-check:checked').forEach(ch=>{const row=ch.closest('.qe-material');d.materials.push({code:ch.dataset.code,name:row.querySelector('.crm-mat-name').value.trim(),qty:Number(row.querySelector('.crm-mat-qty').value),unit_price:Number(row.querySelector('.crm-mat-price').value)});});
+ delete d.transport_mode;
+ for(const k of ['movers','trucks','hourly_rate','hours_low','hours_high','minimum_hours','deposit_required','transport_hours','fixed_transport','local_fuel_per_truck','distance_km','distance_rate','junk_extra_half_hours','other_amount','discount_amount']){
    if(d[k]===undefined)continue;
    if(d[k]==='')d[k]=null;else d[k]=Number(d[k]);
  }
@@ -242,6 +253,9 @@ function crmToggleServiceFields(){
  toggle('crm-junk-fields',type!=='Junk Removal');
  toggle('crm-moving-fields',type==='Junk Removal');
  toggle('crm-transport-fields',type==='Junk Removal');
+ const mode=type==='Long Distance'?'long':'local';f.elements.transport_mode.value=mode;
+ document.querySelectorAll('[data-transport-mode]').forEach(el=>{const disabled=type==='Junk Removal'||el.dataset.transportMode!==mode;el.hidden=disabled;el.querySelectorAll('input,select').forEach(x=>x.disabled=disabled);});
+ f.elements.transport_hours.closest('.form-field').querySelector('label').textContent=mode==='long'?'True total driving hours':'Transportation hours';
  const smallWrap=document.getElementById('crm-small-afternoon-wrap'),small=f.elements.small_afternoon_job;
  const smallAllowed=['Moving','Packing'].includes(type);
  if(smallWrap)smallWrap.style.display=smallAllowed?'flex':'none';
@@ -335,9 +349,13 @@ document.addEventListener('input',async e=>{
 });
 
 document.addEventListener('change',async e=>{
- if(e.target.classList.contains('crm-mat-check')){const q=document.querySelector('.crm-mat-qty[data-code="'+CSS.escape(e.target.dataset.code)+'"]');if(q)q.disabled=!e.target.checked;}
+ if(e.target.classList.contains('crm-mat-check'))e.target.closest('.qe-material').querySelectorAll('.qe-material-fields input').forEach(input=>input.disabled=!e.target.checked);
  if(e.target.closest('#crm-quote-form')){
    const f=document.getElementById('crm-quote-form');
+   if(e.target.name==='transport_mode'){
+     f.elements.service_type.value=e.target.value==='long'?'Long Distance':f.elements.service_type.value==='Long Distance'?'Moving':f.elements.service_type.value;
+     f.elements.service_type.dispatchEvent(new Event('change',{bubbles:true}));
+   }
    if(e.target.name==='service_type'){crmToggleServiceFields();const type=e.target.value,lang=f.elements.language.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
    if(e.target.name==='language'){const type=f.elements.service_type.value,lang=e.target.value;const t=CRM.templates.find(x=>x.service_type===type&&x.language===lang);if(t){f.elements.template_key.innerHTML='<option value="'+h(t.template_key)+'">'+h(t.name)+'</option>';}}
    if(e.target.name==='distance_preset'){

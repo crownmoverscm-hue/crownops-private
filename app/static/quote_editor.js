@@ -81,13 +81,43 @@ crmQuoteBuilder=async function(leadId='',options={}){
   if(input.type==='checkbox')input.checked=Boolean(value);else input.value=value??'';
  }
  for(const material of seed.materials||[]){
-  const checkbox=[...f.querySelectorAll('.crm-mat-check')].find(x=>x.dataset.code===material.code);if(!checkbox)continue;
-  checkbox.checked=true;const qty=f.querySelector('.crm-mat-qty[data-code="'+CSS.escape(material.code)+'"]');qty.disabled=false;qty.value=material.qty;
+  const checkbox=[...f.querySelectorAll('.crm-mat-check')].find(x=>x.dataset.code===material.code);
+  const snapshot=options.result?.line_items?.find(x=>x.code===material.code);
+  const m={...material,unit_price:snapshot?snapshot.unit_cents/100:material.unit_price,name:snapshot?.name||material.name};
+  if(!checkbox){f.querySelector('.crm-material-list').insertAdjacentHTML('beforeend',crmMaterialRow(m,true,true));continue;}
+  const row=checkbox.closest('.qe-material');checkbox.checked=true;
+  row.querySelectorAll('.qe-material-fields input').forEach(input=>input.disabled=false);
+  row.querySelector('.crm-mat-qty').value=m.qty;row.querySelector('.crm-mat-name').value=m.name;
+  if(m.unit_price!==undefined)row.querySelector('.crm-mat-price').value=m.unit_price;
  }
  const deposit=f.elements.deposit_required.closest('.form-field');document.querySelector('.qe-quote-info .grid2').append(deposit);f.elements.deposit_required.disabled=false;
  crmToggleServiceFields();crmToggleStartTime();qeUpdateClientCard();
  if(options.result)crmRenderCalc(options.result);
 };
+
+document.addEventListener('click',async e=>{
+ const b=e.target.closest('[data-quote-material]');if(!b)return;e.preventDefault();
+ const f=document.getElementById('crm-quote-form');if(!f)return;
+ try{
+  const action=b.dataset.quoteMaterial,row=b.closest('.qe-material');
+  if(action==='add'){
+   const list=f.querySelector('.crm-material-list');list.insertAdjacentHTML('beforeend',crmMaterialRow({},true,true));
+   list.lastElementChild.querySelector('.crm-mat-name').focus();return;
+  }
+  if(action==='remove'){row.remove();return;}
+  if(action==='catalogue'){
+   const name=row.querySelector('.crm-mat-name'),price=row.querySelector('.crm-mat-price');
+   if(!name.value.trim())throw Error('Enter the material name first.');
+   if(!name.reportValidity()||!price.reportValidity())return;
+   if(!row.querySelector('.crm-mat-check').checked)throw Error('Select this material before saving it to the catalogue.');
+   b.disabled=true;
+   try{
+    await api('/materials',{method:'POST',data:{code:row.dataset.materialCode,name:name.value.trim(),category:'Moving material',sell_price:Number(price.value),taxable:true}});
+    b.outerHTML='<span class="pill teal">Saved to Materials</span>';toast('Material saved for future quotes. This quote keeps its editable price.');
+   }catch(ex){b.disabled=false;throw ex;}
+  }
+ }catch(ex){modalError(ex);}
+});
 
 document.addEventListener('click',async e=>{
  const b=e.target.closest('[data-editor]');if(!b)return;e.preventDefault();const action=b.dataset.editor;

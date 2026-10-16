@@ -182,6 +182,10 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
             if l['version']!=q['lead_version']:raise HTTPException(409,'Client scope changed. Sales must review the accepted terms first.')
             if one(db,"SELECT id FROM client_changes WHERE lead_id=? AND status='Pending'",(j['lead_id'],)):raise HTTPException(409,'Client changes need review before billing.')
             r=json.loads(q['result_json']);base=cfg['terms'];data={**base,'customer':{'name':l['client_name'],'address':l['dropoff'],'email':l['email']},'hourly_rate':r['hourly_rate_cents']/100,'minimum_hours':r['minimum_hours'],'transport_amount':r['transport_cents']/100,'fuel_amount':r['fuel_cents']/100,'discount_amount':r['discount_cents']/100,'other_amount':r['other_cents']/100,'approval_reference':'Accepted quote '+q['id']+' revision '+str(q['revision'])+'; '+base.get('approval_reference','')}
+            catalogue={m['code']:dict(m) for m in base.get('catalogue',[])}
+            for material in r.get('materials',[]):
+                catalogue[material['code']]={'code':material['code'],'name':material['name'],'unit_price':material['unit_cents']/100}
+            data['catalogue']=list(catalogue.values())
             try:terms=validate_terms(data)
             except (TypeError,KeyError,ValueError) as ex:raise HTTPException(422,str(ex))
             iid=uid('INV');rec=dict(id=iid,job_id=jid,number=iid,status='Draft',terms_json=dumps(terms),actual_json='{}',terms_approved_by=q['approved_by'],terms_approved_at=q['approved_at'],created_by=u['id'],created_at=now(),updated_at=now());insert(db,'job_invoices',rec)
