@@ -11,7 +11,7 @@ function jpTarget(issue){
  return 'timing';
 }
 function jpResourceList(kind,selected){
- const resources=JP.data.resources[kind],name=kind==='crew'?'crew_ids':'truck_ids';
+ const resources=JP.data.resources[kind].slice().sort((a,b)=>Number(selected.includes(b.id))-Number(selected.includes(a.id))||a.name.localeCompare(b.name)),name=kind==='crew'?'crew_ids':'truck_ids';
  return resources.length?resources.map(r=>{
   const checked=selected.includes(r.id),disabled=!r.available&&!checked;
   return '<label class="jp-resource '+(!r.available?'jp-unavailable':'')+'" data-jp-resource="'+h(kind)+'"><input type="checkbox" name="'+name+'" value="'+h(r.id)+'" '+(checked?'checked ':'')+(disabled?'disabled ':'')+'><span class="grow"><strong>'+h(r.name)+'</strong><span class="tiny muted">'+h(r.reasons.join(' · ')||(r.driver_verified?'Available · verified driver':'Available'))+'</span></span>'+(checked?'<span class="pill blue">Selected</span>':'')+'</label>';
@@ -26,6 +26,10 @@ function jpHistory(){
    (details.changed_fields?.length?'<div class="tiny muted">'+h(details.changed_fields.map(k=>labels[k]||k).join(', '))+'</div>':'')+'</div></div>';
  }).join(''):'<p class="small muted">No changes recorded yet.</p>')+'</details>';
 }
+function jpSelected(kind,ids){
+ const selected=JP.data.resources[kind].filter(r=>ids.includes(r.id));
+ return selected.length?selected.map(r=>'<span class="pill blue">'+h(r.name)+'</span>').join(''):'<span class="tiny muted">None selected yet</span>';
+}
 async function openJobPlan(id,focus=''){
  if(!canPlanJobs())throw Error('Crew cannot change job plans.');
  const data=await api('/jobs/'+encodeURIComponent(id)+'/planning');JP.data=data;JP.busy=false;++JP.preview;
@@ -33,7 +37,7 @@ async function openJobPlan(id,focus=''){
  const local=value=>new Intl.DateTimeFormat('sv-SE',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value)).replace(' ','T');
  const issues=data.readiness.missing||[];
  const attention=issues.length?'<div class="callout orange jp-attention"><strong>Finish the job setup</strong><div class="row wrap">'+issues.map(issue=>'<button type="button" data-plan="fix" data-target="'+h(jpTarget(issue))+'">'+h(issue)+'</button>').join('')+'</div></div>':'<div class="callout teal"><strong>Job setup is ready</strong>Review or change the assignments below.</div>';
- const section=(kind,title,selected)=>'<section id="jp-'+kind+'" class="jp-section"><div class="row wrap"><h3 class="grow">'+title+'</h3><span id="jp-count-'+kind+'" class="pill blue">'+selected.length+' selected</span><button type="button" data-plan="focus" data-target="'+kind+'">Choose '+title.toLowerCase()+'</button></div><label class="jp-search-label" for="jp-search-'+kind+'">Search '+title.toLowerCase()+'</label><input type="search" id="jp-search-'+kind+'" data-plan-search="'+kind+'" placeholder="Search by name or availability"><div id="jp-options-'+kind+'" class="jp-options">'+jpResourceList(kind,selected)+'</div>'+(S.user.role!=='crew'?'<button type="button" data-plan="setup" data-target="'+kind+'">'+(kind==='crew'?'Employee setup & availability':'Truck setup & availability')+'</button>':'<p class="tiny muted">An owner can complete setup for unavailable resources.</p>')+'</section>';
+ const section=(kind,title,selected)=>'<section id="jp-'+kind+'" class="jp-section"><div class="row wrap"><h3 class="grow">'+title+'</h3><span id="jp-count-'+kind+'" class="pill blue">'+selected.length+' selected</span><button type="button" data-plan="focus" data-target="'+kind+'">Choose '+title.toLowerCase()+'</button></div><div id="jp-selected-'+kind+'" class="row wrap jp-selected" aria-live="polite">'+jpSelected(kind,selected)+'</div><label class="jp-search-label" for="jp-search-'+kind+'">Search '+title.toLowerCase()+'</label><input type="search" id="jp-search-'+kind+'" data-plan-search="'+kind+'" placeholder="Search by name or availability"><div id="jp-options-'+kind+'" class="jp-options">'+jpResourceList(kind,selected)+'</div>'+(S.user.role!=='crew'?'<button type="button" data-plan="setup" data-target="'+kind+'">'+(kind==='crew'?'Employee setup & availability':'Truck setup & availability')+'</button>':'<p class="tiny muted">An owner can complete setup for unavailable resources.</p>')+'</section>';
  const notes=j.status==='Confirmed'?j.notes.replace('Accepted estimate - awaiting deposit / booking confirmation. ',''):j.notes;
  showModal('Assign crew & trucks',attention+'<form id="job-plan-form" data-job-plan><input type="hidden" name="job_id" value="'+h(id)+'">'+
   section('crew','Crew',j.crew_ids)+section('trucks','Trucks',j.truck_ids)+
@@ -101,7 +105,13 @@ document.addEventListener('change',e=>{
  const form=e.target.closest('#job-plan-form');if(!form)return;
  if(['start_at','end_at'].includes(e.target.name))jpRefreshAvailability(form);
  for(const [kind,name] of [['crew','crew_ids'],['trucks','truck_ids']]){
+  form.querySelectorAll('[name="'+name+'"]').forEach(input=>{
+   const row=input.closest('[data-jp-resource]'),badge=row?.querySelector('.pill');
+   if(input.checked&&!badge)row.insertAdjacentHTML('beforeend','<span class="pill blue">Selected</span>');
+   else if(!input.checked&&badge)badge.remove();
+  });
   const el=document.getElementById('jp-count-'+kind);if(el)el.textContent=form.querySelectorAll('[name="'+name+'"]:checked').length+' selected';
+  const selected=document.getElementById('jp-selected-'+kind);if(selected)selected.innerHTML=jpSelected(kind,[...form.querySelectorAll('[name="'+name+'"]:checked')].map(x=>x.value));
  }
 });
 document.addEventListener('submit',async e=>{
