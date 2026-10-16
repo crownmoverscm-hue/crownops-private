@@ -105,6 +105,11 @@ document.addEventListener('change',e=>{
  const form=e.target.closest('#job-plan-form');if(!form)return;
  if(['start_at','end_at'].includes(e.target.name))jpRefreshAvailability(form);
  for(const [kind,name] of [['crew','crew_ids'],['trucks','truck_ids']]){
+  form.querySelectorAll('[name="'+name+'"]').forEach(input=>{
+   const row=input.closest('[data-jp-resource]'),badge=row?.querySelector('.pill');
+   if(input.checked&&!badge)row.insertAdjacentHTML('beforeend','<span class="pill blue">Selected</span>');
+   else if(!input.checked&&badge)badge.remove();
+  });
   const el=document.getElementById('jp-count-'+kind);if(el)el.textContent=form.querySelectorAll('[name="'+name+'"]:checked').length+' selected';
   const selected=document.getElementById('jp-selected-'+kind);if(selected)selected.innerHTML=jpSelected(kind,[...form.querySelectorAll('[name="'+name+'"]:checked')].map(x=>x.value));
  }

@@ -2,7 +2,6 @@
    General schedule stays week-first, compact, truck-colour coded, and supports many jobs per day. */
 'use strict';
 (function(){
-  const previousSchedulePage=schedulePage;
   const previousFleet=X.pageRenderers.fleet;
 
   const num=v=>{const n=Number(v);return Number.isFinite(n)?n:null;};
@@ -38,13 +37,13 @@
     return ordered.flatMap(g=>g.jobs.sort((a,b)=>new Date(a.start_at)-new Date(b.start_at)));
   }
 
-  function weeklyJobCard(j){
+  function weeklyJobCard(j,personal=false){
     const t=truckPrimary(j),color=safeColor(t?.color_hex),crew=(j.crew||[]).length,required=Number(j.quote?.movers||0);
     const crewLabel=required>crew?`${crew}/${required} movers assigned`:crew?`${crew} mover${crew===1?'':'s'}`:'Crew needed';
     const truckName=t?.name||'Truck needed';
     const statusClass=j.status==='Confirmed'?'confirmed':j.status==='In progress'?'progress':j.status==='Completed'?'completed':'tentative';
     return `<button class="weekly-dispatch-card ${statusClass}" data-final="open-job" data-id="${h(j.id)}" style="--truck:${color};--truck-soft:${rgba(color,.085)};--truck-border:${rgba(color,.32)}">
-      <div class="weekly-card-top"><span>${h(timeLabel(j.start_at))}</span><strong>${h(estimateCode(j))}</strong></div>
+      <div class="weekly-card-top"><span>${h(timeLabel(j.start_at))}${personal?' – '+h(timeLabel(j.end_at)):''}</span><strong>${h(estimateCode(j))}</strong></div>
       <div class="weekly-client">${h(j.client?.client_name||j.title)}</div>
       <div class="weekly-service">${h(phaseName(j.phase))} · ${h(crewLabel)}</div>
       <div class="weekly-crew">${h((j.crew||[]).map(x=>x.name).join(' · ')||'Crew not assigned')}</div>
@@ -78,10 +77,19 @@
       return `<section class="weekly-day-column">
         <header class="weekly-day-head"><div><small>${h(d.toLocaleDateString('en-CA',{weekday:'short'}))}</small><strong>${d.getDate()}</strong></div><span>${dayJobs.length} job${dayJobs.length===1?'':'s'}</span></header>
         ${approved.length?`<div class="weekly-off-row">${approved.map(r=>`<span>${h(r.employee_name)} OFF</span>`).join('')}</div>`:''}
-        <div class="weekly-day-jobs">${dayJobs.map(weeklyJobCard).join('')}${Array.from({length:fillers},()=>'<div class="weekly-open-slot" aria-hidden="true"></div>').join('')}</div>
+        <div class="weekly-day-jobs">${dayJobs.map(j=>weeklyJobCard(j)).join('')}${Array.from({length:fillers},()=>'<div class="weekly-open-slot" aria-hidden="true"></div>').join('')}</div>
       </section>`;
     }).join('');
     return `<div class="weekly-dispatch-scroll"><div class="weekly-dispatch-grid">${columns}</div></div>`;
+  }
+
+  function personalAgenda(jobs,off){
+    return '<div class="personal-agenda">'+weekDays().map(d=>{
+      const day=dateIso(d),dayJobs=jobs.filter(j=>localDay(j.start_at)===day).sort((a,b)=>new Date(a.start_at)-new Date(b.start_at));
+      const approved=(off||[]).filter(r=>r.status==='Approved'&&r.start_date<=day&&r.end_date>=day);
+      if(!dayJobs.length&&!approved.length)return '';
+      return `<section class="personal-agenda-day" data-date="${h(day)}"><h2>${h(d.toLocaleDateString('en-CA',{weekday:'long',month:'short',day:'numeric'}))}</h2>${approved.length?'<p class="pill orange">Approved time off</p>':''}<div class="personal-agenda-jobs">${dayJobs.map(j=>weeklyJobCard(j,true)).join('')}</div></section>`;
+    }).join('')+'</div>';
   }
 
   schedulePage=async function(){
@@ -100,7 +108,7 @@
     const noJobs=!jobs.length?`<div class="callout schedule-empty"><strong>${S.jobScope==='mine'?'No jobs assigned to you this week.':'No jobs scheduled this week.'}</strong><span class="small">${S.jobScope==='mine'?'Switch to All Jobs or choose another week.':'Choose another week to see more services.'}</span></div>`:'';
     const navTools=`<div class="calendar-tools weekly-tools"><div class="weekly-nav-main"><div class="weekly-nav-buttons">${btn('week-prev',icon('left'),'btn-icon')}${btn('week-today','Today')}${btn('week-next',icon('right'),'btn-icon')}</div><div class="weekly-range-label">${h(compactWeekLabel(start,end))}</div></div><div class="weekly-nav-side"><label class="weekly-jump"><span>Jump to</span><input type="date" id="calendar-jump" value="${h(start)}" aria-label="Jump to schedule date"></label><div class="weekly-capacity">${vehicles.filter(v=>v.active).length} active trucks</div></div></div>`;
     return head('Schedule',S.jobScope==='mine'?'Your assigned services, crew and trucks.':'Company services. Select a move to see its details, team and truck.',canPlanJobs()?btn('new-job',icon('plus')+'New job','btn-primary'):'')+
-      scope+missingIdentity+navTools+legend(vehicles)+noJobs+weekCalendar(jobs,off,vehicles)+
+      scope+missingIdentity+navTools+(S.jobScope==='mine'?noJobs+personalAgenda(jobs,off):legend(vehicles)+noJobs+weekCalendar(jobs,off,vehicles))+
       `<p class="source-warning">Example: 5–7 + 1 means 5–7 estimated service hours plus 1 transportation hour. CrownOps allows the same crew/truck on another service later that day when the time blocks do not overlap.</p>`;
   };
 
