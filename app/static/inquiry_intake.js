@@ -63,6 +63,7 @@ openLead=async function(id){
 };
 const inquiryQuoteBuilder=crmQuoteBuilder;
 crmQuoteBuilder=async function(id='',options={}){
+ inquirySuggestion=null;
  await inquiryQuoteBuilder(id,options);
  const f=document.getElementById('crm-quote-form');if(!f)return;
  const details=document.getElementById('qe-service-details');
@@ -93,11 +94,18 @@ document.addEventListener('click',async e=>{
   if(a==='apply'){
    const s=inquirySuggestion;if(!s?.can_apply)throw Error('Preview a complete suggestion first.');
    if(f.elements.service_type.value!=='Moving')throw Error('Use local moving suggestions only for a Moving quote.');
-   for(const k of ['movers','trucks','hours_low','hours_high','minimum_hours','start_window'])f.elements[k].value=s[k];
-   if(s.transport_hours!==null)f.elements.transport_hours.value=s.transport_hours;
-   f.elements.small_afternoon_job.checked=s.small_afternoon_job;
-   f.dataset.calculatorBasis=JSON.stringify({...s,between_stops_minutes:f.elements.calculator_drive_minutes.value});
-   crmToggleServiceFields();crmToggleStartTime();await crmRefreshRate();qeUpdateClientCard();toast('Suggestion copied. Review rates, travel and any specialty charges before saving.');
+   const controls=[...modal.querySelectorAll('button,input,select,textarea')].map(el=>[el,el.disabled]);QE.busy=true;
+   try{
+    for(const k of ['movers','trucks','hours_low','hours_high','minimum_hours','start_window'])f.elements[k].value=s[k];
+    if(s.transport_hours!==null)f.elements.transport_hours.value=s.transport_hours;
+    f.elements.small_afternoon_job.checked=s.small_afternoon_job;
+    f.dataset.calculatorBasis=JSON.stringify({...s,between_stops_minutes:f.elements.calculator_drive_minutes.value});
+    crmToggleServiceFields();crmToggleStartTime();
+    const states=controls.map(([el])=>[el,el.disabled]);states.forEach(([el])=>el.disabled=true);
+    f.elements.hourly_rate.value='';
+    try{await crmRefreshRate();}finally{states.filter(([el])=>el.isConnected).forEach(([el,disabled])=>el.disabled=disabled);}
+    qeUpdateClientCard();toast('Suggestion copied. Review rates, travel and any specialty charges before saving.');
+   }finally{QE.busy=false;}
   }
  }catch(ex){modalError(ex);}
 });
@@ -106,6 +114,7 @@ const inquiryQuoteData=crmQuoteData;
 crmQuoteData=function(){const d=inquiryQuoteData();if(!d)return d;const f=document.getElementById('crm-quote-form');delete d.calculator_drive_minutes;if(f?.dataset.calculatorBasis)d.calculator_basis=JSON.parse(f.dataset.calculatorBasis);return d;};
 
 let inquiryPhotoReturn=null;
+document.addEventListener('click',e=>{if(e.target.closest('[data-action="close"],[data-action="logout"],[data-page]'))inquiryPhotoReturn=null;},true);
 const inquiryClientFiles=clientFiles;
 clientFiles=async function(id){
  await inquiryClientFiles(id);
