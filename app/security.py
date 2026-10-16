@@ -60,6 +60,9 @@ def job_resource_blockers(db,j):
             missing.append('An assigned employee is inactive or missing');continue
         drivers+=int(bool(e['driver_verified']))
     if drivers<len(trucks):missing.append('Assign a verified driver for every truck')
+    for a in trucks:
+        truck=one(db,'SELECT active,name FROM vehicles WHERE id=?',(a['resource_id'],))
+        if not truck or not truck['active']:missing.append((truck['name'] if truck else 'An assigned truck')+' is inactive; assign another truck')
     return missing
 
 

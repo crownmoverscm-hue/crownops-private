@@ -36,6 +36,8 @@ jobs:
             echo "Checking $f"
             node --check "$f"
           done
+      - name: Test local calculator guidance
+        run: node --test tests/local_estimator.test.cjs
       - name: Smoke-create application
         env:
           CROWNOPS_ENV: test

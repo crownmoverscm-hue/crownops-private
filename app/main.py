@@ -28,6 +28,7 @@ from .store import initialize, connect, transaction, rows, one, insert, audit, u
 from .pricing import calculate, missing_fields, number, cents
 from .importer import import_workbook
 from . import ai
+from .inquiry_intake import intake_values, photo_link
 
 ROOT=Path(__file__).resolve().parent.parent
 PASSWORDS=PasswordHasher(time_cost=2,memory_cost=65536,parallelism=2)
@@ -464,6 +465,8 @@ def create_app(database_path=None):
 
     def new_lead(db,data,actor,external_id=None,suppressed=1):
         t=now();record={k:bounded(data.get(k,''),k) for k in LEAD_FIELDS}
+        record['photo_link']=photo_link(record['photo_link'])
+        record['intake_json']=dumps(intake_values(data.get('intake',{})))
         if not record['client_name']:
             raise HTTPException(422,'A client name is required.')
         if record['email']:valid_email(record['email'])
@@ -486,6 +489,8 @@ def create_app(database_path=None):
     def update_lead(lid:str,data:dict,u=Depends(auth)):
         require(u,QUOTERS)
         fields={k:bounded(v,k) for k,v in data.items() if k in LEAD_FIELDS}
+        if 'photo_link' in fields:fields['photo_link']=photo_link(fields['photo_link'])
+        if 'intake' in data:fields['intake_json']=dumps(intake_values(data['intake']))
         if not fields:
             raise HTTPException(422,'No editable fields provided.')
         if 'email' in fields and fields['email']:valid_email(fields['email'])
@@ -769,7 +774,8 @@ def create_app(database_path=None):
         j['crew_names']=[r['name'] for r in rows(db,'SELECT e.name FROM employees e JOIN assignments a ON a.resource_id=e.id WHERE a.resource_type=? AND a.job_id=?',('employee',j['id']))]
         j['truck_names']=[r['name'] for r in rows(db,'SELECT v.name FROM vehicles v JOIN assignments a ON a.resource_id=v.id WHERE a.resource_type=? AND a.job_id=?',('vehicle',j['id']))]
         lead=get_lead(db,j['lead_id'])
-        j['client']={k:lead.get(k,'') for k in ['client_name','phone','email','pickup','dropoff','pickup_access','dropoff_access','pickup_walk','dropoff_walk','inventory','heavy_items','home_size','boxes','notes','photo_link']}
+        j['client']={k:lead.get(k,'') for k in ['client_name','phone','email','pickup','dropoff','pickup_access','dropoff_access','pickup_walk','dropoff_walk','inventory','heavy_items','home_size','boxes','notes','photo_link','intake_json']}
+        if u['role']=='crew' and u.get('employee_id') not in j['crew_ids']:j['client'].pop('photo_link',None)
         j['lead_id']=lead['id']
         if j.get('quote_id'):
             quoted=one(db,"SELECT * FROM quotes WHERE id=?",(j['quote_id'],))

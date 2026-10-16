@@ -12,6 +12,7 @@ from fastapi import Depends, HTTPException
 from .store import connect, transaction, rows, one, insert, audit, uid, now, dumps
 from .platform_common import SALES, OFFICE, require_role, settings, put_setting, queue_message, add_task, quickbooks_gate
 from .pricing import seasonal_rate, number
+from .inquiry_intake import intake_values, photo_link
 
 MONTREAL=ZoneInfo("America/Toronto")
 LOCAL_FUEL=Decimal("35.00")
@@ -507,7 +508,7 @@ def template_service(db,data,u):
     lid=uid("LEAD");service=str(data.get("service_type") or "Moving")
     rec=dict(id=lid,client_name=a["client_name"],email=a["email"],phone=a["phone"],move_date=str(data.get("move_date") or ""),
         **{k:str(details.get(k) or "") for k in ("pickup","dropoff","home_size","boxes","pickup_access","dropoff_access","pickup_walk","dropoff_walk","inventory","heavy_items")},
-        photo_link="",language=data.get("language") or a["language"],source="CrownOps CRM",lead_type=service,stage="New Lead",assigned_to=u["id"],priority="Normal",notes="",
+        photo_link=photo_link(details.get('photo_link','')),intake_json=dumps(intake_values(details.get('intake',{}))),language=data.get("language") or a["language"],source="CrownOps CRM",lead_type=service,stage="New Lead",assigned_to=u["id"],priority="Normal",notes="",
         archived_import=0,notifications_suppressed=0,raw_json=dumps({"service_type":service}),version=1,created_at=now(),updated_at=now())
     insert(db,"leads",rec);insert(db,"client_account_leads",dict(client_id=cid,lead_id=lid,created_at=now()))
     db.execute("UPDATE client_accounts SET updated_at=? WHERE id=?",(now(),cid));audit(db,u["id"],"New service added to client","leads",lid,{"client_id":cid})
@@ -635,7 +636,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
               pickup=str(data.get("pickup") or ""),dropoff=str(data.get("dropoff") or ""),home_size=str(data.get("home_size") or ""),
               boxes=str(data.get("boxes") or ""),pickup_access=str(data.get("pickup_access") or ""),dropoff_access=str(data.get("dropoff_access") or ""),
               pickup_walk=str(data.get("pickup_walk") or ""),dropoff_walk=str(data.get("dropoff_walk") or ""),inventory=str(data.get("inventory") or ""),
-              heavy_items=str(data.get("heavy_items") or ""),photo_link="",language=a["language"],source="CrownOps CRM",lead_type=service,
+              heavy_items=str(data.get("heavy_items") or ""),photo_link=photo_link(data.get('photo_link','')),intake_json=dumps(intake_values(data.get('intake',{}))),language=a["language"],source="CrownOps CRM",lead_type=service,
               stage="New Lead",assigned_to=u["id"],priority="Normal",notes=str(data.get("notes") or ""),archived_import=0,notifications_suppressed=0,
               raw_json=dumps({"service_type":service}),version=1,created_at=now(),updated_at=now())
             insert(db,"leads",rec);insert(db,"client_account_leads",dict(client_id=cid,lead_id=lid,created_at=now()))
