@@ -28,7 +28,7 @@ ET = ZoneInfo('America/Toronto')
 CUTOFF = '2026-10-19'
 FIELDS = ('event', 'documentId', 'number', 'title', 'customer', 'email', 'phone',
           'address', 'city', 'contactId', 'total', 'currency')
-LOG = logging.getLogger('crownops.wix')
+LOG = logging.getLogger('uvicorn.error')
 
 
 def title_schedule(title):
@@ -47,6 +47,9 @@ def title_schedule(title):
         return '', '', 'The service date is invalid.'
     if re.search(r'\b(tbd|tentative|or|ou)\b|\?', title, re.I):
         return '', '', 'The title contains an unconfirmed date or alternative; review it first.'
+    without_date = title[:matches[0].start()] + title[matches[0].end():]
+    if re.search(r'(?<!\d)\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s*m\.?)?\s*(?:-|–|to|à)\s*\d{1,2}', without_date, re.I):
+        return day.isoformat(), '', 'The title contains a time range; confirm the arrival time.'
     times = list(re.finditer(r'(?<![\d:])(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s*m\.?(?!\w)', title, re.I))
     start = ''
     if len(times) == 1:
@@ -185,13 +188,13 @@ def register_wix(app, path, auth, new_lead):
         key = data.get('connectionKey') if isinstance(data, dict) else None
         if not isinstance(key, str) or len(key) < 32 or not hmac.compare_digest(hashlib.sha256(key.encode()).hexdigest(), expected):
             raise HTTPException(401, 'Invalid Wix connection key.')
+        payload = normalize(data)
         # A test URL checks real delivery without creating clients or jobs.
         if request.query_params.get('probe') == '1':
             with transaction(path) as db:
                 db.execute("INSERT INTO settings(key,value_json) VALUES('wix_last_test',?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (dumps({'received_at': now()}),))
             LOG.info('Wix authenticated delivery test succeeded; no business records created')
             return {'ok': True, 'test': True, 'business_records_created': 0}
-        payload = normalize(data)
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         with transaction(path) as db:
             if configuration(db).get('paused'):

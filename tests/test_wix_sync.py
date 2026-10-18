@@ -122,6 +122,7 @@ class WixSyncTests(unittest.TestCase):
         self.assertEqual(self.web.post('/api/webhooks/wix',json=self.payload()).status_code,503)
         probe=self.web.post('/api/webhooks/wix?probe=1',json=self.payload())
         self.assertEqual(probe.status_code,200); self.assertEqual(probe.json()['business_records_created'],0)
+        self.assertEqual(self.web.post('/api/webhooks/wix?probe=1',json=self.payload(documentId='')).status_code,422)
         self.assertTrue(self.owner.get('/api/wix/status').json()['last_test']);self.assertEqual(self.records(),[])
         self.owner.put('/api/wix/settings',json={'paused':False});self.send()
 
@@ -132,6 +133,7 @@ class WixSyncTests(unittest.TestCase):
             ('Moving 10/30/2026 12pm',('2026-10-30','12:00')),
             ('Moving 10/30/2026 Afternoon',('2026-10-30','')),
             ('Moving 10/30/2026 9am - 12pm',('2026-10-30','')),
+            ('Moving 10/30/2026 9-12pm',('2026-10-30','')),
             ('Moving 10/30/2026 + 10/31/2026',('','')),
             ('Moving 02/30/2026',('','')),
             ('Moving 10/30',('','')),
