@@ -70,6 +70,19 @@ class WixSyncTests(unittest.TestCase):
         self.assertEqual(len(self.records()),1); self.assertEqual(self.records()[0]['deliveries'],3)
         self.assertEqual(len(self.owner.get('/api/schedule-imports/events').json()),1)
 
+    def test_source_planning_reuses_crm_and_saves_reviewed_service_addresses(self):
+        self.send(); rec=self.records()[0]
+        source=self.owner.get('/api/schedule-imports/events').json()[0]
+        result=self.owner.post('/api/schedule-imports/promote',json={'source_key':source['source_key'],'reviewed':True,
+            'note':'Reviewed addresses and duration with client','client':{'pickup':'100 Test Pickup','dropoff':'200 Test Destination'},
+            'start_at':'2026-10-30T13:00:00+00:00','end_at':'2026-10-30T17:00:00+00:00','crew_ids':['E1','E2'],'truck_ids':['V1']})
+        self.assertEqual(result.status_code,200,result.text)
+        self.assertEqual(result.json()['lead_id'],rec['lead_id'])
+        with closing(connect(self.path)) as db:
+            lead=one(db,'SELECT * FROM leads WHERE id=?',(rec['lead_id'],))
+            self.assertEqual(lead['pickup'],'100 Test Pickup');self.assertEqual(lead['dropoff'],'200 Test Destination')
+            self.assertEqual(len(rows(db,'SELECT * FROM leads')),2)
+
     def test_changed_source_is_retained_without_overwriting_service(self):
         self.send(); self.assertEqual(self.send(title='Moving | 11/03/2026 10am')['status'], 'Needs review')
         self.assertEqual(len(self.records()),2)
