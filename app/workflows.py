@@ -334,7 +334,8 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
             if old:return {'job_id':old['job_id'],'lead_id':old['lead_id'],'already_promoted':True}
             source=one(db,'SELECT * FROM imported_schedule_events WHERE source_key=?',(key,))
             if not source:raise HTTPException(404,'Source event not found.')
-            lid=data.get('lead_id')
+            source_payload=json.loads(source['payload_json'])
+            lid=data.get('lead_id') or (source_payload.get('lead_id') if source_payload.get('source_type')=='wix' else None)
             if lid:l=staff_read_project(db,lid,u)
             else:l=new_lead(db,data.get('client',{}),u['id'],external_id='schedule-review:'+key,suppressed=1)
             start,end,crew,trucks=check_job_resources(db,data)

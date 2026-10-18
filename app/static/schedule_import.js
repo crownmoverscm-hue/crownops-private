@@ -3,7 +3,7 @@
 (function(){
   let sourceText='', previewResult=null;
   const office=()=>['owner','manager'].includes(S.user.role);
-  const items=()=> (S.importedSchedule||[]).filter(e=>e.source_type==='pasted_schedule'&&!e.promoted_job_id);
+  const items=()=> (S.importedSchedule||[]).filter(e=>['pasted_schedule','wix'].includes(e.source_type)&&!e.promoted_job_id);
   const card=e=>`<button type="button" class="job-card" data-action="open-imported-job" data-id="${h(e.id)}"><span class="pill orange">Planning needed</span><strong>${h(e.client_name)}</strong><div>${h(e.service||'Service type needed')}</div><small>${h(e.time_label||'Time needed')} · ${h(e.crew_size||'?')} movers requested</small><small>${h(e.crew_raw||'Crew names needed')}</small></button>`;
   const baseSchedule=schedulePage;
   schedulePage=async function(){

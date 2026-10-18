@@ -35,4 +35,7 @@ if os.getenv('CROWNOPS_BROWSER_HOURS_COSTS')=='1':
     with transaction(fixture.path) as db:
         db.execute("UPDATE jobs SET status='Completed' WHERE id='J1'")
         stage_records(db,'fictional-company','production',[('Purchase',dict(Id='fictional-1',TxnDate='2026-11-15',CurrencyRef={'value':'CAD'},TotalAmt=114.98,TxnTaxDetail={'TotalTax':14.98},EntityRef={'name':'Fictional fuel supplier'},Line=[{'Description':'Fuel for the fictional service'}]))],'owner')
+if os.getenv('CROWNOPS_BROWSER_WIX')=='1':
+    import hashlib
+    os.environ['CROWNOPS_WIX_KEY_SHA256']=hashlib.sha256(b'fictional-browser-wix-key-only-123456').hexdigest()
 uvicorn.run(fixture.app, host='127.0.0.1', port=8095, log_level='warning')

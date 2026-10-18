@@ -44,6 +44,14 @@ jobs:
           done
       - name: Test local calculator guidance
         run: node --test tests/*.test.cjs
+      - name: Test Wix office workflow on phone, tablet and desktop
+        env:
+          CROWNOPS_BROWSER_WIX: "1"
+          NODE_PATH: /tmp/crownops-browser/node_modules
+        run: |
+          npm install --prefix /tmp/crownops-browser --no-audit --no-fund playwright@1.62.1
+          /tmp/crownops-browser/node_modules/.bin/playwright install --with-deps chromium
+          python tests/browser/run_mobile.py wix_sync
       - name: Smoke-create application
         env:
           CROWNOPS_ENV: test
