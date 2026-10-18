@@ -91,7 +91,7 @@ def _api(token, path, params=None):
                 headers={'Authorization': 'Bearer ' + token},
                 timeout=25,
             )
-            if gmail_read_failure(requests.HTTPError(response=r))['retryable']:
+            if r.status_code == 429 or r.status_code >= 500 or (r.status_code == 403 and gmail_read_failure(requests.HTTPError(response=r))['retryable']):
                 last = requests.HTTPError('Gmail temporary error HTTP ' + str(r.status_code), response=r)
                 if attempt < 2:
                     time.sleep(2 ** attempt)
