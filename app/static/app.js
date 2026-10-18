@@ -9,7 +9,7 @@ const initials=n=>String(n||'CM').trim().split(/\s+/).slice(0,2).map(s=>s[0]).jo
 const demo=()=>Boolean(window.CROWNOPS_DEMO);
 const symbols={dashboard:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',users:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M15 3a4 4 0 0 1 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',calendar:'M4 5h16v16H4z M16 3v4 M8 3v4 M4 11h16 M8 15h2 M14 15h2',spark:'m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8L12 3',mail:'M3 5h18v14H3z M3 5l9 7 9-7',wallet:'M3 5h17v15H3z M3 9h17 M15 13h6v4h-6z',clock:'M12 8v5l3 2 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',box:'m3 7 9-4 9 4v10l-9 4-9-4V7 M3 7l9 4 9-4 M12 11v10 M8 5l9 4',plug:'M8 3v5 M16 3v5 M5 8h14v3a7 7 0 0 1-7 7 M12 18v3',settings:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M5 5l2 2 M17 17l2 2 M5 19l2-2 M17 7l2-2',search:'M21 21l-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',plus:'M12 5v14 M5 12h14',left:'m14 6-6 6 6 6',right:'m10 6 6 6-6 6',arrow:'M5 12h14 M14 7l5 5-5 5',check:'m5 12 4 4L20 5',close:'M6 6l12 12 M6 18 18 6',upload:'M12 16V3 M7 8l5-5 5 5 M3 15v6h18v-6',download:'M12 3v13 M7 11l5 5 5-5 M3 17v4h18v-4',external:'M14 3h7v7 M10 14 21 3 M10 3H3v18h18v-7',logout:'M9 4H3v16h6 M8 12h13 M16 7l5 5-5 5',truck:'M2 5h13v12H2z M15 10h4l3 4v3h-7 M7 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0 M21 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0',file:'M5 3h9l5 5v13H5z M14 3v6h5 M8 13h8 M8 17h6',phone:'M5 3H2v5c0 7 7 14 14 14h5v-5l-5-2-2 3c-4-1-7-4-8-8l3-2-2-5H5',menu:'M3 6h18 M3 12h18 M3 18h18',shield:'m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3 M8 12l3 3 5-6',refresh:'M20 7v5h-5 M4 17v-5h5 M19 8a8 8 0 0 0-14-2 M5 16a8 8 0 0 0 14 2'};
 const icon=n=>`<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${symbols[n]||symbols.file}"/></svg>`;
-const crown=`<img src="/static/icon.svg?v=14.0" alt="" width="48" height="48">`;
+const crown=`<img src="/static/icon.svg?v=15.0" alt="" width="48" height="48">`;
 const nav=[['dashboard','dashboard','Command center'],['sales','users','Sales & clients'],['quotes','spark','AI quote studio'],['schedule','calendar','Schedule'],['invoices','file','Final invoices'],['followups','mail','Inbox & follow-ups'],['payments','wallet','Payments'],['team','clock','Team & hours'],['inventory','box','Inventory'],['automations','plug','Automations'],['settings','settings','Settings & imports']];
 const may=roles=>roles.includes(S.user?.role)||(S.user?.role==='manager'&&roles.includes('owner'));
 async function api(path,options={}){
@@ -18,7 +18,8 @@ async function api(path,options={}){
  if(options.data!==undefined){init.headers['Content-Type']='application/json';init.body=JSON.stringify(options.data);}
  if(options.form)init.body=options.form;
  if(init.method!=='GET')init.headers['X-CSRF-Token']=S.csrf;
- const resp=await fetch('/api'+path,init);
+ if(!navigator.onLine)throw new Error('You are offline. Keep this screen open and reconnect before saving.');
+ let resp;try{resp=await fetch('/api'+path,init);}catch{throw new Error(init.method==='GET'?'Connection interrupted. Reconnect and try loading this section again.':'Connection interrupted. This save was not confirmed. Reconnect and check the record before trying again.');}
  let body;try{body=await resp.json();}catch{body={detail:'Server returned an unreadable response.'};}
  if(!resp.ok){const error=new Error(typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));error.status=resp.status;throw error;}
  return body;

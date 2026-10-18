@@ -107,7 +107,81 @@ dialog{border-color:var(--line);box-shadow:0 24px 90px #16161635}dialog::backdro
  .portal-wrap .sticky-action{gap:10px}.portal-wrap .sticky-action button{width:100%;white-space:normal}
  .login-form{padding:30px 20px}.login-form h2{font-size:30px}
 }
+/* Phone controls share the same records and permissions as the office views. */
+.finish-mobile-brand,.finish-menu-close{display:none}
+.finish-connection{position:fixed;left:14px;right:14px;bottom:max(14px,env(safe-area-inset-bottom));z-index:250;background:#fff2df;color:#673d12;border:1px solid #bf7f3b;border-radius:12px;padding:14px 18px;box-shadow:0 4px 20px #16161622;font-size:16px;max-width:650px;margin:auto}
+.finish-connection[hidden]{display:none!important}
+.info-grid>div,.grid2>*,.grid3>*{min-width:0;overflow-wrap:anywhere}
+.callout{overflow-wrap:anywhere}.pill{max-width:100%;white-space:normal}
+.panel-body .row.wrap>button,.modal-body .row.wrap>button{max-width:100%;white-space:normal;flex-shrink:1}
+.ux-browser-toolbar .searchbox{flex:1 1 240px;min-width:0}
+.ux-browser-toolbar .searchbox input{width:100%;min-width:0}
+.modal-head h2{min-width:0}.modal-head>.btn-icon{flex:0 0 44px;min-width:44px}
+.btn-icon,.profile .logout{min-width:44px;min-height:44px}
+.finish-sales-details{margin-bottom:12px;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}
+.finish-sales-details>summary{padding:14px 16px;font-size:16px;font-weight:650;cursor:pointer;min-height:48px}
+.finish-sales-details>.intake-status{border:0;border-radius:0;margin-bottom:0;background:#faf8f5}
+.finish-sales-details>.panel{border:0;border-radius:0;box-shadow:none}
+.finish-sales-details>.panel>.panel-head,.finish-sales-details>[data-sales-priorities]>.panel>.panel-head{display:none}
+.finish-sales-details [data-sales-priorities]>.spacer{display:none}
+.client-upload-help{padding:12px 18px;border:1px solid var(--line);border-radius:12px;margin-bottom:18px;background:white}
+.client-upload-help summary{font-weight:650}
+.client-upload-help p{margin-top:10px}
+@media(max-width:1023px){
+ .sidebar:not(.open){visibility:hidden;pointer-events:none}
+ .sidebar.open{visibility:visible}
+ .sidebar .brand{flex-wrap:wrap;position:relative;padding-right:40px}
+ .finish-menu-close{display:flex;position:absolute;right:0;top:0;background:transparent;color:#fff;border-color:#686868;padding:8px}
+ .sidebar .brand strong{font-size:23px}.sidebar .brand-icon{width:40px;height:40px}.sidebar .brand small{font-size:10px}
+ .topbar{position:sticky;top:0;z-index:15;min-height:70px;height:auto;padding-top:max(8px,env(safe-area-inset-top));padding-bottom:8px}
+ .topbar .breadcrumb{display:none}
+ .finish-mobile-brand{display:flex;align-items:center;gap:10px;min-width:0}
+ .finish-mobile-brand>div{min-width:0}.finish-mobile-brand strong{display:block;font-size:18px;line-height:1.3}
+ .finish-mobile-brand span{display:block;font-size:13px;color:var(--muted);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:52vw}
+ .finish-mobile-brand img{flex:0 0 34px}.mobile-toggle{flex-shrink:0}
+ .content{scroll-margin-top:80px}
+}
+@media(max-width:760px){
+ button,.btn-small,.segmented button,.ux-filter-chip,.button-link{min-height:44px}
+ .topbar .top-right{display:none}
+ .panel-head{flex-wrap:wrap}.panel-head h2{min-width:0}
+ .panel-head>.tiny{flex-basis:100%}
+ .info-grid{grid-template-columns:minmax(0,1fr)}
+ .company-launch-row{flex-wrap:wrap}.company-launch-row .grow{flex:1 1 160px}
+ .company-launch-row>button{margin-left:auto}
+ .ux-browser-toolbar .searchbox{flex-basis:100%;width:100%}
+ .ux-browser-toolbar .searchbox input{width:100%!important}
+ .panel-body .row,.modal-body>.row{flex-wrap:wrap;min-width:0}
+ .activity-row>.grow,.task-row>.grow{min-width:0;overflow-wrap:anywhere}
+ .activity-row{flex-wrap:wrap}.activity-row>.grow{flex:1 1 150px}
+ summary{min-height:44px;padding-top:8px;padding-bottom:8px;cursor:pointer}
+ .check-list label,.checkbox-label{min-height:44px;align-items:flex-start;padding:7px 0}
+ dialog[open]{max-height:var(--visible-dialog-height,94dvh)}
+ dialog.finish-keyboard-open{position:fixed;top:var(--visible-dialog-top);bottom:auto;margin-top:0}
+ .modal-head{max-height:24dvh;overflow:auto;gap:8px}.modal-head h2{font-size:21px}
+ .modal-foot{max-height:30dvh;overflow-y:auto}
+ dialog.ux-workspace-dialog[open]{display:block;overflow:auto;max-height:var(--visible-dialog-height,94dvh)}
+ .ux-workspace-dialog .modal-head{position:sticky;top:0}
+ .ux-workspace-dialog .modal-body{overflow:visible}
+ .modal-foot.ux-action-footer{max-height:none}
+ .finish-keyboard-open .modal-foot{position:static;max-height:110px}
+ .portal-wrap .activity-row strong{overflow-wrap:anywhere;min-width:0}
+ .portal-wrap .sticky-action{position:static}
+ .portal-wrap .client-shortcuts{display:none}
+ .portal-wrap .client-welcome{margin:14px 0;padding:18px}
+ .portal-wrap .client-welcome h1{font-size:27px}
+ .portal-wrap .client-welcome p{font-size:16px;margin-bottom:0}
+ .portal-wrap .media-drop{padding:14px}
+ .portal-wrap .media-drop input[type=file]{font-size:16px;padding:9px 5px}
+}
+@media(max-width:360px){
+ .finish-mobile-brand span{max-width:55vw}.finish-mobile-brand img{display:none}
+ .finish-mobile-table>tbody>tr{grid-template-columns:minmax(0,1fr)}
+ .finish-mobile-table td.finish-primary-cell,.finish-mobile-table td.finish-actions-cell{grid-column:1}
+ .company-truck-details,.job-highlight-strip.final-five{grid-template-columns:minmax(0,1fr)}
+}
 @media print{
+ .finish-mobile-brand,.finish-menu-close,.finish-connection{display:none!important}
  body{background:#fff;font-size:12pt}.portal-brand{background:#fff;color:#202020;padding:0}.portal-brand strong,.portal-brand h1{color:#202020}.portal-brand .muted{color:#626262}
  .panel{box-shadow:none}.page-head h1{font-size:24pt}.content,.portal-wrap{padding:0}
 }

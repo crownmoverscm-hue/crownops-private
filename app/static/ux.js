@@ -158,6 +158,7 @@ async function uxAssignAction(kind,id,currentOwner){
 // ---------- Communications: calls, follow-ups and outgoing email in one place ----------
 X.pageRenderers.communications=async()=>{
  const [tasks,calls,mail,inbox]=await Promise.all([api('/tasks?scope=active'),api('/calls'),api('/outbound'),api('/ux/inbox')]);
+ X.cache.mail=mail;
  const due=tasks.slice(0,30),recentCalls=calls.slice(0,25),out=mail.slice(0,25);
  const openInbox=inbox.filter(m=>!m.resolved_at),answered=inbox.filter(m=>m.resolved_at);
  const inboxHtml=openInbox.length?openInbox.map(m=>`<div class="task-row"><div class="grow"><div class="small strong">${h(m.client_name)}</div><div class="tiny muted">${h(m.subject||'Client email')} &middot; ${h(uxTimestampLabel(m.created_at))}</div><div class="tiny">${h((m.body||'').slice(0,140))}</div></div>${m.claimed_name?`<span class="pill blue">${h(m.claimed_name===S.user.name?'You':m.claimed_name)}</span>`:'<span class="pill orange">Unclaimed</span>'}<div class="row">${uxActionAssignmentButtons('email',m.id,m.claimed_by)}<button class="btn-small" data-ux="action-workspace" data-kind="email" data-id="${h(m.id)}">Open</button>${m.claimed_by&&(m.claimed_by===S.user.id||['owner','manager'].includes(S.user.role))?`<button class="btn-small" data-ux="inbox-resolve" data-id="${h(m.id)}">Mark answered</button>`:''}<button class="btn-small" data-ux="open-client" data-id="${h(m.lead_id)}">Client</button></div></div>`).join(''):empty('Inbox is clear','New client email will appear here and can be claimed by one team member.');

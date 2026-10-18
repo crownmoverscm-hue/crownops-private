@@ -1,0 +1,33 @@
+"""Read-only workspace QA with deliberately fictional service and client records."""
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path[:0] = [str(ROOT), str(ROOT / 'tests')]
+os.environ['CROWNOPS_PUBLIC_URL'] = 'http://127.0.0.1:8095'
+from test_job_handoff import JobHandoffTests
+from app.store import dumps, insert, now, transaction
+from app.platform_common import add_task
+from app.invoices import validate_terms
+import uvicorn
+
+fixture = JobHandoffTests('test_assigned_brief_has_actual_people_leads_truck_route_and_materials_without_pay')
+fixture.setUp()
+with transaction(fixture.path) as db:
+    for index, name in enumerate(['Fictional Samira Lévesque', 'Fictional Alexander Long Client Name', 'Fictional Chloé Test']):
+        lid = 'FINISH-L' + str(index)
+        insert(db, 'leads', dict(id=lid, client_name=name, phone='514555015' + str(index), email='workspace-' + str(index) + '@example.invalid',
+            pickup='100 Fictional Avenue, apartment 4 — parking and elevator to confirm', dropoff='200 Fictional Destination, Montréal',
+            move_date='2026-11-15', home_size='2 bedroom apartment', stage='Waiting on client', source='Quote Form', lead_type='Moving',
+            assigned_to='sales', created_at=now(), updated_at=now()))
+        add_task(db, lid, 'Confirm elevator reservation and client photos', 'sales', 'finish-task-' + str(index))
+    terms = validate_terms({'issuer': {'name': 'Fictional Crown Movers', 'address': 'Test company address'},
+        'customer': {'name': 'Fictional service client', 'email': 'handoff-client@example.invalid'},
+        'hourly_rate': 150, 'minimum_hours': 3, 'transport_amount': 35, 'fuel_amount': 0, 'discount_amount': 0,
+        'taxes': [], 'catalogue': [], 'approval_reference': 'Fictional workspace visual test'})
+    insert(db, 'job_invoices', dict(id='FINISH-INV', job_id='J1', number='TEST-WORKSPACE', status='Draft', terms_json=dumps(terms), actual_json='{}',
+        terms_approved_by='manager', terms_approved_at=now(), created_by='manager', created_at=now(), updated_at=now()))
+with transaction(fixture.path) as db:
+    insert(db,'integration_events',dict(id='LAYOUT-BAD-QUOTE',event_key='gmail:fictional-invalid',event_type='gmail_quote',object_id='fictional-invalid',payload_json=dumps({'parsed':{'client_name':'Fictional invalid form','email':'invalid-layout@example.invalid'},'origin_label':'Quote Form','body':'Fictional original information retained for office review.','validation_review':{'message':'Review inventory.','original_preserved':True}}),status='Needs review',created_at=now()))
+uvicorn.run(fixture.app, host='127.0.0.1', port=8095, log_level='warning')
