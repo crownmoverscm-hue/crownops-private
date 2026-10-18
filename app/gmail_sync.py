@@ -47,6 +47,40 @@ def _gmail_received_iso(message,headers):
             pass
     return ''
 
+def gmail_read_failure(exc):
+    """Controlled diagnostics: never expose provider bodies, tokens or message data."""
+    response = getattr(exc, 'response', None)
+    status = getattr(response, 'status_code', None)
+    reasons = set()
+    if response is not None:
+        try:
+            error = response.json().get('error', {})
+            if isinstance(error, dict):
+                for item in (error.get('errors') or []) + (error.get('details') or []):
+                    if isinstance(item, dict):
+                        reasons.add(str(item.get('reason') or '').lower())
+        except (ValueError, TypeError, AttributeError):
+            pass
+    code = 'unavailable'
+    message = 'Gmail is temporarily unavailable. The next check will retry; messages were not changed.'
+    retryable = status == 429 or (status is not None and status >= 500) or isinstance(exc, (requests.Timeout, requests.ConnectionError))
+    if (status == 403 and reasons & {'ratelimitexceeded', 'userratelimitexceeded'}) or status == 429:
+        code, message, retryable = 'rate_limit', 'Google has temporarily limited Gmail requests. Wait for the next automatic check; reconnecting is not needed.', True
+    elif status == 403 and 'dailylimitexceeded' in reasons:
+        code, message = 'daily_quota', 'Google reports the Gmail API daily quota is exhausted. The Google Cloud project owner must review its API quota.'
+    elif status == 403 and 'domainpolicy' in reasons:
+        code, message = 'domain_policy', 'Google Workspace policy blocks Gmail access. Ask your Workspace administrator to approve this app.'
+    elif status == 403 and reasons & {'insufficientpermissions', 'access_token_scope_insufficient'}:
+        code, message = 'read_permission', 'Google reports missing Gmail read permission. Reconnect Gmail and approve reading email content.'
+    elif status == 401:
+        code, message = 'authorization', 'Google rejected the Gmail authorization. Reconnect Gmail from Connections.'
+    elif status == 403:
+        code, message = 'access_blocked', 'Google blocked Gmail access (HTTP 403). Review Google app permissions and API quota; the exact cause was not supplied.'
+    elif status == 404:
+        code, message = 'message_missing', 'A Gmail message is no longer available. Other messages can still import.'
+    return {'code': code, 'error': message, 'retryable': retryable, 'stop_sync': status != 404}
+
+
 def _api(token, path, params=None):
     last = None
     for attempt in range(3):
@@ -57,17 +91,17 @@ def _api(token, path, params=None):
                 headers={'Authorization': 'Bearer ' + token},
                 timeout=25,
             )
-            if r.status_code == 429 or r.status_code >= 500:
+            if gmail_read_failure(requests.HTTPError(response=r))['retryable']:
                 last = requests.HTTPError('Gmail temporary error HTTP ' + str(r.status_code), response=r)
                 if attempt < 2:
-                    time.sleep(0.4 * (attempt + 1))
+                    time.sleep(2 ** attempt)
                     continue
             r.raise_for_status()
             return r.json()
         except (requests.Timeout, requests.ConnectionError) as exc:
             last = exc
             if attempt < 2:
-                time.sleep(0.4 * (attempt + 1))
+                time.sleep(2 ** attempt)
                 continue
             raise
     if last:
@@ -488,7 +522,12 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
     if fluid:
         with transaction(path) as db:
             summary['promoted_existing_calls']=promote_pending_call_events(db,actor,new_lead)
-    label_rows = _api(access_token, 'labels').get('labels') or []
+    try:
+        label_rows = _api(access_token, 'labels').get('labels') or []
+    except requests.RequestException as exc:
+        failure = gmail_read_failure(exc)
+        summary['errors'].append({'feed': 'connection', 'error': failure['error'], 'code': failure['code']})
+        return summary
     label_ids = {x.get('name'): x.get('id') for x in label_rows if x.get('name') and x.get('id')}
     for feed, label_name in FEEDS.items():
         if feed_names is not None and feed not in feed_names:continue
@@ -515,9 +554,9 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
             if listing.get('nextPageToken'):summary['errors'].append({'feed':feed,'error':'Inquiry backlog is still importing; the next sync will continue from this page.'})
         except requests.RequestException as exc:
             summary['feeds'][feed] = 0
-            status = getattr(getattr(exc, 'response', None), 'status_code', None)
-            summary['errors'].append({'feed': feed, 'error': 'Gmail list failed' + (f' (HTTP {status})' if status else '')})
-            continue
+            failure = gmail_read_failure(exc)
+            summary['errors'].append({'feed': feed, 'error': failure['error'], 'code': failure['code']})
+            return summary
         ids = [x['id'] for x in listing.get('messages') or []]
         summary['feeds'][feed] = len(ids)
         errors_before=len(summary['errors'])
@@ -532,8 +571,9 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
             try:
                 message = _api(access_token, 'messages/' + quote(mid, safe=''), {'format': 'full'})
             except requests.RequestException as exc:
-                status = getattr(getattr(exc, 'response', None), 'status_code', None)
-                summary['errors'].append({'feed': feed, 'message_id': mid, 'error': 'Gmail message read failed' + (f' (HTTP {status})' if status else '')})
+                failure = gmail_read_failure(exc)
+                summary['errors'].append({'feed': feed, 'message_id': mid, 'error': failure['error'], 'code': failure['code']})
+                if failure['stop_sync']:return summary
                 continue
             headers = _headers(message)
             received_at = _gmail_received_iso(message,headers) or now()
