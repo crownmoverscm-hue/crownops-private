@@ -489,7 +489,7 @@ def create_app(database_path=None):
             lead['tasks']=rows(db,'SELECT * FROM tasks WHERE lead_id=? ORDER BY due_date DESC',(lid,))
         return lead
 
-    def new_lead(db,data,actor,external_id=None,suppressed=1):
+    def new_lead(db,data,actor,external_id=None,suppressed=1,prepare_estimate=True):
         t=now();record={k:bounded(data.get(k,''),k) for k in LEAD_FIELDS}
         record['photo_link']=photo_link(record['photo_link'])
         record['intake_json']=dumps(intake_values(data.get('intake',{})))
@@ -503,7 +503,7 @@ def create_app(database_path=None):
         insert(db,'tasks',dict(id=uid('TASK'),lead_id=record['id'],title='Review new inquiry',due_date=business_day(t),
                               owner=record.get('assigned_to',''),created_at=t))
         audit(db,actor,'Lead created','leads',record['id'])
-        if record['lead_type'] not in ('Missed Call','Voicemail','Email'):
+        if prepare_estimate and record['lead_type'] not in ('Missed Call','Voicemail','Email'):
             from .automatic_intake import prepare_draft
             prepare_draft(db,one(db,'SELECT * FROM leads WHERE id=?',(record['id'],)),actor)
         return record
@@ -1433,6 +1433,8 @@ def create_app(database_path=None):
     register_schedule_imports(app,path,auth)
     from .schedule_paste import register_pasted_schedule
     register_pasted_schedule(app,path,auth)
+    from .wix_sync import register_wix
+    register_wix(app,path,auth,new_lead)
 
     from .portal import register_portal
     from .operations import register_operations

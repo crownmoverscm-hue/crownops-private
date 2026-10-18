@@ -372,3 +372,16 @@ CREATE TABLE IF NOT EXISTS expense_sources (
  checked_at TEXT NOT NULL, created_at TEXT NOT NULL,
  UNIQUE(realm_id,environment,kind,external_id)
 );
+CREATE TABLE IF NOT EXISTS wix_events (
+ id TEXT PRIMARY KEY, event TEXT NOT NULL, document_id TEXT NOT NULL,
+ fingerprint TEXT NOT NULL, payload_json TEXT NOT NULL,
+ received_at TEXT NOT NULL, last_received_at TEXT NOT NULL,
+ deliveries INTEGER NOT NULL DEFAULT 1,
+ status TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+ service_date TEXT NOT NULL DEFAULT '', start_time TEXT NOT NULL DEFAULT '',
+ lead_id TEXT REFERENCES leads(id), calendar_id TEXT,
+ review_note TEXT NOT NULL DEFAULT '', reviewed_by TEXT, reviewed_at TEXT,
+ UNIQUE(event,document_id,fingerprint)
+);
+CREATE INDEX IF NOT EXISTS wix_events_document ON wix_events(event,document_id);
+CREATE INDEX IF NOT EXISTS wix_events_received ON wix_events(received_at);

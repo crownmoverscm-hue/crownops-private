@@ -334,9 +334,18 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
             if old:return {'job_id':old['job_id'],'lead_id':old['lead_id'],'already_promoted':True}
             source=one(db,'SELECT * FROM imported_schedule_events WHERE source_key=?',(key,))
             if not source:raise HTTPException(404,'Source event not found.')
-            lid=data.get('lead_id')
+            source_payload=json.loads(source['payload_json'])
+            lid=data.get('lead_id') or (source_payload.get('lead_id') if source_payload.get('source_type')=='wix' else None)
             if lid:l=staff_read_project(db,lid,u)
             else:l=new_lead(db,data.get('client',{}),u['id'],external_id='schedule-review:'+key,suppressed=1)
+            if source_payload.get('source_type')=='wix' and lid==source_payload.get('lead_id'):
+                # The imported billing address was deliberately not used as a
+                # route. Keep the service addresses explicitly reviewed here.
+                updates={k:text(data.get('client',{}).get(k,''),k,2000) for k in ('pickup','dropoff') if not l.get(k)}
+                updates={k:v for k,v in updates.items() if v}
+                if updates:
+                    db.execute('UPDATE leads SET '+','.join(k+'=?' for k in updates)+',version=version+1,updated_at=? WHERE id=?',list(updates.values())+[now(),lid])
+                    audit(db,u['id'],'Missing Wix service addresses filled during source review','leads',lid,{'fields':list(updates)})
             start,end,crew,trucks=check_job_resources(db,data)
             rec=dict(id=uid('JOB'),lead_id=l['id'],title=l['client_name'],phase=text(data.get('phase','Moving'),'Phase',80),start_at=start,end_at=end,status='Tentative',notes='Reviewed source '+key+'; '+data['note'],created_by=u['id'],created_at=now())
             insert(db,'jobs',rec)
