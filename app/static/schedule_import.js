@@ -18,8 +18,6 @@
       const matches=current.filter(e=>e.date===days[i]);
       if(!matches.length)return;
       column.querySelector('.weekly-day-jobs')?.insertAdjacentHTML('beforeend',matches.map(card).join(''));
-      const count=column.querySelector('.weekly-day-head > span');
-      if(count)count.textContent+=' + '+matches.length+' imported';
       column.querySelectorAll('.weekly-open-slot').forEach(el=>el.remove());
     });
     return template.innerHTML+toolbar;

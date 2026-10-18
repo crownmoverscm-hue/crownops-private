@@ -167,3 +167,10 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 @media(prefers-reduced-motion:reduce){.sidebar{transition:none}html{scroll-behavior:auto!important}}
 /* The browser's default [hidden] rule otherwise loses to the flex strip. */
 #pilot-strip[hidden]{display:none!important}
+
+/* Let the service date lead each schedule column, on desktop and phones. */
+.weekly-day-head{height:auto;min-height:90px;padding:14px 15px;display:block}
+.weekly-day-head>div{display:block}
+.weekly-day-head small{font-size:15px;line-height:1.35;font-weight:650;text-transform:none;letter-spacing:0;color:var(--muted)}
+.weekly-day-head strong{font-size:28px;line-height:1.2;letter-spacing:-.5px;margin-top:5px;color:var(--ink)}
+.weekly-day-head time{white-space:nowrap}
