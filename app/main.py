@@ -174,17 +174,29 @@ def create_app(database_path=None):
             while True:
                 await asyncio.to_thread(run_intake,path,new_lead)
                 await asyncio.sleep(120)
+        async def connection_worker():
+            from .providers import maintain_connections
+            while True:
+                try:await asyncio.to_thread(maintain_connections,path)
+                except Exception:
+                    import logging
+                    logging.getLogger('crownops').error('Connection maintenance will retry. Saved authorizations retained.')
+                await asyncio.sleep(900)
+        connection_task=asyncio.create_task(connection_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
         intake_task=asyncio.create_task(inquiry_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
         task=asyncio.create_task(review_worker()) if os.getenv('CROWNOPS_RUN_WORKER')=='1' else None
         try:yield
         finally:
+            if connection_task:
+                connection_task.cancel()
+                with suppress(asyncio.CancelledError):await connection_task
             if intake_task:
                 intake_task.cancel()
                 with suppress(asyncio.CancelledError):await intake_task
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.12.3-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.12.4-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     from .app_release import register_app_release
     register_app_release(app,ROOT)
     app.state.db_path=path
@@ -262,7 +274,7 @@ def create_app(database_path=None):
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
         from .photo_safety import photo_mode,upload_policy
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.3-rc1',
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.4-rc1',
                 'private_photos_available':photo_mode() and upload_policy()['enabled']}
 
     @app.post('/api/setup-owner')

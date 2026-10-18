@@ -4,14 +4,15 @@
   let sourceText='', previewResult=null;
   const office=()=>['owner','manager'].includes(S.user.role);
   const items=()=> (S.importedSchedule||[]).filter(e=>e.source_type==='pasted_schedule'&&!e.promoted_job_id);
-  const card=e=>`<button type="button" class="job-card" data-action="open-imported-job" data-id="${h(e.id)}"><span class="pill orange">Imported · review needed</span><strong>${h(e.client_name)}</strong><div>${h(e.service||'Service type needed')}</div><small>${h(e.time_label||'Time needed')} · ${h(e.crew_size||'?')} movers requested</small><small>${h(e.crew_raw||'Crew names needed')}</small></button>`;
+  const card=e=>`<button type="button" class="job-card" data-action="open-imported-job" data-id="${h(e.id)}"><span class="pill orange">Planning needed</span><strong>${h(e.client_name)}</strong><div>${h(e.service||'Service type needed')}</div><small>${h(e.time_label||'Time needed')} · ${h(e.crew_size||'?')} movers requested</small><small>${h(e.crew_raw||'Crew names needed')}</small></button>`;
   const baseSchedule=schedulePage;
   schedulePage=async function(){
     const html=await baseSchedule();
     S.importedSchedule=await api('/schedule-imports/events');
     const current=items();
-    const toolbar=`<section class="panel" style="margin-top:20px"><div class="panel-body"><h2>Imported current services</h2><p>${current.length} service${current.length===1?'':'s'} awaiting review${current.some(e=>!e.date)?' · '+current.filter(e=>!e.date).length+' need a date':''}. Source details are saved; times, crew and booking state still need review before these become working jobs.</p><div class="row wrap">${office()?'<button type="button" data-schedule-import="paste">Import current services</button>':''}${current.length?'<button type="button" data-schedule-import="list">View all imported services</button>':''}</div></div></section>`;
-    if(S.jobScope==='mine')return html+toolbar;
+    const undated=current.filter(e=>!e.date).length;
+    const toolbar=undated?`<div class="row wrap" style="margin-top:20px"><button type="button" data-schedule-import="undated">${undated} service${undated===1?' needs':'s need'} a date</button></div>`:'';
+    if(S.jobScope==='mine')return html;
     const template=document.createElement('template');template.innerHTML=html;
     const days=weekDays().map(dateIso);
     template.content.querySelectorAll('.weekly-day-column').forEach((column,i)=>{
@@ -21,6 +22,11 @@
       column.querySelectorAll('.weekly-open-slot').forEach(el=>el.remove());
     });
     return template.innerHTML+toolbar;
+  };
+  const baseSettings=settingsPage;
+  settingsPage=async function(){
+    const html=await baseSettings();
+    return html+(office()?'<div class="spacer"></div>'+panel('Schedule setup','<p>Bring existing services into CrownOps and finish their planning details.</p><div class="row wrap"><button type="button" data-schedule-import="paste">Import current services</button><button type="button" data-schedule-import="list">Review setup services</button></div>'):'');
   };
   function pasteForm(){
     previewResult=null;
@@ -50,11 +56,15 @@
     e.preventDefault();button.disabled=true;
     try{
       if(button.dataset.scheduleImport==='paste')return pasteForm();
-      if(button.dataset.scheduleImport==='list')return showModal('Imported current services',`<p>Open a service to review its original details. Source status “In progress” does not mean the crew has started work.</p><div class="grid2">${items().sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999')).map(e=>`<section><h3>${h(e.date||'Date needed')}</h3>${card(e)}</section>`).join('')}</div>`,btn('close','Close'),true);
+      if(['list','undated'].includes(button.dataset.scheduleImport)){
+        S.importedSchedule=await api('/schedule-imports/events');
+        const list=items().filter(e=>button.dataset.scheduleImport!=='undated'||!e.date);
+        return showModal(button.dataset.scheduleImport==='undated'?'Services needing a date':'Service planning',`<p>Open a service to complete its date, crew, truck and booking details.</p><div class="grid2">${list.sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999')).map(e=>`<section><h3>${h(e.date||'Date needed')}</h3>${card(e)}</section>`).join('')||'<p>No services need setup.</p>'}</div>`,btn('close','Close'),true);
+      }
       if(button.dataset.scheduleImport==='commit'&&previewResult){
         const result=await api('/schedule-imports/paste',{method:'POST',data:{text:sourceText,preview_token:previewResult.preview_token}});
         sourceText='';previewResult=null;modal.close();await navigate('schedule');
-        showModal('Current services imported',`<h3>${result.imported} services saved for review</h3><p>${result.skipped} existing or repeated entries skipped. ${result.undated} saved without a date.</p><p>Find them in Schedule → All Jobs and View all imported services. Review a source record before creating its working job. No emails or payment receipts were created.</p>`,btn('close','Done'));
+        showModal('Current services imported',`<h3>${result.imported} services saved for review</h3><p>${result.skipped} existing or repeated entries skipped. ${result.undated} saved without a date.</p><p>Find them in Schedule → All Jobs, or Settings & imports → Review setup services. Review a source record before creating its working job. No emails or payment receipts were created.</p>`,btn('close','Done'));
       }
     }catch(ex){modalError(ex);}finally{if(button.isConnected)button.disabled=false;}
   });

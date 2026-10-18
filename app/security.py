@@ -135,6 +135,25 @@ def register_security(app,path,auth,public_url,passwords):
             db.execute('UPDATE auth_factors SET enabled=1,last_step=? WHERE user_id=?',(valid[0],u['id']));audit(db,u['id'],'MFA enabled','users',u['id'])
         return {'ok':True}
 
+    @app.post('/api/security/mfa-disable')
+    def disable(data:dict,request:Request,u=Depends(auth)):
+        with transaction(path) as db:
+            allowed=recovery_rate_limit(db,request,u['email'],purpose='mfa-disable')
+        if not allowed:raise HTTPException(429,'Too many attempts. Wait 15 minutes before trying again.')
+        try:passwords.verify(u['password_hash'],data.get('password',''))
+        except Exception:raise HTTPException(401,'Confirm your current password.')
+        code=data.get('code','')
+        with transaction(path) as db:
+            factor=one(db,'SELECT * FROM auth_factors WHERE user_id=? AND enabled=1',(u['id'],))
+            if factor:
+                step=int(time.time()//30);key=decrypt(factor['secret_ciphertext'])['secret']
+                valid=isinstance(code,str) and len(code)==6 and code.isdigit() and any(n>factor['last_step'] and hmac.compare_digest(totp(key,n),code) for n in (step-1,step,step+1))
+                if not valid:raise HTTPException(401,'Enter a fresh six-digit code from your authenticator. Wait for the next code if you just used this one.')
+            db.execute('DELETE FROM auth_factors WHERE user_id=?',(u['id'],))
+            db.execute('DELETE FROM sessions WHERE user_id=? AND csrf<>?',(u['id'],u['csrf']))
+            audit(db,u['id'],'Authenticator disabled by account holder; other sessions revoked','users',u['id'])
+        return {'ok':True,'mfa_enabled':False}
+
     @app.post('/api/security/change-password')
     def change_password(data:dict,u=Depends(auth)):
         try:passwords.verify(u['password_hash'],data.get('current_password',''))

@@ -35,15 +35,43 @@ def provider_token(path,provider,require_external=True):
         if not r:raise HTTPException(503,provider+' is not connected.')
         body=decrypt(r['ciphertext'])
         if body.get('expires_at',0)>time.time():return body
+        if not body.get('refresh_token'):
+            raise HTTPException(409,'Reconnect '+provider+' once to allow automatic renewal.')
         params={'grant_type':'refresh_token','refresh_token':body['refresh_token']}
         cid=os.getenv(cfg['prefix']+'_CLIENT_ID','');cs=os.getenv(cfg['prefix']+'_CLIENT_SECRET','')
         kwargs={'auth':(cid,cs)} if provider=='quickbooks' else {}
         if provider=='gmail':params.update(client_id=cid,client_secret=cs)
         try:
-            r=requests.post(cfg['token'],data=params,timeout=20,**kwargs);r.raise_for_status();new=r.json()
-        except requests.RequestException:raise HTTPException(502,'Connection refresh failed. Reconnect '+provider+' from Settings.')
-        new.setdefault('refresh_token',body.get('refresh_token'));new['realm_id']=body.get('realm_id');token_save(db,provider,new)
+            r=requests.post(cfg['token'],data=params,timeout=15,**kwargs)
+            if r.status_code in (400,401):
+                try:error=r.json().get('error')
+                except ValueError:error=None
+                if error=='invalid_grant':raise HTTPException(409,provider+' requires permission again. An owner can reconnect it in Connections.')
+            r.raise_for_status();new=r.json()
+            if not new.get('access_token'):raise ValueError('Missing access token')
+        except (requests.RequestException,ValueError):
+            raise HTTPException(502,'Temporary '+provider+' connection problem. The connection is saved and CrownOps will retry automatically.')
+        new['refresh_token']=new.get('refresh_token') or body.get('refresh_token');new['realm_id']=body.get('realm_id');token_save(db,provider,new)
         return new
+
+def maintain_connections(path):
+    """Renew existing grants without sending email or changing accounting records."""
+    for provider in PROVIDERS:
+        with closing(connect(path)) as db:
+            if not one(db,'SELECT provider FROM oauth_credentials WHERE provider=?',(provider,)):continue
+            previous=settings(db,'connection_health_'+provider,{}) or {}
+        if previous.get('state')=='reconnect_required':continue
+        try:
+            provider_token(path,provider,require_external=False)
+            health={'state':'connected','checked_at':now(),'message':'Connection renews automatically.'}
+        except HTTPException as error:
+            health={'state':'reconnect_required' if error.status_code==409 else 'retrying','checked_at':now(),
+                    'message':'Permission must be renewed by an owner.' if error.status_code==409 else 'Temporary problem. Retrying automatically; saved connection retained.'}
+        except Exception:
+            health={'state':'retrying','checked_at':now(),'message':'Connection check could not finish. Retrying automatically.'}
+        with transaction(path) as db:
+            if one(db,'SELECT provider FROM oauth_credentials WHERE provider=?',(provider,)):
+                put_setting(db,'connection_health_'+provider,health)
 
 def _qbo_connection(path):
     t=provider_token(path,'quickbooks',require_external=False);realm=t.get('realm_id')
@@ -250,7 +278,9 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             operations=rows(db,'SELECT id,provider,object_id,kind,status,error,created_at,updated_at FROM provider_operations ORDER BY created_at DESC LIMIT 60')
         env=quickbooks_environment()
         mappings={k:qbo_mapping(path,k) for k in ('service_item_id','tax_code_id','discount_account_id','deposit_account_id')}
-        with closing(connect(path)) as db:reviewed=settings(db,'quickbooks_mappings_reviewed_'+env,{}) or {}
+        with closing(connect(path)) as db:
+            reviewed=settings(db,'quickbooks_mappings_reviewed_'+env,{}) or {}
+            health={key:settings(db,'connection_health_'+key,{}) or {} for key in PROVIDERS}
         reviewed_matches=bool(reviewed and reviewed.get('policy')=='quebec-normal-move-v1' and all(str(reviewed.get(k,'')).strip()==str(mappings.get(k,'')).strip() for k in ('service_item_id','tax_code_id','deposit_account_id')))
         mappings_complete=bool(reviewed_matches and mappings['service_item_id'] and mappings['tax_code_id'] and mappings['deposit_account_id'])
         return {'external_actions_enabled':live_enabled(),'gmail':{'authorized_at':connected.get('gmail'),'configured':bool(os.getenv('GOOGLE_CLIENT_ID'))},
@@ -258,7 +288,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
           'square':square_connection_status(),
           'ai':{'configured':bool(os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_MODEL'))},
           'intake':{'configured':len(os.getenv('CROWNOPS_WEBHOOK_SECRET',''))>=32},'scanner':{'configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND'))},
-          'operations':operations,'note':'Configuration/authorization does not certify a successful end-to-end live test.'}
+          'connection_health':health,'operations':operations,'note':'Configuration/authorization does not certify a successful end-to-end live test.'}
 
     @app.get('/api/quickbooks/setup')
     def quickbooks_setup(u=Depends(auth)):
@@ -449,15 +479,23 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             r=requests.post(cfg['token'],data=body,timeout=25,**kwargs);r.raise_for_status();tokens=r.json()
             if not tokens.get('access_token') or not tokens.get('refresh_token'):raise ValueError('Missing credentials')
             if provider=='quickbooks':tokens['realm_id']=request.query_params.get('realmId','')
-            with transaction(path) as db:token_save(db,provider,tokens);audit(db,s['user_id'],'Provider authorization completed','connections',provider)
+            with transaction(path) as db:
+                if not one(db,'SELECT state_hash FROM oauth_states WHERE state_hash=?',(stamp_hash(state),)):
+                    raise ValueError('Connection request was cancelled')
+                token_save(db,provider,tokens)
+                put_setting(db,'connection_health_'+provider,{'state':'connected','checked_at':now(),'message':'Connection renews automatically.'})
+                audit(db,s['user_id'],'Provider authorization completed','connections',provider)
         except Exception:raise HTTPException(502,'Connection exchange failed. Check provider configuration and reconnect. Tokens were not exposed.')
         return RedirectResponse('/#connections',status_code=303)
 
     @app.post('/api/disconnect/{provider}')
     def disconnect(provider:str,u=Depends(auth)):
-        require_role(u,MANAGERS)
+        require_role(u,{'owner'})
+        if provider not in PROVIDERS:raise HTTPException(422,'Unknown provider.')
         with transaction(path) as db:
             db.execute('DELETE FROM oauth_credentials WHERE provider=?',(provider,));audit(db,u['id'],'Local provider credentials removed','connections',provider)
+            db.execute('DELETE FROM oauth_states WHERE provider=?',(provider,))
+            put_setting(db,'connection_health_'+provider,{})
         return {'ok':True,'note':'Also revoke access in the provider account if required.'}
 
     @app.post('/api/outbound/{mid}/send')
