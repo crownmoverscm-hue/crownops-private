@@ -32,12 +32,15 @@ function crmActivityTime(v){
 }
 function crmActivityBadge(a){
  if(!a)return '<span class="pill gray">Client record</span>';
- const label=String(a.label||'Inquiry');
+ const label=({'Quote request':'Quote Form','Email':'Client Email','Manual service':'Manual Inquiry','Instant estimate':'Instant Estimate','Missed call':'Missed Call'})[a.label]||String(a.label||'Inquiry');
  const cl=/voicemail/i.test(label)?'purple':/missed call/i.test(label)?'red':/quote request|form/i.test(label)?'blue':/email/i.test(label)?'teal':'gray';
  return '<span class="pill '+cl+'">'+h(label)+'</span>';
 }
 async function crmClientBrowser(){
- const clients=await crmSearchClients(CRM.clientSearch);
+ const [clients,intake,callbacks,overview]=await Promise.all([crmSearchClients(CRM.clientSearch),api('/intake/status').catch(()=>null),api('/callbacks').catch(()=>[]),api('/sales/overview').catch(()=>null)]);
+ const sync=intake?'<div class="intake-status"><div><strong>'+h(intake.settings?.enabled===false?'Automatic inquiry import is paused':intake.error?'Inquiry import needs attention':'Automatic inquiry import is on')+'</strong><div class="small muted">'+h(intake.error||intake.summary?.errors?.map(x=>x.error).join(' · ')||(intake.last_success?'Last successful check: '+crmActivityTime(intake.last_success):'Checks Gmail quote forms, missed calls and voicemail every 2 minutes when Gmail is connected.'))+'</div></div><button data-intake="sync" class="btn-soft">Check inquiries now</button>'+(intake.can_manage?'<button data-intake="toggle" data-enabled="'+(intake.settings?.enabled===false?'true':'false')+'">'+(intake.settings?.enabled===false?'Resume':'Pause')+'</button>':'')+'</div>':'';
+ const callbackPanel=callbacks.some(c=>c.status==='Requested')?panel('Client callback requests',callbacks.filter(c=>c.status==='Requested').map(c=>'<div class="activity-row"><div class="grow"><strong>'+h(c.client_name)+'</strong><div><a href="tel:'+h(c.phone.replace(/[^+0-9]/g,''))+'">'+h(c.phone)+'</a></div><div class="small">'+h(c.preferred_time||'No preferred time')+'</div><p>'+h(c.message)+'</p></div><button data-intake="callback-complete" data-id="'+h(c.id)+'">Mark completed</button></div>').join('')):'';
+
  const rows=clients.map(c=>{
    const a=c.latest_activity||{};
    const latest=(c.services||[]).find(s=>s.id===a.lead_id)||(c.services||[])[0]||{};
@@ -49,44 +52,47 @@ async function crmClientBrowser(){
     '<div class="client-name">'+h(c.client_name)+'</div><div class="tiny muted">'+h(c.email||'')+'<br>'+h(uxPhoneLabel(c.phone))+'</div>',
     activity,
     latest.id?(h(uxDateLabel(latest.move_date,'Date needed'))+'<div class="tiny muted">'+h(latest.pickup||'Address needed')+'</div>'):'No service yet',
-    pill(latest.stage||'Client')+(follow?'<div class="tiny" style="margin-top:5px"><strong>'+h(follow)+'</strong> open follow-up'+(follow===1?'':'s')+'</div>':''),
-    h((c.services||[]).length),
+    pill(latest.stage||'Client')+(latest.intake_status?'<div class="tiny muted">'+h(latest.intake_status)+'</div>':'')+(follow?'<div class="tiny" style="margin-top:5px"><strong>'+h(follow)+'</strong> open follow-up'+(follow===1?'':'s')+'</div>':''),
+    h(overview?.owners?.[latest.id]||'Unassigned')+(overview?.next_actions?.[latest.id]?'<div class="tiny strong">'+h(overview.next_actions[latest.id].title)+'</div><div class="tiny muted">Due '+h(overview.next_actions[latest.id].due_date||'date needed')+' · '+h(overview.next_actions[latest.id].owner)+'</div>':'<div class="tiny muted">No scheduled next action</div>'),
     '<button class="btn-small" data-crm="client-open" data-id="'+h(c.id)+'">Open</button>'
    ];
  });
  return head('Sales & clients','Your newest quote requests, missed calls, voicemails and client messages appear first. Search any client without losing their service history.',
    '<button class="btn-primary" data-crm="client-new">'+icon('plus')+'New client</button>'+
    '<button class="btn-soft" data-action="new-lead">'+icon('plus')+'New inquiry</button>')+
-   '<div class="filterbar"><div class="searchbox" style="min-width:360px">'+icon('search')+
+   sync+callbackPanel+(overview?crownSalesPriorities(overview):'')+'<div class="filterbar"><div class="searchbox" style="min-width:min(360px,100%)">'+icon('search')+
    '<input id="crm-client-search" value="'+h(CRM.clientSearch)+'" placeholder="Search name, email, phone or address..." aria-label="Search clients"></div>'+
    '<span class="tiny muted">'+clients.length+' client matches · newest inquiry first</span></div>'+
    '<div class="panel"><div class="panel-head"><h2>Inquiry inbox</h2><span class="tiny muted">Forms, calls, voicemails and emails are ranked by the actual inquiry time</span></div>'+
-   '<div class="panel-body flush">'+(rows.length?xtable(['Client','Latest inquiry','Move / service','Stage / follow-up','History',''],rows):empty('No clients found','Search another email, phone or name, or create a new client.'))+'</div></div>';
+   '<div class="panel-body flush sales-inquiry-table">'+(rows.length?crownInquiryTable(rows):empty('No clients found','Search another email, phone or name, or create a new client.'))+'</div></div>';
 }
 X.pageRenderers.sales=crmClientBrowser;
 
 const crmBaseQuotes=X.pageRenderers.quotes;
 X.pageRenderers.quotes=async()=>{
- const all=await api('/quotes');
+ const [history,overviewData]=await Promise.all([api('/quotes'),api('/sales/overview')]);
+ const seen=new Set();const all=(CRM.showHistory?history:history.slice().sort((a,b)=>b.revision-a.revision).filter(q=>{if(seen.has(q.lead_id))return false;seen.add(q.lead_id);return true;})).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+ const delivery=q=>overviewData.quote_delivery[q.id]||{state:q.status==='Approved'?'Ready':q.status};
  const search=String(UX.estimateSearch||'').trim().toLowerCase();
- const filtered=all.filter(q=>(UX.estimateStatus==='all'||q.status===UX.estimateStatus)&&(!search||[q.client_name,q.status,q.inputs?.move_date,q.inputs?.pickup,q.inputs?.dropoff,q.inputs?.service_type].join(' ').toLowerCase().includes(search)));
- const counts={all:all.length,Draft:0,Approved:0,Accepted:0};all.forEach(q=>{if(counts[q.status]!==undefined)counts[q.status]++;});
+ const filtered=all.filter(q=>(UX.estimateStatus==='all'||delivery(q).state===UX.estimateStatus||UX.estimateStatus==='Approved'&&q.status==='Approved')&&(!search||[q.client_name,q.status,q.inputs?.move_date,q.inputs?.pickup,q.inputs?.dropoff,q.inputs?.service_type].join(' ').toLowerCase().includes(search)));
+ const counts={all:all.length,Draft:0,Ready:0,Sent:0,Accepted:0};all.forEach(q=>{const state=delivery(q).state;if(counts[state]!==undefined)counts[state]++;});
  const rows=filtered.map(q=>[
    '<div class="client-name">'+h(q.client_name)+'</div><div class="tiny muted">Revision '+h(q.revision)+' · '+h(q.inputs?.service_type||'Moving')+'</div>',
    h(uxDateLabel(q.inputs?.move_date,'Date needed')),
    q.result?.movers?('<strong>'+h(q.result.movers)+' movers</strong><div class="tiny muted">'+h(q.result.trucks||1)+' truck(s)</div>'):'—',
    '<strong>'+crmCash(q.result?.low_cents)+'</strong> – <strong>'+crmCash(q.result?.high_cents)+'</strong>',
-   pill(q.status),
+   pill(delivery(q).state)+(delivery(q).opens?'<div class="tiny muted">'+h(delivery(q).opens)+' estimate open(s)</div>':''),
    '<button class="btn-small" data-crm="quote-open" data-id="'+h(q.id)+'">Open</button>'
  ]);
  const overview='<div class="ux-overview-grid">'+[
   uxOverviewMetric('Total estimates',counts.all),uxOverviewMetric('Draft',counts.Draft),
-  uxOverviewMetric('Ready / sent',counts.Approved),uxOverviewMetric('Accepted',counts.Accepted)
+  uxOverviewMetric('Ready to send',counts.Ready),uxOverviewMetric('Sent',counts.Sent),uxOverviewMetric('Accepted',counts.Accepted)
  ].join('')+'</div>';
  const filters='<div class="ux-browser-toolbar"><div class="ux-filter-chips">'+[
   uxStatusButton('estimate-filter','all','All',counts.all,UX.estimateStatus),
   uxStatusButton('estimate-filter','Draft','Draft',counts.Draft,UX.estimateStatus),
-  uxStatusButton('estimate-filter','Approved','Sent / ready',counts.Approved,UX.estimateStatus),
+  uxStatusButton('estimate-filter','Ready','Ready to send',counts.Ready,UX.estimateStatus),
+  uxStatusButton('estimate-filter','Sent','Sent',counts.Sent,UX.estimateStatus),
   uxStatusButton('estimate-filter','Accepted','Accepted',counts.Accepted,UX.estimateStatus)
  ].join('')+'</div><div class="searchbox ux-browser-search">'+icon('search')+
  '<input id="ux-estimate-search" value="'+h(UX.estimateSearch)+'" placeholder="Search client, email, date or address" aria-label="Search estimates"></div></div>';
@@ -94,7 +100,7 @@ X.pageRenderers.quotes=async()=>{
    '<button class="btn-primary" data-crm="quote-new">'+icon('plus')+'New Quote</button>'+
    '<button class="btn-soft" data-crm="templates">'+icon('file')+'Templates</button>')+
    panel('Overview',overview)+'<div class="spacer"></div>'+
-   '<div class="panel"><div class="panel-head"><h2>Estimates</h2><span class="tiny muted">'+filtered.length+' shown</span></div>'+
+   '<div class="panel"><div class="panel-head"><h2>Estimates</h2><div class="row wrap"><span class="tiny muted">'+filtered.length+' shown · '+(CRM.showHistory?'all revisions':'latest per service')+'</span><button class="btn-small" data-sales-history>'+(CRM.showHistory?'Show latest only':'Show revision history')+'</button></div></div>'+
    filters+'<div class="panel-body flush">'+(rows.length?xtable(['Client','Service date','Crew','Estimate','Status',''],rows):empty('No estimates in this view','Create a new estimate or change the filters.'))+'</div></div>';
 };
 
@@ -157,7 +163,7 @@ async function crmNewService(cid){
 }
 async function crmQuoteBuilder(leadId='',options={}){
  const templates=await api('/crm/templates');CRM.templates=templates;
- const firstSetup=await api('/crm/quote-setup?lead_id='+encodeURIComponent(leadId)+'&movers=2');CRM.currentLead=firstSetup.lead;CRM.longDistancePresets=firstSetup.long_distance_presets||[];
+ const firstSetup=await api('/crm/quote-setup?lead_id='+encodeURIComponent(leadId)+'&movers=2');CRM.currentLead=firstSetup.lead;CRM.quoteSetup=firstSetup;CRM.longDistancePresets=firstSetup.long_distance_presets||[];
  const lead=firstSetup.lead||{};const chosen=templates.find(t=>t.template_key===options.templateKey);
  const lang=chosen?.language||(String(lead.language||'English').toLowerCase().startsWith('fr')?'French':'English');
  const type=chosen?.service_type||(['Moving','Packing','Junk Removal','Long Distance'].includes(lead.lead_type)?lead.lead_type:'Moving');
@@ -294,7 +300,7 @@ async function crmFinalize(qid){
 async function crmDepositDialog(qid){
  showModal('Deposit / booking','<form id="crm-deposit-form" data-crm-form="deposit"><input type="hidden" name="quote_id" value="'+h(qid)+'"><div class="grid2">'+
    select('method','Method',[['Interac e-Transfer','Interac e-Transfer'],['Cash','Cash'],['Cheque','Cheque']],'Interac e-Transfer')+
-   select('mode','Status',[['received','Payment received and verified'],['due_on_service','Approve booking · payment due on service day']],'received')+
+   select('mode','Status',[['received','Payment received and verified'],...(may(['owner','manager'])?[['due_on_service','Approve booking · payment due on service day']]:[])],'received')+
    field('amount','Amount received',300,'number','step="0.01" min="0.01"')+field('reference','Transfer / receipt / cheque reference')+
    '</div><p class="small muted">Use “due on service day” only for an approved cash/cheque arrangement. CrownOps will confirm the service but will not pretend money was received.</p></form>',
    btn('close','Cancel')+'<button type="submit" form="crm-deposit-form" class="btn-primary">Save deposit status</button>');
@@ -381,7 +387,7 @@ document.addEventListener('submit',async e=>{
    if(kind==='client-edit'){const cid=d.client_id;delete d.client_id;await api('/crm/clients/'+encodeURIComponent(cid),{method:'PATCH',data:d});toast('Client contact saved.');modal.close();return crmOpenClient(cid);}
    if(kind==='service'){const cid=d.client_id;delete d.client_id;const r=await api('/crm/clients/'+encodeURIComponent(cid)+'/services',{method:'POST',data:d});modal.close();return crmQuoteBuilder(r.lead_id);}
    if(kind==='quote'){const qd=crmQuoteData();if(!qd)return;await api('/crm/quotes/calculate',{method:'POST',data:qd});const q=await api('/crm/quotes',{method:'POST',data:qd});toast('Draft estimate saved.');modal.close();return crmOpenQuote(q.id);}
-   if(kind==='deposit'){const qid=d.quote_id;delete d.quote_id;d.amount=Number(d.amount||0);const r=await api('/crm/quotes/'+encodeURIComponent(qid)+'/manual-deposit',{method:'POST',data:d});toast(r.confirmed?'Booking confirmed. Confirmation email is prepared.':'Partial deposit saved.');modal.close();return crmOpenQuote(qid);}
+   if(kind==='deposit'){const qid=d.quote_id;delete d.quote_id;d.amount=Number(d.amount||0);const r=await api('/crm/quotes/'+encodeURIComponent(qid)+'/manual-deposit',{method:'POST',data:d});toast(r.attention||(r.confirmed?'Booking confirmed. Confirmation email is prepared.':'Partial deposit saved.'));modal.close();return crmOpenQuote(qid);}
  }catch(ex){modalError(ex);}
 });
 

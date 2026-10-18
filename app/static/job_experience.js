@@ -10,7 +10,9 @@
   function qStatus(j){return j.quote_summary?.status||'';}
   function transportLabel(q){
     if(!q) return 'Not quoted';
+    if(q.fixed_transport!==null&&q.fixed_transport!==undefined)return `Local fee · ${money(q.transport_cents||0)}`;
     const hrs=Number(q.transport_hours||0);
+    if(!hrs&&Number(q.transport_cents||0)>0)return `Transportation fee · ${money(q.transport_cents)}`;
     const hours=`${Number.isInteger(hrs)?hrs:hrs.toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} hr${hrs===1?'':'s'}`;
     return `${hours} · ${money(q.transport_cents||0)}`;
   }
@@ -97,8 +99,9 @@
     const folderLink=folder&&assigned?'<p><a class="button-link" href="'+h(folder)+'" target="_blank" rel="noopener noreferrer">Open client photo folder</a></p>':'';
     const gallery=imgs.length?`<div class="photo-grid">${imgs.map(f=>CrownPhotos.ready(f)?`<a class="photo-tile" href="/api/uploads/${encodeURIComponent(f.id)}" target="_blank" rel="noopener"><img src="/api/uploads/${encodeURIComponent(f.id)}" alt="${h(f.category)}"><span>${h(f.category)}</span></a>`:`<div class="photo-tile pending"><div>Photo pending safety review</div><span>${h(f.category)}</span></div>`).join('')}</div>`:`<div class="empty-photo-state"><strong>No photos yet</strong><span>Upload inventory, stairs, elevator, access or in-person estimate photos here.</span></div>`;
     const extra=others.length?`<div class="spacer"></div><h3>Other files</h3>${others.map(f=>`<div class="activity-row"><div class="grow"><strong>${h(f.original_name)}</strong><div class="tiny muted">${h(f.category)}</div></div>${CrownPhotos.ready(f)?`<a href="/api/uploads/${encodeURIComponent(f.id)}" target="_blank">Open</a>`:pill(f.scan_status)}</div>`).join('')}`:'';
-    const upload=canUpload?`<div class="spacer"></div><form id="job-photo-upload" data-jx-form="photo-upload" data-max-mb="${policy.max_file_mb}"><input type="hidden" name="job_id" value="${h(jid)}"><input type="hidden" name="lead_id" value="${h(j.lead_id)}"><div class="grid2"><div class="form-field"><label>Photo type</label><select name="category"><option value="Move photos">Furniture / inventory</option><option value="Access">Stairs / elevator / access</option><option value="Inventory">Inventory</option><option value="Incident">Condition / issue</option></select></div><div class="form-field"><label>Choose up to 10 photos · ${h(policy.max_file_mb)} MB each</label><input type="file" name="file" accept="${h(policy.accept)}" multiple required></div></div></form>`:'';
-    showModal('Photos · '+h(j.client.client_name),`<p class="small muted">Client uploads and Crown in-person estimate photos live together on this service.</p><p class="small muted">${h(policy.message)}</p><p id="job-photo-progress" role="status"></p>${folderLink}${gallery}${extra}${upload}`,canUpload?`<button data-action="open-job" data-id="${h(jid)}">Back to move</button>${btn('close','Close')}<button class="btn-primary" type="submit" form="job-photo-upload">Upload</button>`:btn('close','Close'),true);
+    const upload=canUpload?`<div class="spacer"></div><form id="job-photo-upload" data-jx-form="photo-upload" data-max-mb="${policy.max_file_mb}"><input type="hidden" name="job_id" value="${h(jid)}"><input type="hidden" name="lead_id" value="${h(j.lead_id)}"><div class="grid2"><div class="form-field"><label>Photo type</label><select name="category"><option value="Move photos">Furniture / inventory</option><option value="Access">Stairs / elevator / access</option><option value="Inventory">Inventory</option><option value="Incident">Condition / issue</option></select></div><div class="form-field"><label>Choose up to 10 photos / short videos · ${h(policy.max_file_mb)} MB each</label><input type="file" name="file" accept="${h(policy.accept)}" multiple required></div></div></form>`:'';
+    showModal('Photos · '+h(j.client.client_name),`<p class="small muted">Client uploads and Crown in-person estimate photos live together on this service.</p><p class="small muted">${h(policy.message)}</p><p id="job-photo-progress" role="status"></p><div id="job-media-links"></div>${folderLink}${gallery}${extra}${upload}`,canUpload?`<button data-action="open-job" data-id="${h(jid)}">Back to move</button>${btn('close','Close')}<button class="btn-primary" type="submit" form="job-photo-upload">Upload</button>`:btn('close','Close'),true);
+    await CrownMedia.staffLinks(j.lead_id,jid,'job-media-links');
   }
 
   async function openQuoteDetails(jid){
@@ -115,7 +118,7 @@
     let form='';
     if(editAllowed){
       const low=full?.result?.service_low??q.service_low, high=full?.result?.service_high??q.service_high, tr=full?.result?.transport_hours??q.transport_hours;
-      form=`<div class="spacer"></div><h3>${locked?'Create revised quote':'Adjust estimate'}</h3><form id="job-quote-revise" data-jx-form="quote-revise"><input type="hidden" name="job_id" value="${h(jid)}"><div class="grid3">${field('hours_low','Estimate from',low,'number','step="0.25" min="0.25" required')}${field('hours_high','Estimate to',high,'number','step="0.25" min="0.25" required')}${field('transport_hours','Transportation fee (hours)',tr,'number','step="0.25" min="0" required')}</div><p class="tiny muted">Example: Estimate from 5 to 7 hours · Transportation fee 1 hour. CrownOps recalculates the dollar amount from the quote rate.</p></form>`;
+      form=`<div class="spacer"></div><h3>${locked?'Create revised quote':'Adjust estimate'}</h3><form id="job-quote-revise" data-jx-form="quote-revise"><input type="hidden" name="job_id" value="${h(jid)}"><div class="grid3">${field('hours_low','Estimate from',low,'number','step="0.25" min="0.25" required')}${field('hours_high','Estimate to',high,'number','step="0.25" min="0.25" required')}${q.fixed_transport!==null&&q.fixed_transport!==undefined?field('fixed_transport','Local transportation fee · CAD',q.fixed_transport,'number','step="0.01" min="0" required placeholder="35.00"'):field('transport_hours','Base transportation (hours)',tr,'number','step="0.25" min="0" required')}</div><p class="tiny muted">Enter the estimated service range and the agreed transportation amount or hours. Use Open full quote for materials, billing details and other pricing changes.</p></form>`;
     }
     const footer=`${btn('close','Close')}${roleCanQuote()?`<button class="btn-soft" data-jx="full-quote" data-id="${h(q.id)}">Open full quote</button>`:''}${editAllowed?`<button class="btn-primary" type="submit" form="job-quote-revise">${locked?'Create revised quote':'Save revised estimate'}</button>`:''}`;
     showModal('Quote details · '+h(j.client.client_name),summary+'<div class="spacer"></div>'+note+form,footer,true);
@@ -150,12 +153,12 @@
       if(f.dataset.jxForm==='photo-upload'){
         const lid=f.elements.lead_id.value,jid=f.elements.job_id.value;
         const result=await CrownPhotos.batch(f,fd=>api('/leads/'+encodeURIComponent(lid)+'/uploads',{method:'POST',form:fd}),msg=>{const el=document.getElementById('job-photo-progress');if(el)el.textContent=msg;});
-        if(result.saved){toast(result.saved+' photo(s) saved.');await openPhotos(jid);}
+        if(result.saved){toast(result.saved+' file(s) saved.');if(!result.error)await openPhotos(jid);}
         if(result.error)modalError(new Error(result.saved+' of '+result.total+' saved. '+result.error));
         return;
       }
       if(f.dataset.jxForm==='quote-revise'){
-        const jid=d.job_id;await api('/jobs/'+jid+'/quote-revision',{method:'POST',data:{hours_low:Number(d.hours_low),hours_high:Number(d.hours_high),transport_hours:Number(d.transport_hours)}});toast('New draft quote revision created. Resend it for approval.');return openQuoteDetails(jid);
+        const jid=d.job_id;await api('/jobs/'+jid+'/quote-revision',{method:'POST',data:{hours_low:Number(d.hours_low),hours_high:Number(d.hours_high),...(d.fixed_transport!==undefined?{fixed_transport:Number(d.fixed_transport)}:{transport_hours:Number(d.transport_hours)})}});toast('New draft quote revision created. Resend it for approval.');return openQuoteDetails(jid);
       }
     }catch(ex){modal.open?modalError(ex):toast(ex.message);}finally{if(button)button.disabled=false;}
   });

@@ -9,7 +9,7 @@ from .job_planning import can_plan_jobs
 
 CATEGORIES={'Client move','Property damage','Company truck','Other vehicle','Other incident'}
 STATUSES={'Submitted','In review','Verified','Completed'}
-REVIEWERS={'owner','dispatch'}
+REVIEWERS={'owner','manager','dispatch'}
 
 def read_all(db,user):return user['role'] in OFFICE or can_plan_jobs(db,user)
 

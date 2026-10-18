@@ -11,7 +11,7 @@ const scheduleNav=nav.find(n=>n[0]==='schedule');if(scheduleNav)scheduleNav[2]='
 const order=['dashboard','sales','quotes','schedule','invoices','followups','payments','team','timeoff','payroll','inventory','documents','fleet','care','calls','outbox','portalhub','automations','rates','connections','policies','settings','account'];
 nav.sort((a,b)=>order.indexOf(a[0])-order.indexOf(b[0]));
 allowedPages=function(){
- if(S.user.role==='owner'||S.user.role==='sales')return nav.map(x=>x[0]);
+ if(['owner','manager'].includes(S.user.role)||S.user.role==='sales')return nav.map(x=>x[0]);
  if(S.user.role==='crew')return ['schedule','timeoff','invoices','team','payroll','care','documents','account'];
  if(S.user.role==='dispatch')return ['schedule','invoices','team','timeoff','inventory','documents','fleet','care','portalhub','account'];
  return ['schedule','invoices','payments','team','timeoff','inventory','documents','portalhub','fleet','payroll','care','connections','policies','account'];
@@ -41,7 +41,7 @@ const noLiveSend=`<div class="callout orange"><strong>Review build only</strong>
 const reviewBaseDashboard=dashboard;
 dashboard=async function(){
  const html=await reviewBaseDashboard();
- if(S.user.role!=='owner')return html;
+ if(!['owner','manager'].includes(S.user.role))return html;
  const [notices,offs]=await Promise.all([api('/manager-notifications'),api('/time-off')]);
  const unread=notices.filter(n=>n.status==='Unread'),pending=offs.filter(r=>r.status==='Pending');
  return html+`<div class="spacer"></div><div class="grid2">${panel('Manager notifications',unread.length?unread.slice(0,6).map(n=>`<div class="task-row"><div class="grow"><div class="small strong">${h(n.message)}</div><div class="tiny muted">${h(n.created_at)}</div></div>${v5btn('notice-read','Mark read',n.id,'btn-small')}</div>`).join(''):empty('No unread manager notifications','New time-off requests and cancellations will appear here.'))}${panel('Pending time off',pending.length?pending.slice(0,6).map(r=>`<div class="task-row"><div class="grow"><div class="small strong">${h(r.employee_name)}</div><div class="tiny muted">${h(r.start_date)} to ${h(r.end_date)}</div></div>${v5btn('open-timeoff','Review',r.id,'btn-small')}</div>`).join(''):empty('No time-off requests waiting','Employee requests will appear here for approval.'))}</div>`;
@@ -93,14 +93,14 @@ X.pageRenderers.timeoff=async()=>{
  const pending=items.filter(r=>r.status==='Pending');
  const actions=S.user.role==='crew'?v5btn('request-off','Request OFF','','btn-primary'):may(['owner'])?v5btn('request-off','Add request','','btn-primary'):'';
  const view=`<div class="calendar-tools"><div class="row">${v5btn('off-prev',icon('left'),'','btn-icon')}${v5btn('off-today','Today')}${v5btn('off-next',icon('right'),'','btn-icon')}<span class="date-range">${X.timeOffMonth.toLocaleDateString('en-CA',{month:'long',year:'numeric'})}</span></div><div class="segmented">${v5btn('off-month','Month','',''+(X.timeOffView==='month'?'selected':''))}${v5btn('off-week','Week','',''+(X.timeOffView==='week'?'selected':''))}</div></div>`;
- const queue=S.user.role==='owner'&&pending.length?panel('Pending approval',xtable(['Employee','Dates','Note',''],pending.map(r=>[h(r.employee_name),h(r.start_date)+' &rarr; '+h(r.end_date),h(r.note||''),v5btn('timeoff-review','Review',r.id,'btn-small')]))):'';
- const list=panel(S.user.role==='crew'?'My requests':'All requests',xtable(['Employee','Dates','Status','Requested',''],items.map(r=>[h(r.employee_name),h(r.start_date)+' &rarr; '+h(r.end_date),pill(r.status),h(r.requested_at.slice(0,10)),S.user.role==='crew'&&['Pending','Approved'].includes(r.status)?v5btn('timeoff-cancel',r.status==='Pending'?'Withdraw':'Cancel OFF',r.id,'btn-small'):S.user.role==='owner'&&r.status==='Pending'?v5btn('timeoff-review','Review',r.id,'btn-small'):''])));
+ const queue=['owner','manager'].includes(S.user.role)&&pending.length?panel('Pending approval',xtable(['Employee','Dates','Note',''],pending.map(r=>[h(r.employee_name),h(r.start_date)+' &rarr; '+h(r.end_date),h(r.note||''),v5btn('timeoff-review','Review',r.id,'btn-small')]))):'';
+ const list=panel(S.user.role==='crew'?'My requests':'All requests',xtable(['Employee','Dates','Status','Requested',''],items.map(r=>[h(r.employee_name),h(r.start_date)+' &rarr; '+h(r.end_date),pill(r.status),h(r.requested_at.slice(0,10)),S.user.role==='crew'&&['Pending','Approved'].includes(r.status)?v5btn('timeoff-cancel',r.status==='Pending'?'Withdraw':'Cancel OFF',r.id,'btn-small'):['owner','manager'].includes(S.user.role)&&r.status==='Pending'?v5btn('timeoff-review','Review',r.id,'btn-small'):''])));
  return head('Time off',S.user.role==='crew'?'Pick the days you want off. Management approves the request before it becomes a scheduling block.':'Review pending requests and see collective approved OFF dates.',actions)+
  xnote('Approved OFF dates cannot be assigned to a job by anyone. Only the employee can cancel their own approved OFF request and become available again.','teal')+view+`<div class="panel calendar-scroll">${X.timeOffView==='month'?timeOffMonthGrid(items):timeOffWeekGrid(items)}</div><div class="spacer"></div>${queue}${queue?'<div class="spacer"></div>':''}${list}`;
 };
 async function requestOffForm(){
- const employees=S.user.role==='owner'?await api('/employees'):[];
- const who=S.user.role==='owner'?select('employee_id','Employee',employees.filter(e=>e.active).map(e=>[e.id,e.name]),employees[0]?.id||'','required'):'';
+ const employees=['owner','manager'].includes(S.user.role)?await api('/employees'):[];
+ const who=['owner','manager'].includes(S.user.role)?select('employee_id','Employee',employees.filter(e=>e.active).map(e=>[e.id,e.name]),employees[0]?.id||'','required'):'';
  v5f('timeoff-request','Request time off',who+field('start_date','First day off',today(),'date','required')+field('end_date','Last day off',today(),'date','required')+textArea('note','Optional note / reason','',3),'Submit request');
 }
 async function reviewTimeOff(id){const r=X.cache.timeoff.find(x=>x.id===id);v5f('timeoff-review','Review time off',`<div class="full callout"><strong>${h(r.employee_name)}</strong>${h(r.start_date)} to ${h(r.end_date)}<br>${h(r.note||'No note supplied')}</div>`+select('decision','Decision',[['Approved','Approve OFF'],['Declined','Decline']],'Approved')+textArea('note','Manager note','',3),'Save decision',{id});}

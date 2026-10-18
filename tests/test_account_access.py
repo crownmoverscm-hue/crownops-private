@@ -179,7 +179,7 @@ class AccountAccessTests(unittest.TestCase):
 
     def test_access_edit_validates_role_active_state_employee_and_revision(self):
         payload = self.access_payload('SALES')
-        for changes in ({'role':[]},{'role':'manager'},{'active':'true'},{'active':1},
+        for changes in ({'role':[]},{'role':'not-a-role'},{'active':'true'},{'active':1},
                         {'employee_id':[]},{'employee_id':'missing'},{'expected_revision':None},
                         {'expected_revision':'short'},{'role':'crew','employee_id':None}):
             with self.subTest(changes=changes):

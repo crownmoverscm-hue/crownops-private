@@ -228,7 +228,7 @@ def register_employee_contacts(app, path, auth):
     initialize_contact_imports(path)
 
     def allowed(user):
-        if user['role'] != 'owner':
+        if user['role'] not in ('owner','manager'):
             raise HTTPException(403, 'Contact imports are restricted to the owner.')
 
     @app.post('/api/ux/employee-contact-import/preview')

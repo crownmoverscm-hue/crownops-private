@@ -36,12 +36,13 @@ class SquareDepositPermissionTests(unittest.TestCase):
                     status TEXT, lead_version INTEGER, inputs_json TEXT);
                 CREATE TABLE payments(id TEXT PRIMARY KEY, lead_id TEXT, purpose TEXT,
                     amount_cents INTEGER, verified INTEGER);
-                CREATE TABLE client_changes(id TEXT PRIMARY KEY, lead_id TEXT, status TEXT);
+                CREATE TABLE client_changes(id TEXT PRIMARY KEY, lead_id TEXT, status TEXT, payload_json TEXT DEFAULT '{}');
+                CREATE TABLE jobs(id TEXT PRIMARY KEY,quote_id TEXT,status TEXT);
                 CREATE TABLE deposit_links(id TEXT PRIMARY KEY, lead_id TEXT REFERENCES leads(id),
                     quote_id TEXT REFERENCES quotes(id), amount_cents INTEGER,
                     status TEXT DEFAULT 'Creating', link_id TEXT, order_id TEXT UNIQUE,
                     url TEXT, created_by TEXT, created_at TEXT);
-                CREATE TABLE audit(actor TEXT, action TEXT, object_type TEXT, object_id TEXT,
+                CREATE TABLE audit(id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, action TEXT, object_type TEXT, object_id TEXT,
                     details_json TEXT, created_at TEXT);
             ''')
             insert(db, 'leads', {'id': 'TEST-LEAD', 'email': 'company.test@example.com', 'version': 1})
@@ -130,7 +131,7 @@ class SquareDepositPermissionTests(unittest.TestCase):
         cases = [
             ("UPDATE quotes SET status='Approved'", "UPDATE quotes SET status='Accepted'"),
             ("UPDATE leads SET version=2", "UPDATE leads SET version=1"),
-            ("INSERT INTO client_changes VALUES('CHANGE-TEST','TEST-LEAD','Pending')", 'DELETE FROM client_changes'),
+            ("INSERT INTO client_changes(id,lead_id,status) VALUES('CHANGE-TEST','TEST-LEAD','Pending')", 'DELETE FROM client_changes'),
             ("INSERT INTO payments VALUES('PAY-TEST','TEST-LEAD','Deposit',30000,0)", 'DELETE FROM payments'),
             ("INSERT INTO payments VALUES('PAY-TEST','TEST-LEAD','Deposit',30000,1)", 'DELETE FROM payments'),
         ]

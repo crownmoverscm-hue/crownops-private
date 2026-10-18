@@ -2,7 +2,7 @@
 from fastapi import HTTPException
 from .store import one, rows
 
-OFFICE_PLANNERS={'owner','sales','dispatch','accounting'}
+OFFICE_PLANNERS={'owner','manager','sales','dispatch','accounting'}
 
 def can_plan_jobs(db,user):
     if user['role'] in OFFICE_PLANNERS:return True

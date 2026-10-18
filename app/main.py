@@ -24,6 +24,7 @@ from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .client_communications import pending_scope_changes,quote_scope_current
 from .store import initialize, connect, transaction, rows, one, insert, audit, uid, now, dumps
 from .pricing import calculate, missing_fields, number, cents
 from .importer import import_workbook
@@ -32,13 +33,13 @@ from .inquiry_intake import intake_values, photo_link
 
 ROOT=Path(__file__).resolve().parent.parent
 PASSWORDS=PasswordHasher(time_cost=2,memory_cost=65536,parallelism=2)
-ROLES={'owner','sales','dispatch','crew','accounting'}
+ROLES={'owner','manager','sales','dispatch','crew','accounting'}
 LEAD_FIELDS={'client_name','email','phone','move_date','pickup','dropoff','home_size','boxes','pickup_access',
     'dropoff_access','pickup_walk','dropoff_walk','inventory','heavy_items','photo_link','language','source',
     'lead_type','stage','assigned_to','priority','notes'}
-OPERATORS={'owner','sales','dispatch'}
+OPERATORS={'owner','manager','sales','dispatch'}
 READERS=OPERATORS|{'accounting'}
-QUOTERS={'owner','sales'}
+QUOTERS={'owner','manager','sales'}
 COOKIE='crownops_session'
 SETUP_TOKEN_HASH='a2f107444f141c2a3d61af99ec02063038c77b60c0f639ef6bf7f5304fa21bb1'
 from .pricing import calculate_with_overrides
@@ -46,7 +47,7 @@ from .operations import check_fleet_dispatch, require_hos_dispatch_verification
 from .job_planning import can_plan_jobs, require_planner, planning_resources
 from .staff_records import can_view_pay, resolve_invited_employee
 from .job_routes import job_route, validate_route
-from .platform_common import settings as platform_settings
+from .platform_common import settings as platform_settings,business_day
 from .account_access import (master_owner_id, remember_master_owner, protect_owner_account,
     check_invitation_email, invitation_request_id, previous_invitation_email,
     reserve_invitation_email, invitation_email_result, deliver_invitation_email)
@@ -168,13 +169,22 @@ def create_app(database_path=None):
                     import logging
                     logging.getLogger('crownops').error('Draft workflow run failed; inspect the database and workflow configuration. No automatic payment or email was attempted.')
                 await asyncio.sleep(60)
+        async def inquiry_worker():
+            from .automatic_intake import run_intake
+            while True:
+                await asyncio.to_thread(run_intake,path,new_lead)
+                await asyncio.sleep(120)
+        intake_task=asyncio.create_task(inquiry_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
         task=asyncio.create_task(review_worker()) if os.getenv('CROWNOPS_RUN_WORKER')=='1' else None
         try:yield
         finally:
+            if intake_task:
+                intake_task.cancel()
+                with suppress(asyncio.CancelledError):await intake_task
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.6.0-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.11.0-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     app.state.db_path=path
     railway_domain=os.environ.get('RAILWAY_PUBLIC_DOMAIN','').strip()
     public_url=(os.environ.get('CROWNOPS_PUBLIC_URL') or (f'https://{railway_domain}' if railway_domain else 'http://127.0.0.1:8080')).rstrip('/')
@@ -190,7 +200,7 @@ def create_app(database_path=None):
             if origin and origin not in accepted:
                 return JSONResponse({'detail':'Cross-origin requests are not permitted.'},403)
         from .photo_safety import photo_mode
-        upload_limit=16_000_000 if photo_mode() else 110_000_000
+        upload_limit=110_000_000
         length=request.headers.get('content-length','0')
         try:
             if int(length)>(upload_limit if request.url.path.endswith('/uploads') else 13_000_000):
@@ -203,7 +213,7 @@ def create_app(database_path=None):
         response.headers['X-Frame-Options']='DENY'
         response.headers['Permissions-Policy']='camera=(self), microphone=(self), geolocation=()'
         response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-        if request.url.path.startswith('/api/') or request.url.path in ('/','/portal','/request','/approval'):
+        if request.url.path.startswith('/api/') or request.url.path in ('/','/portal','/request','/approval','/invoice-access'):
             response.headers['Cache-Control']='no-store'
         if secure:
             response.headers['Strict-Transport-Security']='max-age=31536000'
@@ -248,7 +258,7 @@ def create_app(database_path=None):
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
         from .photo_safety import photo_mode,upload_policy
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.6.0-rc1',
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.11.0-rc1',
                 'private_photos_available':photo_mode() and upload_policy()['enabled']}
 
     @app.post('/api/setup-owner')
@@ -328,12 +338,12 @@ def create_app(database_path=None):
             accounts=rows(db,'SELECT id,name,email,role,active,employee_id FROM users ORDER BY name')
         for person in accounts:
             person['master_owner']=person['id']==master
-            person['can_manage']=u['role']=='owner' and person['id']!=u['id'] and person['id']!=master and (person['role']!='owner' or u['id']==master)
+            person['can_manage']=u['role'] in ('owner','manager') and person['id']!=u['id'] and person['id']!=master and (person['role']!='owner' or u['id']==master)
         return accounts
 
     @app.post('/api/invitations')
     def invite(data:dict,u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,{'owner','manager'})
         role=data.get('role','crew')
         if not isinstance(role,str) or role not in ROLES:
             raise HTTPException(422,'Unknown role.')
@@ -401,7 +411,7 @@ def create_app(database_path=None):
 
     @app.post('/api/users/{user_id}/disable')
     def disable_user(user_id:str,u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,{'owner','manager'})
         if user_id==u['id']:
             raise HTTPException(422,'You cannot disable your own account.')
         with transaction(path) as db:
@@ -426,7 +436,7 @@ def create_app(database_path=None):
                 'active_leads':count("SELECT count(*) FROM leads WHERE archived_import=0 AND stage NOT IN ('Lost','Closed')"),
                 'unassigned':count("SELECT count(*) FROM leads WHERE assigned_to=''"),
                 'historical_tasks':count("SELECT count(*) FROM tasks WHERE historical=1 AND status!='Done'"),
-                'tasks_due':db.execute("SELECT count(*) FROM tasks WHERE historical=0 AND status='Open' AND due_date<=?",(now()[:10],)).fetchone()[0],
+                'tasks_due':db.execute("SELECT count(*) FROM tasks WHERE historical=0 AND status='Open' AND due_date<=?",(business_day(),)).fetchone()[0],
                 'quotes':count('SELECT count(*) FROM quotes'),'jobs':count("SELECT count(*) FROM jobs WHERE status!='Cancelled'"),
                 'unverified_payments':count('SELECT count(*) FROM payments WHERE verified=0'),
                 'ai_tokens':count('SELECT coalesce(sum(input_tokens+output_tokens),0) FROM ai_runs'),
@@ -474,9 +484,12 @@ def create_app(database_path=None):
             source=record['source'] or 'Manual',lead_type=record['lead_type'] or 'Form',language=record['language'] or 'English',
             priority=record['priority'] or 'Normal',created_at=t,updated_at=t,notifications_suppressed=suppressed)
         insert(db,'leads',record)
-        insert(db,'tasks',dict(id=uid('TASK'),lead_id=record['id'],title='Review new inquiry',due_date=t[:10],
+        insert(db,'tasks',dict(id=uid('TASK'),lead_id=record['id'],title='Review new inquiry',due_date=business_day(t),
                               owner=record.get('assigned_to',''),created_at=t))
         audit(db,actor,'Lead created','leads',record['id'])
+        if record['lead_type'] not in ('Missed Call','Voicemail','Email'):
+            from .automatic_intake import prepare_draft
+            prepare_draft(db,one(db,'SELECT * FROM leads WHERE id=?',(record['id'],)),actor)
         return record
 
     @app.post('/api/leads')
@@ -503,7 +516,8 @@ def create_app(database_path=None):
             if fields.get('assigned_to') and fields['assigned_to'] not in (u['id'],u['name']) and u['role']=='sales':
                 raise HTTPException(403,'Only dispatch or an owner can reassign another team member.')
             assignments=','.join(k+'=?' for k in fields)
-            db.execute('UPDATE leads SET '+assignments+',version=version+1,updated_at=? WHERE id=?',list(fields.values())+[now(),lid])
+            scope_changed=any(v!=lead.get(k) for k,v in fields.items() if k not in {'assigned_to','stage','notes','photo_link'}) or (fields.get('stage')=='Lost' and lead['stage']!='Lost')
+            db.execute('UPDATE leads SET '+assignments+',version=version+?,updated_at=? WHERE id=?',list(fields.values())+[int(scope_changed),now(),lid])
             audit(db,u['id'],'Lead updated','leads',lid,{'fields':list(fields)})
         return {'ok':True}
 
@@ -520,7 +534,7 @@ def create_app(database_path=None):
             inbox_conflict=one(db,"""SELECT c.message_id FROM inbox_claims c JOIN messages m ON m.id=c.message_id
               WHERE m.lead_id=? AND c.resolved_at IS NULL AND c.claimed_by!=? LIMIT 1""",(lid,u['id']))
             if inbox_conflict:raise HTTPException(409,'An unanswered client email is already claimed by another team member.')
-            db.execute('UPDATE leads SET assigned_to=?,version=version+1,updated_at=? WHERE id=?',(u['id'],now(),lid))
+            db.execute('UPDATE leads SET assigned_to=?,updated_at=? WHERE id=?',(u['id'],now(),lid))
             db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND historical=0",(u['id'],lid))
             open_mail=rows(db,"""SELECT m.id,c.message_id,c.resolved_at FROM messages m LEFT JOIN inbox_claims c ON c.message_id=m.id
               WHERE m.lead_id=? AND (lower(m.kind) LIKE '%incoming%' OR lower(m.kind) LIKE '%email%')""",(lid,))
@@ -586,9 +600,12 @@ def create_app(database_path=None):
             task=one(db,'SELECT * FROM tasks WHERE id=?',(tid,))
             if not task:raise HTTPException(404,'Follow-up not found.')
             if task['historical']:raise HTTPException(409,'Restore an archived callback before completing it.')
+            if str(task.get('legacy_id') or '').startswith('gmail-match:'):
+                event_key=task['legacy_id'][len('gmail-match:'):]
+                if one(db,"SELECT id FROM integration_events WHERE event_key=? AND status='Needs review'",(event_key,)):raise HTTPException(409,'Resolve the incoming client inquiry in Connections before completing its matching task.')
             lead=one(db,'SELECT assigned_to FROM leads WHERE id=?',(task.get('lead_id'),)) or {}
             owner=str(lead.get('assigned_to') or task.get('owner') or '')
-            if owner and owner not in (u['id'],u.get('name')) and u['role']!='owner':
+            if owner and owner not in (u['id'],u.get('name')) and u['role'] not in ('owner','manager'):
                 raise HTTPException(403,'This client is assigned to another team member.')
             db.execute("UPDATE tasks SET status='Done' WHERE id=?",(tid,));audit(db,u['id'],'Task completed','tasks',tid)
         return {'ok':True}
@@ -604,7 +621,7 @@ def create_app(database_path=None):
 
     @app.post('/api/pricing/{pid}/approve')
     def approve_pricing(pid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,{'owner','manager'})
         note=bounded(data.get('note',''),'Approval note',2000)
         if data.get('acknowledge') is not True or not note:
             raise HTTPException(422,'An approval note and explicit acknowledgement are required.')
@@ -689,13 +706,20 @@ def create_app(database_path=None):
             inputs['hours_low']=float(number(data.get('hours_low'),'Estimate from',.25,80))
             inputs['hours_high']=float(number(data.get('hours_high'),'Estimate to',.25,100))
             if inputs['hours_high']<inputs['hours_low']:raise HTTPException(422,'Estimate to cannot be lower than estimate from.')
-            inputs['transport_hours']=float(number(data.get('transport_hours'),'Transportation fee hours',0,100))
+            inputs['transport_hours']=float(number(data.get('transport_hours',inputs.get('transport_hours',0)),'Transportation fee hours',0,100))
+            if 'fixed_transport' in data:
+                if inputs.get('fixed_transport') in (None,''):raise HTTPException(422,'Change the transportation pricing mode in the full quote editor first.')
+                inputs['fixed_transport']=float(number(data['fixed_transport'],'Local transportation fee',0,100000))
             # In the job quick-editor the entered range is already the planned client-facing
             # range, so do not silently add another planning percentage.
             inputs['allowance_percent']=0
             p=one(db,'SELECT * FROM pricing_versions WHERE id=?',(q['pricing_id'],))
             if not p:raise HTTPException(422,'The quote pricing snapshot is unavailable.')
-            try:result=calculate_with_overrides(inputs,p,db)
+            try:
+                if inputs.get('template_key'):
+                    from .sales_crm_v6 import calculate as calculate_template_quote
+                    result=calculate_template_quote(db,inputs)
+                else:result=calculate_with_overrides(inputs,p,db)
             except (ValueError,TypeError,KeyError) as e:raise HTTPException(422,str(e))
             rev=db.execute('SELECT coalesce(max(revision),0)+1 FROM quotes WHERE lead_id=?',(lead['id'],)).fetchone()[0]
             snapshot={k:lead.get(k,'') for k in LEAD_FIELDS}
@@ -709,7 +733,7 @@ def create_app(database_path=None):
 
     @app.post('/api/quotes/{qid}/approve')
     def approve_quote(qid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,{'owner','manager'})
         with transaction(path) as db:
             q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
             if not q:raise HTTPException(404,'Quote not found.')
@@ -717,7 +741,7 @@ def create_app(database_path=None):
             lead=get_lead(db,q['lead_id'])
             p=one(db,'SELECT * FROM pricing_versions WHERE id=?',(q['pricing_id'],))
             if not p['approved']:raise HTTPException(422,'Owner approval of this pricing snapshot is required first.')
-            if q['lead_version']!=lead['version']:
+            if not quote_scope_current(db,q,lead) or pending_scope_changes(db,lead['id']):
                 raise HTTPException(409,'Client details changed after this quote. Create a new revision.')
             if missing_fields(lead):
                 raise HTTPException(422,'Complete the client record first: '+', '.join(missing_fields(lead)))
@@ -738,8 +762,13 @@ def create_app(database_path=None):
         with transaction(path) as db:
             q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
             if not q or q['status']!='Approved':raise HTTPException(409,'Only an approved quote can be accepted.')
+            from .quote_options import expired_quote
+            if expired_quote(q):raise HTTPException(409,'This estimate expired. Review and send a new revision before recording acceptance.')
             lead=get_lead(db,q['lead_id'])
-            if lead['version']!=q['lead_version']:raise HTTPException(409,'Quote is stale. Review a new revision before recording acceptance.')
+            if not quote_scope_current(db,q,lead):raise HTTPException(409,'Quote is stale. Review a new revision before recording acceptance.')
+            from .availability import assert_day_open
+            assert_day_open(db,json.loads(q['inputs_json']).get('move_date') or lead.get('move_date',''))
+            if pending_scope_changes(db,lead['id']):raise HTTPException(409,'Review the client’s requested changes before recording acceptance.')
             db.execute("UPDATE quotes SET status='Accepted',acceptance_ref=?,accepted_at=? WHERE id=?",(ref,now(),qid))
             audit(db,u['id'],'External client acceptance recorded','quotes',qid,{'reference':ref})
         return {'ok':True,'booking_created':False}
@@ -786,6 +815,7 @@ def create_app(database_path=None):
                     'hourly_rate_cents':qr.get('hourly_rate_cents'),'minimum_hours':qr.get('minimum_hours'),
                     'service_low':qr.get('service_low'),'service_high':qr.get('service_high'),
                     'transport_hours':qr.get('transport_hours'),'transport_cents':qr.get('transport_cents'),
+                    'transport_mode':qi.get('transport_mode'),'fixed_transport':qi.get('fixed_transport'),
                     'fuel_cents':qr.get('fuel_cents'),'movers':qr.get('movers'),'trucks':qr.get('trucks'),
                     'low_cents':qr.get('low_cents'),'high_cents':qr.get('high_cents'),
                     'deposit_required':qi.get('deposit_required',300)
@@ -805,6 +835,9 @@ def create_app(database_path=None):
     def check_job_resources(db,data,ignore_id=''):
         start,end=local_to_utc(data.get('start_at','')),local_to_utc(data.get('end_at',''))
         if end<=start:raise HTTPException(422,'End time must follow the start time.')
+        from .availability import assert_dates_open
+        previous=one(db,'SELECT * FROM jobs WHERE id=?',(ignore_id,)) if ignore_id else None
+        assert_dates_open(db,start,end,previous)
         if datetime.fromisoformat(end)-datetime.fromisoformat(start)>timedelta(days=14):
             raise HTTPException(422,'Split assignments exceeding 14 days into separate phases.')
         crew=data.get('crew_ids',[]);trucks=data.get('truck_ids',[])
@@ -826,16 +859,32 @@ def create_app(database_path=None):
         check_fleet_dispatch(db,trucks,crew,start)
         return start,end,crew,trucks
 
-    def check_confirmation(db,lead,q,crew,trucks,start,end,exception,u,reviewed):
+    def refresh_booking_mail(db,jid,actor):
+        from .sales_crm_v6 import prepare_booking_confirmation
+        from .platform_common import add_task as create_task
+        job=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
+        if not job or job['status']!='Confirmed' or not job['quote_id']:return
+        quote=one(db,'SELECT * FROM quotes WHERE id=?',(job['quote_id'],))
+        lead=get_lead(db,job['lead_id'])
+        if not quote or quote['status']!='Accepted':return
+        try:prepare_booking_confirmation(db,job,quote,lead,actor,public_url)
+        except HTTPException as ex:
+            # A dispatch update must not depend on resolving an email delivery.
+            create_task(db,lead['id'],'Review booking confirmation: '+str(ex.detail),lead.get('assigned_to',''),key='booking-mail-review:'+jid+':'+str(job['version']))
+
+    def check_confirmation(db,lead,q,crew,trucks,start,end,exception,u,reviewed,existing=None):
+        from .availability import assert_dates_open
+        # Closed dates cannot be bypassed by a manual booking exception.
+        assert_dates_open(db,start,end,existing)
         if reviewed is not True:
             raise HTTPException(422,'Confirm timing, access, truck capacity and driver coverage.')
         if not crew:raise HTTPException(422,'Assign a crew before confirming.')
-        owner_exception=u['role']=='owner' and len(exception)>=12
+        owner_exception=u['role'] in ('owner','manager') and len(exception)>=12
         if not q or q['status']!='Accepted':
             if not owner_exception:
                 raise HTTPException(422,'Accepted quote required, or an owner-documented manual booking exception.')
         if q:
-            if q['lead_version']!=lead['version']:
+            if not quote_scope_current(db,q,lead) or pending_scope_changes(db,lead['id']):
                 raise HTTPException(409,'Client details changed after the quote. Review a new revision before booking.')
             result=json.loads(q['result_json']);inputs=json.loads(q['inputs_json'])
             if len(crew)<result['movers'] or len(trucks)<result['trucks']:
@@ -900,6 +949,7 @@ def create_app(database_path=None):
             q=one(db,'SELECT * FROM quotes WHERE id=?',(j['quote_id'],)) if j['quote_id'] else None
             check_confirmation(db,lead,q,crew,trucks,start,end,j['exception_reason'],u,True)
             db.execute("UPDATE jobs SET status='Confirmed',capacity_reviewed=1,plan_review_required=0,version=version+1 WHERE id=?",(jid,))
+            refresh_booking_mail(db,jid,u['id'])
             audit(db,u['id'],'Pilot job confirmed','jobs',jid,{'note':note,'live_schedule_changed':False,'confirmation_mode':'one-click'})
         return {'ok':True,'live_schedule_changed':False}
 
@@ -924,7 +974,7 @@ def create_app(database_path=None):
             if u['role']=='crew' and not can_plan_jobs(db,u) and status not in ('In progress','Completed'):
                 raise HTTPException(403,'Crew can only start or complete assigned confirmed jobs.')
             if u['role']!='crew':require_planner(db,u)
-            db.execute("UPDATE outbound_messages SET status='Cancelled',error='Job updated; review reminder timing' WHERE job_id=? AND category='Preparation' AND status IN ('Draft','Approved')",(jid,))
+            db.execute("UPDATE outbound_messages SET status='Cancelled',error='Job updated; review reminder timing' WHERE job_id=? AND category='Preparation' AND event_key NOT LIKE 'booking-confirmed:%' AND status IN ('Draft','Approved')",(jid,))
             # Rescheduling is dispatch-only; recheck both workers and vehicles atomically.
             start,end=j['start_at'],j['end_at']
             if 'start_at' in data or 'end_at' in data:
@@ -938,8 +988,11 @@ def create_app(database_path=None):
                 if j['status']=='Confirmed':
                     lead=get_lead(db,j['lead_id'])
                     q=one(db,'SELECT * FROM quotes WHERE id=?',(j['quote_id'],)) if j['quote_id'] else None
-                    check_confirmation(db,lead,q,crew,trucks,start,end,j['exception_reason'],u,True)
+                    check_confirmation(db,lead,q,crew,trucks,start,end,j['exception_reason'],u,True,j)
             db.execute('UPDATE jobs SET status=?,start_at=?,end_at=?,version=version+1 WHERE id=?',(status,start,end,jid))
+            if status=='Confirmed':refresh_booking_mail(db,jid,u['id'])
+            elif status=='Cancelled':
+                db.execute("UPDATE outbound_messages SET status='Cancelled',error='Booking cancelled' WHERE job_id=? AND event_key LIKE 'booking-confirmed:%' AND status IN ('Draft','Approved')",(jid,))
             audit(db,u['id'],'Job updated','jobs',jid,{'status':status,'start_at':start,'end_at':end})
         return {'ok':True}
 
@@ -966,7 +1019,7 @@ def create_app(database_path=None):
             if qid and not q:raise HTTPException(422,'Estimate must belong to this move project.')
             if qid!=j['quote_id'] and one(db,'SELECT id FROM job_invoices WHERE job_id=?',(jid,)):raise HTTPException(409,'Invoice terms already exist. Have management reconcile billing before changing the accepted estimate link.')
             exception=bounded(data.get('exception_reason',j['exception_reason']),'Manager exception',3000)
-            if exception!=j['exception_reason'] and u['role']!='owner':raise HTTPException(403,'Only management can change a booking exception.')
+            if exception!=j['exception_reason'] and u['role'] not in ('owner','manager'):raise HTTPException(403,'Only management can change a booking exception.')
             validate_final=confirm_requested or data.get('capacity_reviewed') is True or j['status']=='In progress'
             if q and q['status']=='Accepted' and (start!=j['start_at'] or end!=j['end_at']):
                 result=json.loads(q['result_json'])
@@ -974,12 +1027,12 @@ def create_app(database_path=None):
                 if hours+1e-8<result['service_high']+result['transport_hours']:
                     raise HTTPException(422,'Reserve the full high-end service duration plus base travel. Shorten only by revising the estimate.')
             if validate_final:
-                check_confirmation(db,get_lead(db,j['lead_id']),q,crew,trucks,start,end,exception,u,True)
+                check_confirmation(db,get_lead(db,j['lead_id']),q,crew,trucks,start,end,exception,u,True,j)
             elif auto_confirm:
                 # One Save keeps partial assignments and confirms a complete plan in
                 # this same transaction. Invalid resources still fail above.
                 try:
-                    check_confirmation(db,get_lead(db,j['lead_id']),q,crew,trucks,start,end,exception,u,True)
+                    check_confirmation(db,get_lead(db,j['lead_id']),q,crew,trucks,start,end,exception,u,True,j)
                 except HTTPException as ex:
                     if ex.status_code not in (409,422):raise
                     confirmation_pending.append(str(ex.detail))
@@ -1001,7 +1054,8 @@ def create_app(database_path=None):
             next_status='Confirmed' if confirmed and j['status']=='Tentative' else j['status']
             reviewed=int(validate_final)
             db.execute('UPDATE jobs SET stops_json=?,route_stops_json=?,status=?,capacity_reviewed=?,plan_review_required=? WHERE id=?',(dumps(stops),dumps(route),next_status,reviewed,int(not validate_final),jid))
-            db.execute("UPDATE outbound_messages SET status='Cancelled',error='Plan changed; review reminders' WHERE job_id=? AND category='Preparation' AND status IN ('Draft','Approved')",(jid,))
+            db.execute("UPDATE outbound_messages SET status='Cancelled',error='Plan changed; review reminders' WHERE job_id=? AND category='Preparation' AND event_key NOT LIKE 'booking-confirmed:%' AND status IN ('Draft','Approved')",(jid,))
+            if next_status=='Confirmed':refresh_booking_mail(db,jid,u['id'])
             after={'title':title,'quote_id':qid,'start_at':start,'end_at':end,'notes':notes,'status':next_status,'stops':stops,'route_stops':route,'crew_ids':sorted(crew),'truck_ids':sorted(trucks)}
             audit(db,u['id'],'Job plan confirmed' if confirmed else 'Job plan revised','jobs',jid,{'before':before,'after':after,'note':note,'changed_fields':[k for k in before if before[k]!=after[k]],'confirmation_mode':'save-auto' if auto_confirm else 'save-and-confirm' if confirm_requested else 'save'})
         return {'ok':True,'status':next_status,'confirmed':confirmed,'plan_reviewed':bool(reviewed),'confirmation_pending':confirmation_pending,'status_unchanged':j['status']}
@@ -1035,7 +1089,7 @@ def create_app(database_path=None):
 
     @app.post('/api/employees/{eid}/verify-driver')
     def verify_driver(eid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,{'owner','manager'})
         note=bounded(data.get('note',''),'Qualification review',2000)
         if not note:raise HTTPException(422,'Document the qualification and authorization check.')
         with transaction(path) as db:
@@ -1050,7 +1104,7 @@ def create_app(database_path=None):
 
     @app.post('/api/vehicles')
     def add_vehicle(data:dict,u=Depends(auth)):
-        require(u,{'owner','dispatch'})
+        require(u,{'owner','manager','dispatch'})
         name=bounded(data.get('name',''),'Truck name',150)
         if not name:raise HTTPException(422,'Name is required.')
         color=str(data.get('color_hex') or '#3B82F6').upper()
@@ -1063,7 +1117,7 @@ def create_app(database_path=None):
 
     @app.put('/api/vehicles/{vid}')
     def update_vehicle(vid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner','dispatch'})
+        require(u,{'owner','manager','dispatch'})
         name=bounded(data.get('name',''),'Truck name',150)
         color=str(data.get('color_hex') or '').upper()
         if not name:raise HTTPException(422,'Truck name is required.')
@@ -1077,7 +1131,7 @@ def create_app(database_path=None):
 
     @app.post('/api/vehicles/{vid}/activate')
     def activate_vehicle(vid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner','dispatch'})
+        require(u,{'owner','manager','dispatch'})
         note=bounded(data.get('note',''),'Fleet review',2000)
         if not note:raise HTTPException(422,'Add a note confirming the vehicle is valid and available.')
         with transaction(path) as db:
@@ -1096,9 +1150,9 @@ def create_app(database_path=None):
 
     @app.post('/api/payments')
     def add_payment(data:dict,u=Depends(auth)):
-        require(u,{'owner','sales','accounting','dispatch'})
+        require(u,{'owner','manager','sales','accounting','dispatch'})
         verified=data.get('verified') is True
-        if verified:require(u,{'owner','accounting'})
+        if verified:require(u,{'owner','manager','accounting'})
         try:amount=cents(number(data.get('amount'),'Payment',.01,1000000))
         except ValueError as e:raise HTTPException(422,str(e))
         reference=bounded(data.get('reference',''),'Payment reference',1000)
@@ -1119,7 +1173,7 @@ def create_app(database_path=None):
 
     @app.post('/api/payments/{pid}/verify')
     def verify_payment(pid:str,u=Depends(auth)):
-        require(u,{'owner','accounting'})
+        require(u,{'owner','manager','accounting'})
         with transaction(path) as db:
             p=one(db,'SELECT * FROM payments WHERE id=?',(pid,))
             if not p:raise HTTPException(404,'Payment not found.')
@@ -1131,7 +1185,7 @@ def create_app(database_path=None):
 
     @app.post('/api/payments/{pid}/reverse')
     def reverse_payment(pid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner','accounting'})
+        require(u,{'owner','manager','accounting'})
         note=bounded(data.get('note',''),'Reversal reason',1000)
         if not note:raise HTTPException(422,'A reversal reason is required.')
         with transaction(path) as db:
@@ -1155,7 +1209,7 @@ def create_app(database_path=None):
 
     @app.post('/api/times')
     def add_time(data:dict,u=Depends(auth)):
-        require(u,{'owner','dispatch','crew'})
+        require(u,{'owner','manager','dispatch','crew'})
         eid=data.get('employee_id') or u.get('employee_id')
         if u['role']=='crew' and eid!=u.get('employee_id'):raise HTTPException(403,'You can submit only your own time.')
         try:
@@ -1179,7 +1233,7 @@ def create_app(database_path=None):
 
     @app.post('/api/times/{tid}/approve')
     def approve_time(tid:str,u=Depends(auth)):
-        require(u,{'owner','accounting'})
+        require(u,{'owner','manager','accounting'})
         with transaction(path) as db:
             t=one(db,'SELECT t.id,j.status FROM times t JOIN jobs j ON j.id=t.job_id WHERE t.id=?',(tid,))
             if not t or t['status']!='Completed':raise HTTPException(422,'Complete the job before approving time.')
@@ -1193,12 +1247,12 @@ def create_app(database_path=None):
         with closing(connect(path)) as db:items=rows(db,'SELECT * FROM inventory ORDER BY category,name')
         for item in items:
             item.pop('raw_json',None)
-            if u['role'] not in ('owner','sales','accounting'):item.pop('cost_cents',None)
+            if u['role'] not in ('owner','manager'):item.pop('cost_cents',None)
         return items
 
     @app.post('/api/inventory/{iid}/movement')
     def stock_move(iid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner','sales','dispatch'})
+        require(u,{'owner','manager','sales','dispatch'})
         try:amount=float(number(data.get('quantity'),'Quantity change',-100000,100000))
         except ValueError as e:raise HTTPException(422,str(e))
         reason=bounded(data.get('reason',''),'Reason',1000)
@@ -1216,14 +1270,14 @@ def create_app(database_path=None):
 
     @app.get('/api/imports')
     def imports(u=Depends(auth)):
-        require(u,{'owner','accounting'})
+        require(u,{'owner','manager','accounting'})
         with closing(connect(path)) as db:out=rows(db,'SELECT * FROM imports ORDER BY created_at DESC')
         for r in out:r['report']=json.loads(r.pop('report_json'))
         return out
 
     @app.post('/api/imports/workbook')
     def upload_workbook(file:UploadFile=File(...),u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,{'owner','manager'})
         if not (file.filename or '').lower().endswith('.xlsx'):raise HTTPException(422,'Use the original .xlsx workbook.')
         content=file.file.read(12_000_001)
         try:return import_workbook(path,content,Path(file.filename).name,u['id'])
@@ -1232,7 +1286,7 @@ def create_app(database_path=None):
 
     @app.get('/api/audit')
     def history(u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,{'owner','manager'})
         with closing(connect(path)) as db:
             return rows(db,'SELECT a.*,u.name AS actor_name FROM audit a LEFT JOIN users u ON u.id=a.actor ORDER BY a.id DESC LIMIT 200')
 
@@ -1281,7 +1335,7 @@ def create_app(database_path=None):
                 # Do not send the workbook, call history, payroll, or unrelated clients.
                 context={k:str(lead.get(k,''))[:1000] for k in ai.FIELDS}
                 q=one(db,"SELECT * FROM quotes WHERE lead_id=? AND status IN ('Approved','Accepted') ORDER BY revision DESC LIMIT 1",(lid,))
-                if q and q['lead_version']==lead['version']:approved=json.loads(q['result_json'])
+                if q and quote_scope_current(db,q,lead):approved=json.loads(q['result_json'])
             content_hash=sha(dumps({'body':body,'language':language,'lead':lid,'context':context,'quote':approved,'model':model}))
             previous=one(db,'SELECT * FROM ai_runs WHERE id=?',(rid,))
             if previous:
@@ -1343,7 +1397,7 @@ def create_app(database_path=None):
 
     @app.get('/api/schema')
     def schema(u=Depends(auth)):
-        require(u,{'owner'});return app.openapi()
+        require(u,{'owner','manager'});return app.openapi()
 
     @app.get('/')
     def index():return FileResponse(ROOT/'app'/'static'/'index.html')
@@ -1368,8 +1422,12 @@ def create_app(database_path=None):
     validate_deployment(public_url,secure)
     register_portal(app,path,auth,public_url,secure)
     register_operations(app,path,auth)
+    from .job_handoff import register_job_handoff
+    register_job_handoff(app,path,auth)
     register_workflows(app,path,auth,new_lead,check_job_resources,public_url)
     register_providers(app,path,auth,public_url,new_lead)
+    from .gmail_sync import register_gmail_resolution
+    register_gmail_resolution(app,path,auth,new_lead)
     register_security(app,path,auth,public_url,PASSWORDS)
     from .account_access import register_account_access
     register_account_access(app,path,auth,public_url)
@@ -1377,10 +1435,26 @@ def create_app(database_path=None):
     register_production(app,path,auth,public_url,secure)
     from .extensions import register_extensions
     register_extensions(app,path,auth,public_url)
+    from .invoice_payments import register_invoice_reconciliation
+    register_invoice_reconciliation(app,path,auth)
+    from .invoice_access import register_invoice_access
+    register_invoice_access(app,path,public_url,secure)
+    from .invoice_management import register_invoice_management
+    register_invoice_management(app,path,auth)
     from starlette.middleware.trustedhost import TrustedHostMiddleware
     host=urlparse(public_url).hostname or 'localhost'
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=[host,'127.0.0.1','localhost','healthcheck.railway.app']+(['testserver','crownops.test'] if os.getenv('CROWNOPS_ENV','test')!='production' else []))
 
+    from .media_links import register_media_links
+    register_media_links(app,path,auth)
+    from .expenses import register_expenses
+    register_expenses(app,path,auth)
+    from .availability import register_availability
+    register_availability(app,path,auth)
+    from .automatic_intake import register_automatic_intake
+    register_automatic_intake(app,path,auth,new_lead)
+    from .sales_journey import register_sales_journey
+    register_sales_journey(app,path,auth,public_url)
     from .payroll_adjustments import register_payroll_adjustments
     register_payroll_adjustments(app,path,auth)
     from .incidents import register_incidents

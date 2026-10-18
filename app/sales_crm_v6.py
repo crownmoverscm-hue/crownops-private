@@ -10,9 +10,10 @@ import hashlib, json, re, secrets
 from fastapi import Depends, HTTPException
 
 from .store import connect, transaction, rows, one, insert, audit, uid, now, dumps
-from .platform_common import SALES, OFFICE, require_role, settings, put_setting, queue_message, add_task, quickbooks_gate
-from .pricing import seasonal_rate, number
+from .platform_common import SALES, OFFICE, MANAGERS, require_role, settings, put_setting, queue_message, add_task, quickbooks_gate
+from .pricing import seasonal_rate, number as pricing_number
 from .inquiry_intake import intake_values, photo_link
+from .client_communications import pending_scope_changes, quote_scope_current, booking_details, booking_confirmation_key
 
 MONTREAL=ZoneInfo("America/Toronto")
 LOCAL_FUEL=Decimal("35.00")
@@ -47,6 +48,10 @@ JUNK={
  "full":("Full Truck - 20 ft container",Decimal("1600.00")),
 }
 JUNK_LABOUR=Decimal("80.00")
+
+def number(*args,**kwargs):
+    try:return pricing_number(*args,**kwargs)
+    except ValueError as ex:raise HTTPException(422,str(ex))
 
 def money(v):
     return int((Decimal(str(v))*100).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
@@ -130,6 +135,8 @@ def ensure_tentative_job(db,q,lead,actor):
     start_text,label=quote_start_window(inp)
     start=datetime.fromisoformat(day+"T"+start_text+":00").replace(tzinfo=MONTREAL).astimezone(timezone.utc)
     end=start+timedelta(hours=float(quoted_block_hours(inp)))
+    from .availability import assert_dates_open
+    assert_dates_open(db,start.isoformat(),end.isoformat())
     jid=uid("JOB")
     insert(db,"jobs",dict(id=jid,lead_id=lead["id"],quote_id=q["id"],title=lead["client_name"],
       phase=inp.get("service_type") or "Moving",start_at=start.isoformat(timespec="seconds"),end_at=end.isoformat(timespec="seconds"),
@@ -278,7 +285,7 @@ def client_latest_activity(db,client_id):
         lt=str(lead.get("lead_type") or "Inquiry")
         source=str(lead.get("source") or "")
         if lt=="Form":
-            label="Quote request"
+            label="Quote Form"
         elif lt in ("Missed Call","Voicemail","Email"):
             label=lt
         elif source=="CrownOps CRM":
@@ -288,6 +295,21 @@ def client_latest_activity(db,client_id):
         activity_at=gmail_quote_activity_time(db,lead["id"],lead["created_at"]) if source=="Gmail" and lt in ("Form","Instant estimate") else lead["created_at"]
         candidates.append({"type":"lead","label":label,"source":source or lt,"at":activity_at,
           "lead_id":lead["id"],"summary":lead.get("pickup") or lead.get("move_date") or "New inquiry"})
+
+    quote_events=rows(db,"""SELECT e.* FROM integration_events e
+      JOIN client_account_leads x ON x.lead_id=e.object_id
+      WHERE x.client_id=? AND e.event_type='gmail_quote'
+      ORDER BY e.created_at DESC LIMIT 50""",(client_id,))
+    quote_subjects={};quote_message_ids=set()
+    for event in quote_events:
+        try:form=json.loads(event.get('payload_json') or '{}')
+        except (TypeError,ValueError):form={}
+        actual=provider_message_time(form.get('received_at') or form.get('date'),event['created_at'])
+        subject=str(form.get('subject') or '').strip()
+        if form.get('message_id'):quote_message_ids.add(str(form['message_id']))
+        elif subject:quote_subjects.setdefault(event['object_id'],set()).add(subject.casefold())
+        candidates.append({'type':'quote_form','label':'Quote Form','source':'Gmail','at':actual,
+          'lead_id':event['object_id'],'summary':(subject or 'Quote form received')[:180]})
 
     call=one(db,"""SELECT c.*,l.id lead_ref FROM calls c
       JOIN client_account_leads x ON x.lead_id=c.lead_id
@@ -310,21 +332,15 @@ def client_latest_activity(db,client_id):
       WHERE x.client_id=? AND lower(m.kind)='incoming email'
       ORDER BY m.created_at DESC LIMIT 1""",(client_id,))
     if msg:
-        auto_quote_copy=False
-        if str(msg.get("lead_source") or "")=="Gmail" and str(msg.get("lead_type") or "") in ("Form","Instant estimate"):
-            ev=one(db,"""SELECT payload_json FROM integration_events
-              WHERE event_type='gmail_quote' AND object_id=? ORDER BY created_at DESC LIMIT 1""",(msg["lead_id"],))
-            if ev:
-                try:payload=json.loads(ev.get("payload_json") or "{}")
-                except Exception:payload={}
-                original_subject=str(payload.get("subject") or "").strip().lower()
-                message_subject=str(msg.get("subject") or "").strip().lower()
-                auto_quote_copy=bool(original_subject and message_subject==original_subject)
+        auto_quote_copy=msg['id'] in quote_message_ids or str(msg.get('subject') or '').strip().casefold() in quote_subjects.get(msg['lead_id'],set())
         if not auto_quote_copy:
             candidates.append({"type":"email","label":"Email","source":"Company email","at":msg["created_at"],
               "lead_id":msg["lead_id"],"summary":str(msg.get("subject") or msg.get("body") or "")[:180]})
 
     if not candidates:return None
+    # Creating an internal service is a fallback, not a newer client inquiry.
+    inbound=[item for item in candidates if item['label']!='Manual service']
+    if inbound:candidates=inbound
     candidates.sort(key=lambda x:str(x.get("at") or ""),reverse=True)
     return candidates[0]
 
@@ -392,16 +408,25 @@ def rate_for(db,day,movers):
     except Exception as e:raise HTTPException(422,str(e))
 
 def materials(db,requested):
+    if not isinstance(requested,list) or len(requested)>100:raise HTTPException(422,'Use up to 100 material or extra lines.')
     cat={r["code"]:r for r in rows(db,"SELECT * FROM material_catalog WHERE active=1")}
-    out=[];total=0
-    for raw in requested or []:
-        qty=Decimal(str(raw.get("qty",0) or 0))
-        if qty<=0:continue
+    out=[];total=0;seen=set()
+    for raw in requested:
+        if not isinstance(raw,dict):raise HTTPException(422,'Review the material lines.')
+        qty=number(raw.get('qty',0),'Material quantity',0,10000)
+        if qty!=qty.to_integral():raise HTTPException(422,'Material quantities must be whole units.')
         code=str(raw.get("code","")).strip();item=cat.get(code)
-        name=item["name"] if item else str(raw.get("name") or "Other material")[:160]
-        unit=int(item["sell_cents"]) if item else money(raw.get("unit_price",0))
+        if not code:code='CUSTOM_'+str(len(out)+1)
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,60}',code) or code in seen:raise HTTPException(422,'Material line codes must be unique.')
+        seen.add(code)
+        override=raw.get('price_override') is True
+        name=str(raw.get('name') or (item or {}).get('name') or '').strip()
+        if not name or len(name)>160:raise HTTPException(422,'Enter a material or extra description of up to 160 characters.')
+        unit=money(number(raw.get('unit_price',0),'Material unit price',0,10000)) if override or not item else int(item['sell_cents'])
+        note=raw.get('note','')
+        if not isinstance(note,str) or len(note)>2000:raise HTTPException(422,'Shorten the material description.')
         line=int((Decimal(unit)*qty).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
-        out.append({"code":code,"name":name,"qty":float(qty),"unit_cents":unit,"total_cents":line});total+=line
+        out.append({"code":code,"name":name,"qty":int(qty),"unit_cents":unit,"total_cents":line,'note':note.strip(),'kind':'material'});total+=line
     return out,total
 
 def calculate(db,data):
@@ -415,9 +440,15 @@ def calculate(db,data):
         junk_names={"single":"Disposition d'un article","quarter":"1/4 camion - env. 5 pi","half":"1/2 camion - env. 10 pi","three_quarter":"3/4 camion - env. 15 pi","full":"Camion complet - conteneur 20 pi"} if language=="French" else {}
         lines=[{"name":junk_names.get(tier,name),"qty":1,"unit_cents":money(base),"total_cents":money(base)}]
         if units:lines.append({"name":"Main-d'oeuvre supplementaire - 30 minutes / 2 demenageurs" if language=="French" else "Additional on-site labour - 30 minutes / 2 crew","qty":units,"unit_cents":money(JUNK_LABOUR),"total_cents":money(extra)})
+        mats,mat_total=materials(db,data.get('materials') or [])
+        other=number(data.get('other_amount',0),'Other agreed charges',0,100000);discount=number(data.get('discount_amount',0),'Discount',0,100000)
+        if discount>total+Decimal(mat_total)/100+other:raise HTTPException(422,'Discount exceeds the estimate.')
+        total+=Decimal(mat_total)/100+other-discount;lines.extend(mats)
+        if other:lines.append({'name':'Other agreed charges','qty':1,'unit_cents':money(other),'total_cents':money(other)})
+        if discount:lines.append({'name':'Approved discount','qty':1,'unit_cents':-money(discount),'total_cents':-money(discount)})
         return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":0,
           "service_low":0,"service_high":0,"minimum_hours":0,"transport_hours":0,"transport_cents":0,
-          "fuel_cents":0,"materials_cents":0,"other_cents":0,"discount_cents":0,"service_low_cents":money(base),
+          "fuel_cents":0,"materials_cents":mat_total,"other_cents":money(other),"discount_cents":money(discount),"service_low_cents":money(base),
           "service_high_cents":money(base),"low_cents":money(total),"high_cents":money(total),"movers":2,"trucks":1,
           "season":"Junk removal pricing","line_items":lines,
           "tax_note":"Before applicable taxes. Final junk price is based on actual truck space and approved extra labour."}
@@ -425,6 +456,7 @@ def calculate(db,data):
     try:date.fromisoformat(day)
     except Exception:raise HTTPException(422,"Choose the service date.")
     movers=int(number(data.get("movers",2),"Movers",2,6));trucks=int(number(data.get("trucks",1),"Trucks",1,8))
+    if Decimal(str(data.get('movers',2)))!=movers or Decimal(str(data.get('trucks',1)))!=trucks:raise HTTPException(422,'Movers and trucks must be whole numbers.')
     minimum_trucks=minimum_trucks_for_movers(movers)
     if trucks<minimum_trucks:
         raise HTTPException(422,f"Crown Movers requires at least {minimum_trucks} truck(s) for a crew of {movers} movers.")
@@ -435,6 +467,8 @@ def calculate(db,data):
     minimum,small_afternoon=service_minimum_hours(data,service);low=max(low,minimum);high=max(high,minimum)
     transport_hours=number(data.get("transport_hours",1),"True driving / transportation hours",0,100)
     fixed=data.get("fixed_transport")
+    if data.get('transport_mode') not in (None,'','local_amount','hourly_base','long_distance'):raise HTTPException(422,'Choose local or long-distance transportation pricing.')
+    if data.get('transport_mode')=='local_amount' and service!='Long Distance' and fixed in (None,''):raise HTTPException(422,'Enter the agreed local transportation amount. $35.00 is a placeholder, not a confirmed price.')
     if fixed not in (None,""):
         transport=number(fixed,"Fixed transportation fee",0,100000)
         billable_transport_hours=Decimal("0")
@@ -449,7 +483,8 @@ def calculate(db,data):
         show_transport_hours=transport_hours
     km=number(data.get("distance_km",0),"Actual round-trip distance km",0,10000);km_rate=number(data.get("distance_rate",LONG_KM),"Distance rate",0,20)
     adjusted_km=km*LONG_DISTANCE_KM_BUFFER if service=="Long Distance" else km
-    fuel=adjusted_km*km_rate*trucks if service=="Long Distance" else LOCAL_FUEL*trucks
+    local_fuel=number(data.get('local_fuel_rate',LOCAL_FUEL),'Local fuel rate per truck',0,10000)
+    fuel=adjusted_km*km_rate*trucks if service=="Long Distance" else local_fuel*trucks
     mats,mat_total=materials(db,data.get("materials") or [])
     hos_plan=long_distance_hos_plan(transport_hours,high) if service=="Long Distance" else None
     other=number(data.get("other_amount",0),"Other agreed charges",0,100000);discount=number(data.get("discount_amount",0),"Discount",0,100000)
@@ -466,8 +501,13 @@ def calculate(db,data):
     if service=="Long Distance":
         lines.append({"name":"Carburant / distance longue distance" if fr else "Long-distance fuel / distance fee","qty":1,"unit_cents":money(fuel),"total_cents":money(fuel),"note":(f"{float(km):g} km aller-retour + 5 % = {float(adjusted_km):g} km ajustes a {float(km_rate):.2f} $ CA/km x {trucks} camion(s)." if fr else f"{float(km):g} actual round-trip km + 5% = {float(adjusted_km):g} adjusted km at CAD {float(km_rate):.2f}/km x {trucks} truck(s).")})
     else:
-        lines.append({"name":"Frais de carburant" if fr else "Fuel fee","qty":trucks,"unit_cents":money(LOCAL_FUEL),"total_cents":money(fuel),"note":"Frais de carburant local." if fr else "Local fuel charge."})
+        lines.append({"name":"Frais de carburant" if fr else "Fuel fee","qty":trucks,"unit_cents":money(local_fuel),"total_cents":money(fuel),"note":"Frais de carburant local." if fr else "Local fuel charge."})
     lines.extend(mats)
+    from .platform_common import text
+    custom_name=text(data.get('service_line_name',''),'Service description',160)
+    custom_note=text(data.get('service_line_note',''),'Service note',2000)
+    if custom_name:lines[0]['name']=custom_name
+    if custom_note:lines[0]['note']=custom_note
     if other:lines.append({"name":"Autres frais convenus" if fr else "Other agreed charges","qty":1,"unit_cents":money(other),"total_cents":money(other)})
     if discount:lines.append({"name":"Rabais approuve" if fr else "Approved discount","qty":1,"unit_cents":-money(discount),"total_cents":-money(discount)})
     return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":money(rate),
@@ -514,27 +554,79 @@ def template_service(db,data,u):
     db.execute("UPDATE client_accounts SET updated_at=? WHERE id=?",(now(),cid));audit(db,u["id"],"New service added to client","leads",lid,{"client_id":cid})
     return rec
 
-def confirmation(lead,q):
+def confirmation(lead,q,job=None):
     inp=json.loads(q["inputs_json"]);fr=str(inp.get("language") or lead.get("language","")).lower().startswith("fr")
     _,window=quote_start_window(inp)
+    day=inp.get('move_date') or lead.get('move_date')
+    if job:
+        detail=booking_details(job,q);day=detail['date'];window=detail['arrival_window']
     if fr:
-        return f"Bonjour {lead['client_name']},\n\nVotre service avec Crown Movers est maintenant réservé et confirmé. Fenêtre d'arrivée : {window}.\n\nPour une annulation ou un report, consultez les conditions de réservation convenues pour votre service et contactez-nous à info@crownmovers.ca ou au 514-606-4030. Une nouvelle date dépend des disponibilités. Tout changement de prix doit être accepté avant de confirmer la nouvelle réservation.\n\nMerci,\nCrown Movers"
-    return f"Hi {lead['client_name']},\n\nYour Crown Movers service is booked and confirmed. Arrival window: {window}.\n\nFor cancellation or rescheduling, refer to the booking terms agreed for your service and contact us at info@crownmovers.ca or 514-606-4030. A replacement date is subject to availability. Any price change requires your approval before confirming the replacement booking.\n\nThank you,\nCrown Movers"
+        return f"Bonjour {lead['client_name']},\n\nVotre service avec Crown Movers est maintenant réservé et confirmé. Date : {day}. Fenêtre d'arrivée : {window} (heure de Montréal).\n\nPour une annulation ou un report, consultez les conditions de réservation convenues pour votre service et contactez-nous à info@crownmovers.ca ou au 514-606-4030. Une nouvelle date dépend des disponibilités. Tout changement de prix doit être accepté avant de confirmer la nouvelle réservation.\n\nMerci,\nCrown Movers"
+    return f"Hi {lead['client_name']},\n\nYour Crown Movers service is booked and confirmed. Service date: {day}. Arrival window: {window} (Montréal time).\n\nFor cancellation or rescheduling, refer to the booking terms agreed for your service and contact us at info@crownmovers.ca or 514-606-4030. A replacement date is subject to availability. Any price change requires your approval before confirming the replacement booking.\n\nThank you,\nCrown Movers"
+
+
+def prepare_booking_confirmation(db,job,quote,lead,actor,base=None):
+    """Prepare exactly one current confirmation; never send or retry uncertain mail."""
+    if job['status'] not in ('Confirmed','In progress'):raise HTTPException(409,'Confirm the service before preparing its booking email.')
+    if not quote or quote['status']!='Accepted' or job['quote_id']!=quote['id'] or job['lead_id']!=lead['id']:
+        raise HTTPException(409,'An accepted estimate linked to this service is required.')
+    if not quote_scope_current(db,quote,lead) or pending_scope_changes(db,lead['id']):
+        raise HTTPException(409,'Review the current service details before preparing confirmation.')
+    if not lead.get('email'):raise HTTPException(422,'Add the client email before preparing confirmation.')
+    key=booking_confirmation_key(job,quote)
+    messages=rows(db,"SELECT * FROM outbound_messages WHERE job_id=? AND event_key LIKE 'booking-confirmed:%'",(job['id'],))
+    if any(m['status'] in ('Sending','Unknown') for m in messages):
+        raise HTTPException(409,'A booking email has an unconfirmed send. Check Sent mail before preparing another.')
+    db.execute("UPDATE outbound_messages SET status='Cancelled',error='Booking date or arrival changed; review the current confirmation' WHERE job_id=? AND event_key LIKE 'booking-confirmed:%' AND event_key!=? AND status IN ('Draft','Approved')",(job['id'],key))
+    prior=one(db,'SELECT * FROM outbound_messages WHERE event_key=?',(key,))
+    if prior and prior['status']=='Sent':return prior
+    if prior and prior['status'] in ('Draft','Approved') and prior['recipient']==lead['email']:
+        from urllib.parse import urlsplit
+        from .platform_common import stamp_hash
+        url=next((line.strip() for line in prior['body'].splitlines() if '/portal' in line and '#access=' in line),'')
+        token=urlsplit(url).fragment.removeprefix('access=') if url else ''
+        if token and one(db,'SELECT token_hash FROM portal_invites WHERE token_hash=? AND used_at IS NULL AND revoked=0 AND expires_at>? AND email=?',(stamp_hash(token),now(),lead['email'])):return prior
+    from .client_communications import portal_link
+    fr=str(json.loads(quote['inputs_json']).get('language') or lead.get('language','')).lower().startswith('fr')
+    body=confirmation(lead,quote,job)+('\n\nVotre dossier privé (photos, renseignements et demandes de rappel) :\n' if fr else '\n\nYour private moving file (photos, details and callback requests):\n')+portal_link(db,lead,actor,base,tab='estimates')
+    subject='Réservation confirmée | Crown Movers' if fr else 'Booking confirmed | Crown Movers'
+    if prior:
+        db.execute("UPDATE outbound_messages SET subject=?,body=?,recipient=?,status='Draft',approved_by=NULL,error='',source_version=NULL WHERE id=?",(subject,body,lead['email'],prior['id']))
+        message=one(db,'SELECT * FROM outbound_messages WHERE id=?',(prior['id'],))
+    else:message=queue_message(db,lead['id'],subject,body,'Preparation',actor,key,job['id'],None)
+    audit(db,actor,'Current booking confirmation prepared; not sent','outbound_messages',message['id'],{'job_id':job['id'],'event_key':key})
+    return message
 
 def confirm_job(db,q,lead,actor,reason):
+    if not quote_scope_current(db,q,lead) or pending_scope_changes(db,lead['id']):
+        raise HTTPException(409,'Review the current client details before confirming this booking.')
     j=ensure_tentative_job(db,q,lead,actor)
     if not j:raise HTTPException(409,"Add the service date before confirming the booking.")
+    if j['status'] in ('Confirmed','In progress','Completed'):return j
+    from .availability import assert_dates_open
+    assert_dates_open(db,j['start_at'],j['end_at'])
     db.execute("UPDATE jobs SET status='Confirmed',exception_reason=?,version=version+1 WHERE id=?",(reason,j["id"]))
     j=one(db,"SELECT * FROM jobs WHERE id=?",(j["id"],))
     add_task(db,lead["id"],"Assign crew and truck for confirmed service",lead.get("assigned_to",""),"assign:"+j["id"])
-    key="booking-confirmed:"+q["id"]
-    if lead.get("email") and not one(db,"SELECT id FROM outbound_messages WHERE event_key=?",(key,)):
-        queue_message(db,lead["id"],"Reservation confirmee | Crown Movers" if str(json.loads(q["inputs_json"]).get("language","")).lower().startswith("fr") else "Booking confirmed | Crown Movers",confirmation(lead,q),"Preparation",actor,key,j["id"],j.get("version",1))
+    if lead.get('email'):prepare_booking_confirmation(db,j,q,lead,actor)
     db.execute("UPDATE leads SET stage='Booked',updated_at=? WHERE id=?",(now(),lead["id"]))
     return j
 
 def register_sales_crm_v6(app,path,auth,public_url):
     schema(path)
+
+    @app.post('/api/jobs/{jid}/booking-confirmation')
+    def current_booking_confirmation(jid:str,data:dict,u=Depends(auth)):
+        require_role(u,{'owner','manager','sales','dispatch'})
+        with transaction(path) as db:
+            job=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
+            if not job:raise HTTPException(404,'Service not found.')
+            from .platform_common import staff_read_project
+            lead=staff_read_project(db,job['lead_id'],u)
+            if data.get('version')!=job['version']:raise HTTPException(409,'The service changed. Refresh before preparing confirmation.')
+            quote=one(db,'SELECT * FROM quotes WHERE id=?',(job['quote_id'],))
+            message=prepare_booking_confirmation(db,job,quote,lead,u['id'],public_url)
+        return {'ok':True,'mail_id':message['id'],'status':message.get('status','Draft'),'sent':message.get('status')=='Sent','event_key':message['event_key']}
 
     @app.get("/api/crm/clients")
     def clients(q:str="",u=Depends(auth)):
@@ -559,7 +651,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
                 accts=rows(db,f"SELECT a.*, {activity_expr} activity_at FROM client_accounts a ORDER BY activity_at DESC LIMIT 200")
             for a in accts:
                 a["services"]=rows(db,"""SELECT l.id,l.lead_type,l.source,l.move_date,l.pickup,l.dropoff,l.home_size,l.stage,l.created_at,
-                  (SELECT status FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_status
+                  (SELECT status FROM quotes q WHERE q.lead_id=l.id ORDER BY revision DESC LIMIT 1) quote_status,
+                  (SELECT status FROM intake_drafts d WHERE d.lead_id=l.id) intake_status
                   FROM client_account_leads x JOIN leads l ON l.id=x.lead_id WHERE x.client_id=?
                   ORDER BY l.created_at DESC LIMIT 20""",(a["id"],))
                 a["latest_activity"]=client_latest_activity(db,a["id"])
@@ -660,6 +753,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
             if day:rate,source=rate_for(db,day,int(movers))
             mats=rows(db,"SELECT code,name,category,sell_cents FROM material_catalog WHERE active=1 ORDER BY category,name")
             a=account_for_lead(db,lead_id) if lead_id else None
+            policy=settings(db,'billing_policy',{}) or {}
         presets=[]
         for city,province,one_way in LONG_DISTANCE_CITY_PRESETS:
             round_trip=Decimal(str(one_way))*2;adjusted=round_trip*LONG_DISTANCE_KM_BUFFER
@@ -667,7 +761,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
               "one_way_km":float(one_way),"round_trip_km":float(round_trip),"adjusted_km":float(adjusted),
               "gas_one_truck_cents":money(adjusted*LONG_KM)})
         return {"client":a,"lead":l,"suggested_hourly_rate":float(rate) if rate is not None else None,"rate_source":source or "",
-          "materials":mats,"long_distance_presets":presets,
+          "materials":mats,"long_distance_presets":presets,"can_manage_materials":u['role'] in ('owner','manager'),
+          "billing_taxes":(policy.get('terms') or {}).get('taxes',[]) if policy.get('approved') else [],
           "defaults":{"local_fuel_per_truck":35.0,"extra_truck_transport":25.0,"long_distance_per_km":0.94,
             "long_distance_km_buffer_percent":5.0,"deposit":300.0,"limited_liability":"$0.60/lb per article"}}
 
@@ -699,6 +794,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
                     account=account_for_lead(db,lid)
                     if not account or account['id']!=data['client_id']:raise HTTPException(409,"This inquiry belongs to a different client. Select the correct inquiry.")
             else:l=template_service(db,data,u);lid=l['id']
+            from .quote_options import document_options
+            document=document_options(data,l)
             day=str(data.get("move_date") or l["move_date"])
             if day and day!=l["move_date"]:
                 db.execute("UPDATE leads SET move_date=?,version=version+1,updated_at=? WHERE id=?",(day,now(),lid));l=one(db,"SELECT * FROM leads WHERE id=?",(lid,))
@@ -707,6 +804,10 @@ def register_sales_crm_v6(app,path,auth,public_url):
             rev=db.execute("SELECT COALESCE(MAX(revision),0)+1 FROM quotes WHERE lead_id=?",(lid,)).fetchone()[0]
             inp={k:v for k,v in data.items() if k not in ('new_client','service_details','draft_request_hash')}
             inp.update(lead_id=lid,lead_version=l['version'],quote_title=title,client_note=note,draft_request_hash=request_hash)
+            inp.update(document)
+            if data.get('media_link'):
+                from .media_links import save_link
+                save_link(db,lid,{'url':data['media_link'],'label':'Quote photo / video folder'},u['id'])
             inp["deposit_required"]=float(number(data.get("deposit_required",300) or 0,"Deposit",0,100000));inp["limited_liability"]="$0.60/lb per article"
             service=result["service_type"];language=result["language"];template_key=str(inp.get("template_key") or "").strip()
             tmpl=one(db,"SELECT * FROM crm_quote_templates WHERE template_key=? AND active=1",(template_key,))
@@ -717,7 +818,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
             qid=uid("QUOTE");snapshot={k:l[k] for k in l.keys() if k!="raw_json"}
             insert(db,"quotes",dict(id=qid,lead_id=lid,revision=rev,status="Draft",inputs_json=dumps(inp),result_json=dumps(result),
               pricing_id=p["id"],lead_snapshot_json=dumps(snapshot),lead_version=l["version"],created_by=u["id"],created_at=now()))
-            db.execute("UPDATE leads SET stage='Quote',updated_at=? WHERE id=?",(now(),lid));audit(db,u["id"],"CRM quote revision created","quotes",qid,{"revision":rev})
+            db.execute("UPDATE leads SET stage=CASE WHEN stage IN ('Accepted','Booked','Closed','Lost') THEN stage ELSE 'Quote' END,updated_at=? WHERE id=?",(now(),lid));audit(db,u["id"],"CRM quote revision created","quotes",qid,{"revision":rev})
             return payload(one(db,"SELECT * FROM quotes WHERE id=?",(qid,)))
 
     @app.get("/api/crm/quotes/{qid}")
@@ -729,7 +830,9 @@ def register_sales_crm_v6(app,path,auth,public_url):
             l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],));a=account_for_lead(db,q["lead_id"])
             j=one(db,"SELECT * FROM jobs WHERE quote_id=? ORDER BY created_at DESC LIMIT 1",(qid,))
             paid=db.execute("SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE lead_id=? AND purpose='Deposit' AND verified=1",(q["lead_id"],)).fetchone()[0]
-        return {"quote":payload(q),"lead":l,"client":a,"job":j,"verified_deposit_cents":paid}
+            from .sales_journey import quote_delivery
+            delivery=quote_delivery(db,q)
+        return {"quote":payload(q),"lead":l,"client":a,"job":j,"verified_deposit_cents":paid,"delivery":delivery}
 
     @app.post("/api/crm/quotes/{qid}/finalize")
     def finalize(qid:str,data:dict,u=Depends(auth)):
@@ -738,23 +841,50 @@ def register_sales_crm_v6(app,path,auth,public_url):
             q=one(db,"SELECT * FROM quotes WHERE id=?",(qid,))
             if not q or q["status"] not in ("Draft","Approved"):raise HTTPException(409,"Only a draft or approved estimate can be finalized.")
             l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],))
-            if l["version"]!=q["lead_version"]:raise HTTPException(409,"Client/service details changed. Save a new estimate revision first.")
+            if not quote_scope_current(db,q,l):raise HTTPException(409,"Client/service details changed. Save a new estimate revision first.")
             missing=[label for key,label in [("client_name","client name"),("email","email"),("phone","phone"),("move_date","service date")] if not str(l.get(key,"")).strip()]
             if l.get("email") and ("@" not in l["email"] or "." not in l["email"].rsplit("@",1)[-1]):missing.append("valid email")
             service=json.loads(q["inputs_json"]).get("service_type","Moving")
             if service in ("Moving","Long Distance") and (not l["pickup"] or not l["dropoff"]):missing.append("pickup and destination")
             if missing:raise HTTPException(422,"Complete before sending: "+", ".join(missing)+".")
             if q["status"]=="Draft":db.execute("UPDATE quotes SET status='Approved',approved_by=?,approved_at=? WHERE id=?",(u["id"],now(),qid))
+            from .availability import assert_day_open
+            from .client_communications import portal_link
             from .platform_common import stamp_hash
-            raw=secrets.token_urlsafe(32);db.execute("UPDATE portal_invites SET revoked=1 WHERE lead_id=? AND used_at IS NULL",(l["id"],))
-            insert(db,"portal_invites",dict(token_hash=stamp_hash(raw),lead_id=l["id"],email=l["email"],
-              expires_at=(datetime.now(timezone.utc)+timedelta(days=14)).isoformat(timespec="seconds"),created_by=u["id"],created_at=now()))
-            invite_url=public_url+"/portal#access="+raw;r=json.loads(q["result_json"]);inp=json.loads(q["inputs_json"]);fr=str(inp.get("language","English")).lower().startswith("fr")
-            template=inp.get("template_snapshot") or {};_,arrival=quote_start_window(inp);service_title=template.get("title") or inp.get("service_type") or "Moving"
-            subject=("Votre devis Crown Movers - "+service_title) if fr else ("Your Crown Movers estimate - "+service_title)
-            body=(f"Bonjour {l['client_name']},\n\nVotre devis Crown Movers est pret pour le {inp.get('move_date') or l.get('move_date')} ({arrival}). Estimation avant taxes : {r['low_cents']/100:.2f} $ a {r['high_cents']/100:.2f} $ CA.\n\nConsultez les details, les protections applicables et les conditions, puis acceptez votre devis ici :\n{invite_url}\n\nApres l'acceptation, les options de depot applicables seront affichees.\n\nMerci,\nCrown Movers" if fr else
-              f"Hi {l['client_name']},\n\nYour Crown Movers estimate is ready for {inp.get('move_date') or l.get('move_date')} ({arrival}). Estimated range before tax: CAD {r['low_cents']/100:.2f} to CAD {r['high_cents']/100:.2f}.\n\nReview the service details, applicable protection and booking terms, then accept your estimate here:\n{invite_url}\n\nAfter acceptance, the available deposit options will appear.\n\nThank you,\nCrown Movers")
-            msg=queue_message(db,l["id"],subject,body,"Reply",u["id"],"quote-delivery:"+qid+":"+str(q["revision"]));mid=msg["id"]
+            from urllib.parse import urlsplit
+            inp=json.loads(q['inputs_json'])
+            assert_day_open(db,inp.get('move_date') or l.get('move_date',''))
+            if pending_scope_changes(db,l['id']):
+                raise HTTPException(409,'Review the client’s requested changes before finalizing this estimate.')
+            newer=one(db,"SELECT id FROM quotes WHERE lead_id=? AND revision>? AND status IN ('Approved','Accepted')",(l['id'],q['revision']))
+            if newer:raise HTTPException(409,'A newer estimate is available. Open the latest revision.')
+            key='quote-delivery:'+qid+':'+str(q['revision'])
+            msg=one(db,'SELECT * FROM outbound_messages WHERE event_key=?',(key,))
+            if msg and msg['status'] not in ('Draft','Sent'):
+                raise HTTPException(409,'This delivery is already approved, in progress or unresolved. Review its status before retrying.')
+            if msg:
+                invite_url=next((line.strip() for line in msg['body'].splitlines() if '/portal' in line and '#access=' in line),'')
+            valid=False
+            if invite_url:
+                token=urlsplit(invite_url).fragment.removeprefix('access=')
+                valid=bool(one(db,'SELECT token_hash FROM portal_invites WHERE token_hash=? AND used_at IS NULL AND revoked=0 AND expires_at>? AND email=?',
+                               (stamp_hash(token),now(),l['email'])))
+            if not msg or (msg['status']=='Draft' and (not valid or msg['recipient']!=l['email'])):
+                invite_url=portal_link(db,l,u['id'],public_url,tab='estimates')
+                r=json.loads(q['result_json']);fr=str(inp.get('language','English')).lower().startswith('fr')
+                template=inp.get('template_snapshot') or {};_,arrival=quote_start_window(inp)
+                service_title=template.get('title') or inp.get('service_type') or 'Moving'
+                subject=('Votre devis Crown Movers - ' if fr else 'Your Crown Movers estimate - ')+service_title
+                date=inp.get('move_date') or l.get('move_date')
+                body=(f"Bonjour {l['client_name']},\n\nMerci de considérer Crown Movers! Votre devis pour le {date} est prêt.\nArrivée souhaitée : {arrival}.\nEstimation avant taxes : {r['low_cents']/100:.2f} $ à {r['high_cents']/100:.2f} $ CA.\n\nConsultez votre devis et les conditions, puis acceptez-le ici :\n{invite_url}\n\nVous pourrez ensuite consulter les options de dépôt. Votre date sera confirmée après les vérifications de disponibilité et de paiement.\n\nDans votre dossier, vous pouvez aussi ajouter des photos, préciser les accès ou demander un rappel.\n\nUne question? Appelez le 514-606-4030. Nous serons heureux de vous aider.\n\nMerci,\nL’équipe Crown Movers" if fr else
+                    f"Hi {l['client_name']},\n\nThank you for considering Crown Movers! Your estimate for {date} is ready.\nRequested arrival window: {arrival}.\nEstimated range before tax: CAD {r['low_cents']/100:.2f} to CAD {r['high_cents']/100:.2f}.\n\nReview your estimate and booking terms, then accept here:\n{invite_url}\n\nYour deposit options will appear after acceptance. We will confirm your date after checking availability and the required payment or approved arrangement.\n\nYou can also add photos, share access details, or request a callback in your moving file.\n\nQuestions? Call 514-606-4030. We are happy to help.\n\nThank you,\nThe Crown Movers team")
+                if msg:
+                    db.execute('UPDATE outbound_messages SET subject=?,body=?,recipient=? WHERE id=?',(subject,body,l['email'],msg['id']))
+                    msg=one(db,'SELECT * FROM outbound_messages WHERE id=?',(msg['id'],))
+                else:msg=queue_message(db,l['id'],subject,body,'Reply',u['id'],key)
+            mid=msg['id']
+            db.execute("UPDATE quotes SET status='Superseded' WHERE lead_id=? AND id!=? AND status='Approved'",(l['id'],qid))
+            db.execute("UPDATE outbound_messages SET status='Cancelled',error='Newer estimate approved' WHERE lead_id=? AND event_key LIKE 'quote-delivery:%' AND event_key!=? AND status IN ('Draft','Approved')",(l['id'],key))
             delivery_stage='Quote Sent' if msg.get('status')=='Sent' else 'Estimate Ready'
             db.execute("UPDATE leads SET stage=CASE WHEN stage IN ('Accepted','Booked','Closed','Lost') THEN stage ELSE ? END,notifications_suppressed=0,updated_at=? WHERE id=?",(delivery_stage,now(),l["id"]));audit(db,u["id"],"Estimate finalized for client delivery","quotes",qid,{"mail_id":mid})
         sent=msg.get('status')=='Sent';err=""
@@ -798,6 +928,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
         require_role(u,SALES);method=str(data.get("method") or "")
         if method not in ("Interac e-Transfer","Cash","Cheque"):raise HTTPException(422,"Choose e-transfer, cash or cheque.")
         mode=str(data.get("mode") or "received")
+        if mode=='due_on_service':require_role(u,MANAGERS)
         with transaction(path) as db:
             q=one(db,"SELECT * FROM quotes WHERE id=? AND status='Accepted'",(qid,))
             if not q:raise HTTPException(409,"The client must accept the estimate first.")
@@ -809,7 +940,14 @@ def register_sales_crm_v6(app,path,auth,public_url):
                 pid=uid("PAY");insert(db,"payments",dict(id=pid,lead_id=l["id"],amount_cents=amount,method=method,purpose="Deposit",reference=ref,verified=1,recorded_by=u["id"],created_at=now()))
                 total=db.execute("SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE lead_id=? AND purpose='Deposit' AND verified=1",(l["id"],)).fetchone()[0]
                 if total<required:return {"ok":True,"confirmed":False,"remaining_cents":required-total}
-                j=confirm_job(db,q,l,u["id"],method+" deposit verified");audit(db,u["id"],"Deposit verified and booking confirmed","payments",pid,{"job_id":j["id"]});return {"ok":True,"confirmed":True,"job_id":j["id"]}
+                try:j=confirm_job(db,q,l,u['id'],method+' deposit verified')
+                except HTTPException as ex:
+                    if ex.status_code!=409:raise
+                    add_task(db,l['id'],'URGENT: deposit received; resolve booking availability',l.get('assigned_to',''),key='closed-deposit:'+pid)
+                    audit(db,u['id'],'Deposit recorded; booking requires availability review','payments',pid)
+                    return {'ok':True,'confirmed':False,'payment_recorded':True,'attention':str(ex.detail)}
+                audit(db,u['id'],'Deposit verified and booking confirmed','payments',pid,{'job_id':j['id']})
+                return {'ok':True,'confirmed':True,'job_id':j['id']}
             if mode!="due_on_service":raise HTTPException(422,"Choose received or due on service day.")
             if method not in ("Cash","Cheque"):raise HTTPException(422,"Only cash or cheque can be approved as due on the service day. Record an e-transfer only after it is actually received.")
             j=confirm_job(db,q,l,u["id"],"Manager-approved deposit exception: "+method+" due on service day");audit(db,u["id"],"Booking confirmed with deposit exception","jobs",j["id"],{"method":method})
@@ -845,7 +983,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
 
     @app.post("/api/crm/review-settings")
     def set_review_settings(data:dict,u=Depends(auth)):
-        require_role(u,{"owner"});url=str(data.get("review_url") or "").strip()
+        require_role(u,{"owner",'manager'});url=str(data.get("review_url") or "").strip()
         if url and not url.startswith("https://"):raise HTTPException(422,"Use the full https:// public review URL.")
         with transaction(path) as db:
             cfg=settings(db,"automation_policy",{}) or {};cfg.update({"enabled":bool(data.get("enabled",True)),"review_request":bool(data.get("review_request",True)),"review_url":url});put_setting(db,"automation_policy",cfg);audit(db,u["id"],"Review-request settings updated","settings","automation_policy",{"has_url":bool(url)})

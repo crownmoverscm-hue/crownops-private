@@ -14,6 +14,8 @@ from fastapi import Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .pricing import number,cents
+from .platform_common import invoice_job
+from .invoice_checks import allocated_credits,actuals_need_review,deposit_review_state,apply_unambiguous_deposits
 
 
 def short(v,label,maximum=4000):
@@ -37,7 +39,8 @@ def validate_terms(data):
         raise ValueError('Enter the legal billing name/address and customer name before approval.')
     out={}
     out['issuer']={k:short(issuer.get(k,''),'Issuer '+k,500) for k in ('name','address','email','phone')}
-    out['customer']={k:short(customer.get(k,''),'Customer '+k,700) for k in ('name','address','email')}
+    out['customer']={k:short(customer.get(k,''),'Customer '+k,1500 if k=='address' else 700) for k in ('name','address','email')}
+    if out['customer']['email'] and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',out['customer']['email']):raise ValueError('Enter a valid customer billing email.')
     for key,low,high in [('hourly_rate',1,5000),('transport_amount',0,100000),('fuel_amount',0,100000),('discount_amount',0,100000)]:
         out[key+'_cents']=cents(number(data.get(key),key,low,high))
     out['other_amount_cents']=cents(number(data.get('other_amount',0),'Other agreed amount',0,100000))
@@ -55,7 +58,7 @@ def validate_terms(data):
     if not isinstance(cat,list) or len(cat)>100:raise ValueError('Invalid approved material/extra catalogue.')
     out['catalogue']=[];seen=set()
     for item in cat:
-        code=short(item.get('code',''),'Item code',60);name=short(item.get('name',''),'Item name',150)
+        code=short(item.get('code',''),'Item code',60);name=short(item.get('name',''),'Item name',160)
         if not re.fullmatch(r'[A-Za-z0-9_-]+',code) or code in seen or not name:raise ValueError('Catalogue item codes must be unique.')
         seen.add(code)
         out['catalogue'].append({'code':code,'name':name,'unit_cents':cents(number(item.get('unit_price'),'Unit price',0,10000))})
@@ -111,38 +114,47 @@ def calculate_invoice(terms,actual,deposit_cents=0):
 
 
 def invoice_html(document):
-    e=lambda x:escape(str(x),quote=True)
-    money=lambda n:'CA$'+f'{n/100:,.2f}'
-    terms=document['terms'];r=document['calculation'];issuer=terms['issuer'];customer=terms['customer']
-    markup = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'''+e(document['number'])+'''</title><style>
-body{font:15px/1.6 Arial,sans-serif;color:#172d4b;max-width:820px;padding:30px;margin:auto}h1{margin-bottom:0}h2{font-size:18px}.pilot{padding:10px;background:#fff0cb;color:#60450b}.meta{display:flex;gap:36px;justify-content:space-between}table{width:100%;border-collapse:collapse;margin:24px 0}td,th{border-bottom:1px solid #dbe1e8;padding:10px;text-align:right}td:first-child,th:first-child{text-align:left}.totals{margin-left:auto;max-width:390px}.totals p{display:flex;justify-content:space-between}strong{font-weight:700}@media print{body{padding:0}}
-</style></head><body><p class="pilot">PRIVATE PILOT / TEST DOCUMENT. Not synchronized with accounting. Do not use with real clients until billing setup is approved for production.</p><h1>'''+e(issuer['name'])+'''</h1><p>'''+e(issuer['address'])+'''<br>'''+e(issuer['email'])+''' | '''+e(issuer['phone'])+'''</p><div class="meta"><div><h2>Bill to</h2>'''+e(customer['name'])+'''<br>'''+e(customer['address'])+'''<br>'''+e(customer['email'])+'''</div><div><h2>Invoice '''+e(document['number'])+'''</h2>Revision '''+e(document['revision'])+''' | '''+e(document['status'])+'''<br>Service date: '''+e(document['service_date'])+'''<br>Issued: '''+e(document.get('issued_at','Not issued'))+'''</div></div><table><thead><tr><th>Description</th><th>Quantity</th><th>Rate</th><th>Amount</th></tr></thead><tbody>'''+''.join('<tr><td>'+e(l['description'])+'</td><td>'+e(l['quantity'])+'</td><td>'+money(l['unit_cents'])+'</td><td>'+money(l['amount_cents'])+'</td></tr>' for l in r['lines'])+'''</tbody></table><div class="totals"><p><span>Agreed discount</span><span>-'''+money(r['discount_cents'])+'''</span></p><p><span>Subtotal</span><span>'''+money(r['subtotal_cents'])+'''</span></p>'''+''.join('<p><span>'+e(t['name'])+' ('+e(t['rate_percent'])+'%)</span><span>'+money(t['amount_cents'])+'</span></p>' for t in r['taxes'])+'''<p><strong>Total</strong><strong>'''+money(r['total_cents'])+'''</strong></p><p><span>Verified payments allocated</span><span>-'''+money(r['deposit_cents'])+'''</span></p><p><strong>Balance at issue</strong><strong>'''+money(r['balance_cents'])+'''</strong></p></div><p>Recorded service: '''+e(r['actual_service_hours'])+''' hours. Agreed minimum: '''+e(r['minimum_hours'])+''' hours. Transport is billed separately as agreed.</p><p>'''+e(document['actual'].get('notes',''))+'''</p><p>'''+e(' | '.join(t['name']+' registration: '+t['registration'] for t in terms['taxes']))+'''</p><p>Printed revisions are preserved. A later correction is a new revision, not a deletion. This document does not verify collection of unallocated or unconfirmed payments.</p></body></html>'''
-
-
-    if not document.get('test_mode',True):
-        markup=markup.replace('PRIVATE PILOT / TEST DOCUMENT. Not synchronized with accounting. Do not use with real clients until billing setup is approved for production.','Issued by CrownOps. See receipt/payment record for the current balance.')
-    if r.get('testimonial_credit_cents'):
-        label='Optional testimonial participation credit ('+e(r.get('testimonial_credit_mode',''))+')'
-        markup=markup.replace('<p><strong>Total</strong>', '<p><span>'+label+'</span><span>-'+money(r['testimonial_credit_cents'])+'</span></p><p><strong>Total</strong>')
-    return markup
+    e=lambda value:escape(str(value),quote=True)
+    money=lambda value:'CA$'+f'{value/100:,.2f}'
+    fr=str(document.get('language','EN')).lower().startswith('fr')
+    t=lambda en,ff:ff if fr else en
+    terms=document['terms'];calc=document['calculation'];issuer=terms['issuer'];customer=terms['customer']
+    descriptions={'Moving service':'Service de déménagement','Agreed transportation fee':'Frais de transport convenus','Agreed fuel fee':'Frais de carburant convenus','Other accepted services':'Autres services convenus'}
+    line_rows=''.join('<tr><td>'+e(descriptions.get(line['description'],line['description']) if fr else line['description'])+'</td><td>'+e(line['quantity'])+'</td><td>'+money(line['unit_cents'])+'</td><td>'+money(line['amount_cents'])+'</td></tr>' for line in calc['lines'] if line['amount_cents'])
+    def total_line(label,value,strong=False):
+        tag='strong' if strong else 'span'
+        return '<p><'+tag+'>'+e(label)+'</'+tag+'><'+tag+'>'+e(value)+'</'+tag+'></p>'
+    totals=total_line(t('Agreed discount','Réduction convenue'),'-'+money(calc['discount_cents']))+total_line(t('Subtotal','Sous-total'),money(calc['subtotal_cents']))
+    totals+=''.join(total_line(tax['name']+' ('+str(tax['rate_percent'])+'%)',money(tax['amount_cents'])) for tax in calc['taxes'])
+    if calc.get('testimonial_credit_cents'):totals+=total_line(t('Approved participation credit','Crédit de participation approuvé'),'-'+money(calc['testimonial_credit_cents']))
+    totals+=total_line(t('Invoice total','Total de la facture'),money(calc['total_cents']),True)+total_line(t('Verified payments applied','Paiements vérifiés appliqués'),'-'+money(calc['deposit_cents']))+total_line(t('Balance when issued','Solde à l’émission'),money(calc['balance_cents']),True)
+    payment_terms=('<p><strong>'+t('Agreed payment terms','Modalités de paiement convenues')+'</strong><br>'+e(terms['payment_terms'])+'</p>') if terms.get('payment_terms') else ''
+    test=t('TEST DOCUMENT — for review only.','DOCUMENT DE TEST — pour révision seulement.')
+    banner=('<p class="notice">'+test+'</p>') if document.get('test_mode',True) else ''
+    status=t('Issued','Émise') if document['status']=='Issued' else document['status']
+    return ('<!doctype html><html lang="'+('fr' if fr else 'en')+'"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+e(document['number'])+'</title><style>'
+        'body{font:16px/1.6 Arial,sans-serif;color:#1d354c;max-width:850px;padding:32px;margin:auto}h1{margin:0;font-size:27px}h2{font-size:19px;margin:0 0 8px}p{margin:8px 0}.meta{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:30px 0}.address{white-space:pre-line}.muted{color:#526579;font-size:14px}.notice{background:#fff0cb;padding:12px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;margin:24px 0}th,td{text-align:right;padding:12px 8px;border-bottom:1px solid #dce3ea}th:first-child,td:first-child{text-align:left}th{background:#f1f5f8}.totals{max-width:400px;margin-left:auto}.totals p{display:flex;justify-content:space-between;gap:16px}.footer{margin-top:32px;border-top:1px solid #dce3ea;padding-top:18px}@media(max-width:540px){body{padding:18px}.meta{grid-template-columns:1fr}table{font-size:14px}th,td{padding:9px 5px}}@media print{body{padding:0;font-size:12px}.meta{grid-template-columns:1fr 1fr}thead{display:table-header-group}tr{break-inside:avoid}.totals{break-inside:avoid}}'
+        '</style></head><body>'+banner+'<header><h1>'+e(issuer['name'])+'</h1><p class="address">'+e(issuer['address'])+'</p><p class="muted">'+e(issuer['email'])+' · '+e(issuer['phone'])+'</p></header><div class="meta"><section><h2>'+t('Bill to','Facturer à')+'</h2><p class="address">'+e(customer['name'])+'\n'+e(customer['address'])+'</p><p>'+e(customer['email'])+'</p></section><section><h2>'+t('Invoice','Facture')+' '+e(document['number'])+'</h2><p>'+t('Revision','Révision')+' '+str(document['revision'])+' · '+e(status)+'</p><p>'+t('Service date','Date du service')+' : '+e(document['service_date'])+'</p><p class="muted">'+t('Issued','Émise le')+' : '+e(document.get('issued_at',t('Not issued','Non émise')))+'</p></section></div><div class="table-wrap"><table><thead><tr><th>'+t('Description','Description')+'</th><th>'+t('Quantity','Quantité')+'</th><th>'+t('Unit price','Prix unitaire')+'</th><th>'+t('Amount','Montant')+'</th></tr></thead><tbody>'+line_rows+'</tbody></table></div><section class="totals">'+totals+'</section><p>'+t('Actual service','Service réel')+' : '+e(calc['actual_service_hours'])+' '+t('hours','heures')+'. '+t('Agreed minimum','Minimum convenu')+' : '+e(calc['minimum_hours'])+' '+t('hours','heures')+'.</p><p class="address">'+e(document['actual'].get('notes',''))+'</p><p class="muted">'+e(' · '.join(tax['name']+' '+t('registration','inscription')+' : '+tax['registration'] for tax in terms['taxes']))+'</p>'+payment_terms+'<footer class="footer"><p>'+t('Thank you for choosing Crown Movers. Questions? Call 514-606-4030.','Merci d’avoir choisi Crown Movers. Une question? Appelez le 514-606-4030.')+'</p><p class="muted">'+t('This preserved revision shows the balance when issued. Your private invoice page shows the current verified payments and balance. A correction creates a new revision.','Cette révision conservée indique le solde à l’émission. Votre page de facture privée présente les paiements vérifiés et le solde actuel. Une correction crée une nouvelle révision.')+'</p></footer></body></html>')
 
 
 def register_invoices(app,path,auth,visible_job,require):
     def access(db,iid,u):
         inv=one(db,'SELECT * FROM job_invoices WHERE id=?',(iid,))
         if not inv:raise HTTPException(404,'Invoice not found.')
-        j=visible_job(db,inv['job_id'],u)
+        j=invoice_job(db,inv['job_id'],u)
         return inv,j
     def credits(db,iid):
-        return db.execute('''SELECT coalesce(sum(a.amount_cents),0) FROM invoice_payment_allocations a
-           JOIN payments p ON p.id=a.payment_id WHERE a.invoice_id=? AND p.verified=1
-           AND NOT EXISTS (SELECT 1 FROM payments rev WHERE rev.reverses_id=p.id)''',(iid,)).fetchone()[0]
+        return allocated_credits(db,iid)
     def decorate(db,inv,j):
         terms=json.loads(inv['terms_json']);actual=json.loads(inv['actual_json'])
         calc=calculate_invoice(terms,actual,credits(db,inv['id']))
+        needs_review=actuals_need_review(db,inv)
+        if needs_review:calc['actual_hours_recorded']=False
         return {'id':inv['id'],'job_id':j['id'],'number':inv['number'],'status':inv['status'],'revision':inv['revision'],'version':inv['version'],
                 'service_date':__import__('datetime').datetime.fromisoformat(j['start_at']).astimezone(__import__('zoneinfo').ZoneInfo('America/Toronto')).date().isoformat(),'job_status':j['status'],'client_name':terms['customer']['name'],
                 'terms':terms,'actual':actual,'calculation':calc,'updated_at':inv['updated_at'],
+                'actuals_need_review':needs_review,'deposit_review':deposit_review_state(db,inv,j),
+                'pending_extras':db.execute("SELECT count(*) FROM invoice_change_orders WHERE invoice_id=? AND status='Requested'",(inv['id'],)).fetchone()[0],
                 'history':rows(db,'SELECT revision,issued_at FROM invoice_revisions WHERE invoice_id=? ORDER BY revision',(inv['id'],))}
 
     @app.get('/api/invoices')
@@ -152,23 +164,23 @@ def register_invoices(app,path,auth,visible_job,require):
             out=[]
             for inv in recs:
                 if u['role']=='crew' and not one(db,"SELECT job_id FROM assignments WHERE job_id=? AND resource_type='employee' AND resource_id=?",(inv['job_id'],u.get('employee_id') or '')):continue
-                j=visible_job(db,inv['job_id'],u);doc=decorate(db,inv,j)
+                j=invoice_job(db,inv['job_id'],u);doc=decorate(db,inv,j)
                 out.append({k:doc[k] for k in ('id','job_id','number','status','revision','version','service_date','client_name','calculation')})
             return out
 
     @app.get('/api/jobs/{jid}/invoice')
     def job_invoice(jid:str,u=Depends(auth)):
         with closing(connect(path)) as db:
-            j=visible_job(db,jid,u);inv=one(db,'SELECT * FROM job_invoices WHERE job_id=?',(jid,))
+            j=invoice_job(db,jid,u);inv=one(db,'SELECT * FROM job_invoices WHERE job_id=?',(jid,))
             return decorate(db,inv,j) if inv else {'ready':False,'job_id':jid,'message':'Manager must approve billing terms before the team can invoice.'}
 
     @app.post('/api/jobs/{jid}/invoice-setup')
     def setup_invoice(jid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner'})
+        require(u,{'owner','manager'})
         try:terms=validate_terms(data)
         except (ValueError,TypeError,KeyError) as ex:raise HTTPException(422,str(ex))
         with transaction(path) as db:
-            j=visible_job(db,jid,u)
+            j=invoice_job(db,jid,u)
             if j['status'] not in ('Confirmed','In progress','Completed'):raise HTTPException(409,'Confirm the job first.')
             if one(db,'SELECT id FROM job_invoices WHERE job_id=?',(jid,)):raise HTTPException(409,'Billing is already set up for this job. No rates were overwritten.')
             iid=uid('INV');t=now()
@@ -195,6 +207,7 @@ def register_invoices(app,path,auth,visible_job,require):
             if result['balance_cents']<0:raise HTTPException(409,'Payments exceed the revised total. Management must reconcile the credit first.')
             db.execute('UPDATE job_invoices SET actual_json=?,version=version+1,updated_at=? WHERE id=?',(dumps(actual),now(),iid))
             audit(db,u['id'],'Invoice actuals updated','job_invoices',iid,{'before':json.loads(inv['actual_json']),'after':actual})
+            apply_unambiguous_deposits(db,one(db,'SELECT * FROM job_invoices WHERE id=?',(iid,)),j,u['id'])
             return decorate(db,one(db,'SELECT * FROM job_invoices WHERE id=?',(iid,)),j)
 
     @app.post('/api/invoices/{iid}/issue')
@@ -206,9 +219,14 @@ def register_invoices(app,path,auth,visible_job,require):
             if data.get('version')!=inv['version']:raise HTTPException(409,'Invoice changed. Reload and review it.')
             if inv['status']!='Draft':raise HTTPException(409,'This revision is already issued.')
             if j['status']!='Completed':raise HTTPException(409,'Mark the job completed before issuing its final invoice.')
+            apply_unambiguous_deposits(db,inv,j,u['id'])
             doc=decorate(db,inv,j)
+            if doc['pending_extras']:raise HTTPException(409,'Management must approve or decline the requested extra items before this invoice can be finalized.')
+            if doc['deposit_review']['review_required']:raise HTTPException(409,'A verified deposit needs allocation or management review before issuing this invoice.')
             if not doc['calculation']['actual_hours_recorded']:raise HTTPException(422,'Enter actual hours first, not quoted hours.')
             if doc['calculation']['balance_cents']<0:raise HTTPException(409,'Management must review this credit before issue.')
+            lead=one(db,'SELECT language FROM leads WHERE id=?',(j['lead_id'],))
+            doc['language']=lead['language'] if lead else 'EN'
             doc['status']='Issued';doc['issued_at']=now();doc['version']+=1;doc['test_mode']=os.getenv('CROWNOPS_ENV','test')!='production'
             insert(db,'invoice_revisions',dict(invoice_id=iid,revision=inv['revision'],document_json=dumps(doc),issued_by=u['id'],issued_at=doc['issued_at']))
             db.execute("UPDATE job_invoices SET status='Issued',version=version+1,updated_at=? WHERE id=?",(now(),iid))
@@ -228,14 +246,29 @@ def register_invoices(app,path,auth,visible_job,require):
             if j['status']!='Completed':raise HTTPException(409,'Only a completed job invoice can be corrected.')
             if one(db,"SELECT id FROM payment_links WHERE invoice_id=? AND status IN ('Creating','Active','Unknown','Cancelling')",(iid,)):raise HTTPException(409,'Cancel or reconcile the open checkout link before correcting the invoice.')
             if one(db,"SELECT id FROM provider_operations WHERE object_id=? AND status IN ('Running','Unknown','Mismatch')",(iid,)):raise HTTPException(409,'Reconcile the pending accounting operation before changing this invoice.')
-            db.execute("UPDATE outbound_messages SET status='Cancelled',error='Invoice revised; recreate message' WHERE event_key LIKE ? AND status IN ('Draft','Approved')",('invoice-mail:'+iid+':%',))
+            db.execute("UPDATE outbound_messages SET status='Cancelled',error='Invoice revised; recreate message' WHERE (event_key LIKE ? OR event_key LIKE ?) AND status IN ('Draft','Approved')",('invoice-mail:'+iid+':%','invoice-delivery:'+iid+':%'))
             db.execute("UPDATE job_invoices SET status='Draft',revision=revision+1,version=version+1,updated_at=? WHERE id=?",(now(),iid))
             audit(db,u['id'],'Invoice correction opened','job_invoices',iid,{'prior_revision':inv['revision'],'reason':reason})
             return {'ok':True}
 
+    @app.post('/api/invoices/{iid}/deposit-review')
+    def review_deposit(iid:str,data:dict,u=Depends(auth)):
+        require(u,{'owner','manager'})
+        reject_extra(data,{'version','reason'})
+        reason=short(data.get('reason',''),'Deposit allocation / remaining credit review',2000)
+        if len(reason)<10:raise HTTPException(422,'Explain which service receives the remaining deposit or how its credit will be handled.')
+        with transaction(path) as db:
+            inv,j=access(db,iid,u)
+            if inv['status']!='Draft' or data.get('version')!=inv['version']:raise HTTPException(409,'Reload the current draft before reviewing its deposit.')
+            state=deposit_review_state(db,inv,j)
+            db.execute('INSERT INTO invoice_deposit_reviews (invoice_id,fingerprint,reason,reviewed_by,reviewed_at) VALUES (?,?,?,?,?) ON CONFLICT(invoice_id) DO UPDATE SET fingerprint=excluded.fingerprint,reason=excluded.reason,reviewed_by=excluded.reviewed_by,reviewed_at=excluded.reviewed_at',(iid,state['fingerprint'],reason,u['id'],now()))
+            db.execute('UPDATE job_invoices SET version=version+1,updated_at=? WHERE id=?',(now(),iid))
+            audit(db,u['id'],'Remaining verified deposit reviewed','job_invoices',iid,{'unallocated_cents':state['unallocated_cents'],'reason':reason})
+        return {'ok':True}
+
     @app.post('/api/invoices/{iid}/allocate-payment')
     def allocate_payment(iid:str,data:dict,u=Depends(auth)):
-        require(u,{'owner','accounting'})
+        require(u,{'owner','manager','accounting'})
         reject_extra(data,{'payment_id','amount'})
         try:amt=cents(number(data.get('amount'),'Allocated payment',.01,1000000))
         except ValueError as ex:raise HTTPException(422,str(ex))

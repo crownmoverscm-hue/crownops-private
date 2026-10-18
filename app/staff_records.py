@@ -6,7 +6,7 @@ from .store import one, rows, insert, audit, uid, now
 PAY_PENDING='contact_import_pay_pending'
 
 def can_view_pay(user,employee_id):
-    return user['role']=='owner' or bool(employee_id and user.get('employee_id')==employee_id)
+    return user['role'] in ('owner','manager') or bool(employee_id and user.get('employee_id')==employee_id)
 
 def schedule_identity(db,user):
     """Resolve personal assignments without changing account links or permissions."""

@@ -33,7 +33,7 @@ class MovePhotoTests(unittest.TestCase):
                 if eid:insert(db,'employees',dict(id=eid,name=uid,role='Mover',active=1,hourly_cents=2500))
                 insert(db,'users',dict(id=uid,email=uid+'@example.invalid',name=uid,role=role,employee_id=eid,password_hash='unused',active=1,created_at=now()))
                 insert(db,'sessions',dict(token_hash=sha(uid+'-token'),user_id=uid,csrf='test-csrf',expires_at=expires))
-            for lid in ('L1','L2'):insert(db,'leads',dict(id=lid,client_name=lid,created_at=now(),updated_at=now()))
+            for lid in ('L1','L2'):insert(db,'leads',dict(id=lid,client_name=lid,email='client@example.invalid' if lid=='L1' else 'other@example.invalid',created_at=now(),updated_at=now()))
             for jid,lid,eid in [('J1','L1','E1'),('J2','L2','E2')]:
                 insert(db,'jobs',dict(id=jid,lead_id=lid,title=jid,phase='Moving',start_at='2026-11-15T14:00:00+00:00',end_at='2026-11-15T18:00:00+00:00',created_by='owner',created_at=now()))
                 insert(db,'assignments',dict(job_id=jid,resource_type='employee',resource_id=eid))
@@ -114,9 +114,9 @@ class MovePhotoTests(unittest.TestCase):
         png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',6000,5000,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(b'bad'))+chunk(b'IEND',b'')
         self.assertEqual(self.upload(png).status_code,422);self.assertEqual(self.count(),0)
 
-    def test_policy_does_not_enable_general_document_uploads_or_claim_antivirus(self):
+    def test_policy_supports_processed_media_without_general_documents_or_antivirus_claims(self):
         policy=self.owner.get('/api/upload-policy').json();self.assertTrue(policy['enabled']);self.assertEqual(policy['mode'],'photos')
-        self.assertNotIn('pdf',policy['accept']);self.assertNotIn('video',policy['accept'])
+        self.assertNotIn('pdf',policy['accept']);self.assertIn('image/heic',policy['accept']);self.assertIn('video/mp4',policy['accept'])
         self.assertEqual(self.portal.get('/api/portal/project').json()['upload_policy']['mode'],'photos')
         with patch.dict(os.environ,{'CROWNOPS_ENV':'production','CROWNOPS_SECRET_KEY':'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA='}):
             validate_deployment('https://example.invalid',True)

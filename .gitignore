@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.venv/
+node_modules/
+instance/
+uploads/
+backups/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+core
+core.*
+.DS_Store

@@ -4,7 +4,9 @@ This module can list/read Gmail messages after OAuth authorization while outboun
 provider actions remain disabled. It never sends, deletes, archives, labels, or
 marks Gmail messages read. Non-lead items enter an internal review queue.
 """
+import html
 import base64
+import hashlib
 import json
 import re
 import time
@@ -120,23 +122,25 @@ def _attachments(payload):
 
 def _clean_html(text):
     if '<' not in text:
-        return text
+        return html.unescape(text)
     text = re.sub(r'(?is)<(script|style).*?>.*?</\1>', ' ', text)
     text = re.sub(r'(?i)<br\s*/?>', '\n', text)
     text = re.sub(r'(?i)</(p|div|tr|li|h[1-6])>', '\n', text)
-    return re.sub(r'(?s)<[^>]+>', ' ', text)
+    return html.unescape(re.sub(r'(?s)<[^>]+>', ' ', text))
 
 
 def _value_after(text, label):
-    m = re.search(r'(?im)^\s*' + re.escape(label) + r'\s*:?\s*(.*?)\s*$', text)
-    if m and m.group(1):
-        return m.group(1).strip()
-    lines = [x.strip() for x in text.splitlines()]
-    for i, line in enumerate(lines):
-        if line.rstrip(':').strip().lower() == label.lower():
-            for nxt in lines[i + 1:i + 5]:
-                if nxt:
-                    return nxt
+    lines=text.splitlines()
+    for i,line in enumerate(lines):
+        match=re.fullmatch(r'[ \t]*'+re.escape(label)+r'[ \t]*:?[ \t]*(.*)',line,re.I)
+        if not match:continue
+        value=match.group(1).strip()
+        if value:return value
+        for next_line in lines[i+1:i+5]:
+            value=next_line.strip()
+            if not value:continue
+            if re.match(r'^[A-Za-z][A-Za-z /_-]{1,70}:',value) or value.startswith('END_CROWN_'):return ''
+            return value
     return ''
 
 
@@ -161,8 +165,7 @@ def _quote_fields(body, subject):
     em = re.search(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', raw_email, re.I)
     email = em.group(0).lower() if em else ''
     raw_phone = anyv('Phone')
-    pm = re.search(r'(?<!\d)(?:1[- .()]*)?([2-9]\d{2})[- .()]*([2-9]\d{2})[- .()]*([0-9]{4})(?!\d)', raw_phone)
-    phone = ''.join(pm.groups()) if pm else re.sub(r'\D', '', raw_phone)[:10]
+    phone = _digits(raw_phone)
     move_date = anyv('Moving Date')
     pickup = anyv('Pickup Address', 'Pickup Address or Postal Code', 'Pickup')
     dropoff = anyv('Destination Address', 'Destination Address or Postal Code', 'Destination')
@@ -175,7 +178,20 @@ def _quote_fields(body, subject):
     heavy = anyv('Heavy Items', 'Heavy / Specialty Items')
     details = anyv('Additional Details', 'Additional Details or Other Services', 'Details / Notes')
     photo = anyv('Photo / Video Link', 'Photo or Video Link', 'Client photo or video link')
+    labels=['Client Name','Email','Phone','Moving Date','Pickup Address','Destination Address','Greater Montreal Move','Home Size','Pickup Access','Drop-off Access','Pickup Walking Distance','Drop-off Walking Distance','Approximate Boxes','Heavy Items','Additional Details','Photo / Video Link','Submission ID']
+    boundary='|'.join(re.escape(x) for x in labels)
+    multiline=re.search(r'(?ims)^\s*Additional Details\s*:\s*(.*?)(?=^\s*(?:'+boundary+r')\s*:|END_CROWN_QUOTE_BUILDER_INPUT|\Z)',block)
+    if multiline:details=multiline.group(1).strip()
     notes = details
+    local_area=anyv('Greater Montreal Move','Local Montreal')
+    local_area=local_area if local_area in ('Yes','No','Not sure') else ''
+    if photo.startswith('END_CROWN_'):photo=''
+    if not move_date:
+        date_match=re.search(r'(\d{4}-\d{2}-\d{2})\s*$',subject)
+        if date_match:move_date=date_match.group(1)
+    if not name:
+        name_match=re.match(r'New Crown Movers Quote Request - (.*?) - \d{4}-\d{2}-\d{2}\s*$',subject)
+        if name_match:name=name_match.group(1).strip()
     if subject.startswith('New Instant Moving Estimate Request'):
         estimate = re.search(r'(?s)Calculator Estimate\s*\n+\s*(\$[^\n]+)', text)
         if estimate:
@@ -196,6 +212,8 @@ def _quote_fields(body, subject):
         'heavy_items': heavy,
         'photo_link': photo,
         'notes': notes,
+        'inventory': details,
+        'intake': {'local_area':local_area,'service_details':details},
         'source': 'Gmail',
         'lead_type': 'Instant estimate' if subject.startswith('New Instant') else 'Form',
         'stage': 'New Lead',
@@ -273,7 +291,10 @@ def _duplicate_call(db, parsed, event_type, seconds=90):
 
 
 def _digits(value):
-    return re.sub(r'\D', '', value or '')[-10:]
+    raw=re.sub(r'\s*(?:ext\.?|extension|x|#)\s*\d+\s*$','',str(value or ''),flags=re.I)
+    digits=re.sub(r'\D','',raw)
+    if len(digits)==11 and digits.startswith('1'):digits=digits[1:]
+    return digits if re.fullmatch(r'[2-9]\d{2}[2-9]\d{6}',digits) else ''
 
 
 def _caller_name(parsed):
@@ -287,20 +308,64 @@ def _caller_name(parsed):
     return raw[:180]
 
 
-def _match_lead_by_phone(db, phone):
-    wanted = _digits(phone)
-    if not wanted:
-        return None
-    for lead in rows(db, "SELECT id,client_name,phone,assigned_to FROM leads WHERE phone<>'' ORDER BY updated_at DESC LIMIT 5000"):
-        if _digits(lead.get('phone')) == wanted:
-            return lead
-    return None
+def match_inquiry_project(db,parsed,kind='call'):
+    """Match exact contact facts and an explicit service date, never recency/name.
+
+    A client's several projects remain separate. Shared contact information and
+    conflicting identifiers require staff to choose the correct service.
+    """
+    email=str(parsed.get('email') or '').strip().lower();phone=_digits(parsed.get('phone'))
+    supplied_date=str(parsed.get('move_date') or '').strip()
+    try:day=datetime.strptime(supplied_date,'%Y-%m-%d').date().isoformat()
+    except ValueError:day=''
+    leads=rows(db,"SELECT id,client_name,email,phone,move_date,pickup,stage,assigned_to,version FROM leads WHERE email<>'' OR phone<>'' ORDER BY id")
+    emails=[r for r in leads if email and r['email'].strip().lower()==email]
+    phones=[r for r in leads if phone and _digits(r['phone'])==phone]
+    candidates={r['id']:r for r in emails+phones};items=list(candidates.values());items.sort(key=lambda r:r['id'])
+    email_ids={r['id'] for r in emails};phone_ids={r['id'] for r in phones}
+    reason='';selected=None;requires_review=False
+    if not email and not phone:
+        reason='No usable client email or phone was provided. Check the original inquiry before creating a service.';requires_review=True
+    elif email_ids and phone_ids and email_ids!=phone_ids:
+        reason='Email and phone identify different client services. Compare the original inquiry and choose the correct service.';requires_review=True
+    elif email and not emails and phones and any(r['email'].strip() and r['email'].strip().lower()!=email for r in phones):
+        reason='This phone belongs to a service with a different email. Confirm the client identity before attaching the inquiry.';requires_review=True
+    elif len(items)>1:
+        dated=[r for r in items if day and r['move_date']==day]
+        if len(dated)==1:selected=dated[0]
+        else:
+            reason='Several services use this contact information. Choose the service or create a separate new inquiry.';requires_review=True
+    elif items:
+        candidate=items[0]
+        if kind in ('form','quote') and day and candidate['move_date'] and candidate['move_date']!=day:
+            reason='The requested date is different from the existing service. A new service inquiry will be created.'
+        elif candidate['stage'] in ('Completed','Closed','Lost'):
+            reason='This contact matches a closed service. Confirm whether this is a new request or concerns the previous service.';requires_review=True
+        else:selected=candidate
+    if selected and selected['stage'] in ('Completed','Closed','Lost'):
+        selected=None;requires_review=True;reason='The requested date matches a closed service. Confirm whether this is a new inquiry or a follow-up on that service.'
+    fingerprint=hashlib.sha256(dumps({'email':email,'phone':phone,'date':day,'kind':kind,'candidates':items}).encode()).hexdigest()
+    return {'lead':selected,'candidates':items,'requires_review':requires_review,'reason':reason,'fingerprint':fingerprint}
+
+
+def _match_lead_by_phone(db,phone):
+    result=match_inquiry_project(db,{'phone':phone},'call')
+    return result['lead'] if not result['requires_review'] else None
+
+
+def _matching_payload(result):
+    return {k:v for k,v in result.items() if k!='lead'}
+
+
+def _review_task(db,event_key,title):
+    from .platform_common import business_day
+    if not one(db,'SELECT id FROM tasks WHERE legacy_id=?',('gmail-match:'+event_key,)):
+        insert(db,'tasks',dict(id=uid('TASK'),legacy_id='gmail-match:'+event_key,title=title,due_date=business_day(),owner='',created_at=now()))
 
 
 def _record_incoming_message(db, lead_id, actor, subject, body, created_at=None):
-    existing = one(db, "SELECT id FROM messages WHERE lead_id=? AND subject=? AND kind='Incoming email' ORDER BY created_at DESC LIMIT 1", (lead_id, subject[:300]))
-    if existing:
-        return existing['id']
+    # Stable Gmail event IDs provide deduplication in the enclosing transaction.
+    # Different replies/forms can legitimately have the same subject.
     mid = uid('MSG')
     insert(db, 'messages', dict(
         id=mid, lead_id=lead_id, kind='Incoming email', subject=(subject or '')[:300],
@@ -335,6 +400,30 @@ def _record_call_and_followup(db, lead_id, parsed, subject, actor, gmail_id, eve
     return cid
 
 
+def _quote_inquiry(db,data,payload,actor,event_key,new_lead,matched=None):
+    existing=one(db,'SELECT * FROM leads WHERE external_id=?',(event_key,))
+    selected=existing or matched;created=False
+    if selected:lead_id=selected['id']
+    else:
+        selected=new_lead(db,data,actor,external_id=event_key,suppressed=1);lead_id=selected['id'];created=True
+        db.execute('UPDATE leads SET created_at=? WHERE id=?',(payload.get('received_at') or now(),lead_id))
+    message=_record_incoming_message(db,lead_id,actor,payload.get('subject') or '',payload.get('body') or payload.get('snippet') or '',created_at=payload.get('received_at'))
+    payload.update(lead_id=lead_id,message_id=message,origin_label='Quote Form')
+    if not created:
+        from .platform_common import add_task
+        add_task(db,lead_id,'Review new quote form details for this service',selected.get('assigned_to') or '',key='quote-form:'+event_key)
+    return lead_id,created
+
+
+def _new_call_lead(db,parsed,payload,actor,event_key,new_lead,event_type):
+    call_data={'client_name':_caller_name(parsed),'phone':parsed.get('phone') or '','email':'','source':'UniFi',
+        'lead_type':'Voicemail' if event_type=='gmail_voicemail' else 'Missed Call','stage':'New Lead','priority':'High',
+        'notes':str(payload.get('subject') or payload.get('snippet') or '').strip(),'language':'English'}
+    lead=new_lead(db,call_data,actor,external_id=event_key,suppressed=1)
+    db.execute("DELETE FROM tasks WHERE lead_id=? AND title='Review new inquiry' AND status='Open'",(lead['id'],))
+    return lead
+
+
 def promote_pending_call_events(db, actor, new_lead, limit=120):
     """Promote already-detected Gmail missed calls/voicemails into local CRM leads/calls without mutating Gmail."""
     promoted=0
@@ -347,6 +436,7 @@ def promote_pending_call_events(db, actor, new_lead, limit=120):
         except Exception:payload={}
         parsed=payload.get('parsed') if isinstance(payload,dict) else {}
         if not isinstance(parsed,dict):parsed={}
+        if payload.get('matching',{}).get('requires_review'):continue
         effective_type=ev['event_type']
         if effective_type=='gmail_duplicate_call':
             if 'voice' not in str(parsed.get('kind') or '').lower():
@@ -354,44 +444,58 @@ def promote_pending_call_events(db, actor, new_lead, limit=120):
             effective_type='gmail_voicemail'
         if payload.get('lead_id') and payload.get('call_id'):
             db.execute("UPDATE integration_events SET status='Imported' WHERE id=?",(ev['id'],));continue
-        matched=_match_lead_by_phone(db,parsed.get('phone'))
+        match=match_inquiry_project(db,parsed,'call');matched=match['lead']
+        if match['requires_review']:
+            payload['matching']=_matching_payload(match)
+            payload['origin_label']='Voicemail' if effective_type=='gmail_voicemail' else 'Missed Call'
+            db.execute("UPDATE integration_events SET event_type=?,status='Needs review',payload_json=? WHERE id=?",(effective_type,dumps(payload),ev['id']))
+            _review_task(db,ev['event_key'],'Match incoming voicemail / missed call to the correct client service')
+            continue
         if matched:
             lead_id=matched['id']
         else:
-            call_name=_caller_name(parsed)
-            call_data={
-              'client_name':call_name,'phone':parsed.get('phone') or '','email':'','source':'UniFi',
-              'lead_type':'Voicemail' if effective_type=='gmail_voicemail' else 'Missed Call',
-              'stage':'New Lead','priority':'High',
-              'notes':str(payload.get('subject') or payload.get('snippet') or '').strip(),
-              'language':'English'}
-            lead=new_lead(db,call_data,actor,external_id=ev['event_key'],suppressed=1)
+            lead=_new_call_lead(db,parsed,payload,actor,ev['event_key'],new_lead,effective_type)
             lead_id=lead['id']
-            db.execute("DELETE FROM tasks WHERE lead_id=? AND title='Review new inquiry' AND status='Open'",(lead_id,))
         call_id=_record_call_and_followup(db,lead_id,parsed,str(payload.get('subject') or ''),actor,str(payload.get('gmail_id') or ev['object_id']),effective_type)
         payload['call_id']=call_id;payload['lead_id']=lead_id
+        payload['origin_label']='Voicemail' if effective_type=='gmail_voicemail' else 'Missed Call'
         db.execute("UPDATE integration_events SET event_type=?,object_id=?,payload_json=?,status='Imported' WHERE id=?",(effective_type,lead_id,dumps(payload),ev['id']))
         promoted+=1
     return promoted
 
 
-def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_feed=30, fluid=False):
+def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_feed=30, fluid=False, feed_names=None):
     days = max(1, min(int(days), 60))
     max_per_feed = max(1, min(int(max_per_feed), 50))
-    summary = {'scanned': 0, 'new_events': 0, 'new_leads': 0, 'duplicates': 0, 'ignored': 0, 'feeds': {}, 'errors': [], 'fluid': bool(fluid), 'promoted_existing_calls': 0}
+    summary = {'scanned': 0, 'new_events': 0, 'new_leads': 0, 'duplicates': 0, 'ignored': 0, 'needs_review':0, 'feeds': {}, 'errors': [], 'fluid': bool(fluid), 'promoted_existing_calls': 0}
     if fluid:
         with transaction(path) as db:
             summary['promoted_existing_calls']=promote_pending_call_events(db,actor,new_lead)
     label_rows = _api(access_token, 'labels').get('labels') or []
     label_ids = {x.get('name'): x.get('id') for x in label_rows if x.get('name') and x.get('id')}
     for feed, label_name in FEEDS.items():
+        if feed_names is not None and feed not in feed_names:continue
         label_id = label_ids.get(label_name)
         if not label_id:
             summary['feeds'][feed] = 0
             summary['errors'].append({'feed': feed, 'error': 'Gmail label not found: ' + label_name})
             continue
         try:
-            listing = _api(access_token, 'messages', {'labelIds': label_id, 'q': f'newer_than:{days}d', 'maxResults': max_per_feed})
+            with transaction(path) as db:
+                cursor=one(db,"SELECT value_json FROM settings WHERE key=?",('gmail_cursor_'+feed,))
+                cursor=json.loads(cursor['value_json']) if cursor else {}
+            params={'labelIds':label_id,'q':cursor.get('query') or f'newer_than:{days}d','maxResults':max_per_feed}
+            if cursor.get('token'):params['pageToken']=cursor['token']
+            listing=_api(access_token,'messages',params)
+            messages=list(listing.get('messages') or [])
+            pages=1
+            while listing.get('nextPageToken') and pages<10:
+                params['pageToken']=listing['nextPageToken']
+                listing=_api(access_token,'messages',params);messages.extend(listing.get('messages') or []);pages+=1
+            from .platform_common import put_setting
+            next_cursor={'query':params['q'],'token':listing.get('nextPageToken')} if listing.get('nextPageToken') else {}
+            listing['messages']=messages
+            if listing.get('nextPageToken'):summary['errors'].append({'feed':feed,'error':'Inquiry backlog is still importing; the next sync will continue from this page.'})
         except requests.RequestException as exc:
             summary['feeds'][feed] = 0
             status = getattr(getattr(exc, 'response', None), 'status_code', None)
@@ -399,6 +503,7 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
             continue
         ids = [x['id'] for x in listing.get('messages') or []]
         summary['feeds'][feed] = len(ids)
+        errors_before=len(summary['errors'])
         for mid in ids:
             summary['scanned'] += 1
             event_key = 'gmail:' + mid
@@ -429,19 +534,17 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                     continue
                 if feed == 'quote':
                     data = _quote_fields(body, subject)
+                    payload['parsed']=data;payload['body']=body[:20000];payload['origin_label']='Quote Form'
+                    event_type='gmail_quote'
                     existing = one(db, 'SELECT id FROM leads WHERE external_id=?', (event_key,))
-                    if existing:
-                        object_id = existing['id']
+                    match=match_inquiry_project(db,data,'quote')
+                    if match['requires_review'] and not existing:
+                        payload['matching']=_matching_payload(match);summary['needs_review']+=1
+                        _review_task(db,event_key,'Match incoming quote form to the correct client service')
                     else:
-                        lead = new_lead(db, data, actor, external_id=event_key, suppressed=1)
-                        object_id = lead['id']
-                        summary['new_leads'] += 1
-                    db.execute("UPDATE leads SET created_at=? WHERE id=?",(received_at,object_id))
-                    if fluid:
-                        _record_incoming_message(db, object_id, actor, subject, body or message.get('snippet', ''),created_at=received_at)
-                    payload['parsed'] = data
-                    event_type = 'gmail_quote'
-                    status = 'Imported'
+                        object_id,created=_quote_inquiry(db,data,payload,actor,event_key,new_lead,match['lead'])
+                        if created:summary['new_leads']+=1
+                        status='Imported'
                 elif feed in ('bank', 'wix_payment'):
                     parsed = _payment_payload(feed, subject, body)
                     if not parsed:
@@ -454,36 +557,23 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                 elif feed in ('missed_call', 'voicemail'):
                     parsed = _call_payload(feed, subject, body, attachments)
                     payload['parsed'] = parsed
+                    payload['origin_label']='Missed Call' if feed=='missed_call' else 'Voicemail'
                     event_type = 'gmail_missed_call' if feed == 'missed_call' else 'gmail_voicemail'
                     if _duplicate_call(db, parsed, event_type):
                         event_type = 'gmail_duplicate_call'
                         status = 'Ignored'
                         summary['ignored'] += 1
                     elif fluid:
-                        matched = _match_lead_by_phone(db, parsed.get('phone'))
-                        if matched:
-                            object_id = matched['id']
+                        match=match_inquiry_project(db,parsed,'call');matched=match['lead']
+                        if match['requires_review']:
+                            payload['matching']=_matching_payload(match);summary['needs_review']+=1
+                            _review_task(db,event_key,'Match incoming voicemail / missed call to the correct client service')
                         else:
-                            call_name = _caller_name(parsed)
-                            call_data = {
-                                'client_name': call_name,
-                                'phone': parsed.get('phone') or '',
-                                'email': '',
-                                'source': 'UniFi',
-                                'lead_type': 'Missed Call' if feed == 'missed_call' else 'Voicemail',
-                                'stage': 'New Lead',
-                                'priority': 'High',
-                                'notes': (subject + '\n' + (message.get('snippet') or '')).strip(),
-                                'language': 'English',
-                            }
-                            lead = new_lead(db, call_data, actor, external_id=event_key, suppressed=1)
-                            object_id = lead['id']
-                            summary['new_leads'] += 1
-                            db.execute("DELETE FROM tasks WHERE lead_id=? AND title='Review new inquiry' AND status='Open'", (object_id,))
-                        call_id = _record_call_and_followup(db, object_id, parsed, subject, actor, mid, event_type)
-                        payload['call_id'] = call_id
-                        payload['lead_id'] = object_id
-                        status = 'Imported'
+                            if matched:object_id=matched['id']
+                            else:
+                                lead=_new_call_lead(db,parsed,payload,actor,event_key,new_lead,event_type);object_id=lead['id'];summary['new_leads']+=1
+                            call_id = _record_call_and_followup(db, object_id, parsed, subject, actor, mid, event_type)
+                            payload['call_id'] = call_id;payload['lead_id'] = object_id;status='Imported'
                 else:
                     summary['ignored'] += 1
                     event_type = 'gmail_ignored'
@@ -491,13 +581,15 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                 insert(db, 'integration_events', dict(id=uid('GMAIL'), event_key=event_key, event_type=event_type, object_id=object_id, payload_json=dumps(payload), status=status, created_at=now()))
                 audit(db, actor, 'Read-only Gmail item imported', 'integration_events', event_key, {'type': event_type, 'status': status})
                 summary['new_events'] += 1
+        if len(summary['errors'])==errors_before:
+            with transaction(path) as db:put_setting(db,'gmail_cursor_'+feed,next_cursor)
     return summary
 
 
 def review_items(path, limit=100):
     from contextlib import closing
     with closing(connect(path)) as db:
-        items = rows(db, "SELECT * FROM integration_events WHERE event_type IN ('gmail_bank_payment','gmail_wix_payment') AND status='Needs review' ORDER BY created_at DESC LIMIT ?", (min(max(int(limit), 1), 200),))
+        items = rows(db, "SELECT * FROM integration_events WHERE event_type IN ('gmail_bank_payment','gmail_wix_payment','gmail_quote','gmail_missed_call','gmail_voicemail','gmail_email') AND status='Needs review' ORDER BY created_at DESC LIMIT ?", (min(max(int(limit), 1), 200),))
     out = []
     for item in items:
         raw = item.pop('payload_json', '{}')
@@ -508,3 +600,79 @@ def review_items(path, limit=100):
             item['payload_error'] = True
         out.append(item)
     return out
+
+
+def _review_details(db,event):
+    try:payload=json.loads(event['payload_json'])
+    except (ValueError,TypeError):raise ValueError('The original inquiry needs a technical review before it can be matched.')
+    if not isinstance(payload,dict) or not isinstance(payload.get('parsed'),dict):raise ValueError('The original inquiry does not contain usable client details.')
+    kind='quote' if event['event_type']=='gmail_quote' else 'email' if event['event_type']=='gmail_email' else 'call'
+    match=match_inquiry_project(db,payload['parsed'],kind)
+    return payload,match
+
+
+def resolve_review_match(path,event_id,data,user,new_lead):
+    """One audited staff decision resolves one source event; no Gmail mutations."""
+    from fastapi import HTTPException
+    from .platform_common import SALES,require_role,text
+    require_role(user,SALES)
+    if set(data)-{'reviewed','decision','lead_id','note','fingerprint'}:raise HTTPException(422,'Unknown inquiry review field.')
+    if data.get('reviewed') is not True:raise HTTPException(422,'Review the original inquiry and selected service first.')
+    decision=data.get('decision');lead_id=text(data.get('lead_id',''),'Service',150);note=text(data.get('note',''),'Review note',2000)
+    if decision not in ('match','new','dismiss'):raise HTTPException(422,'Choose a service, a new inquiry, or dismiss this item.')
+    if not note:raise HTTPException(422,'Add a short note explaining your decision.')
+    with transaction(path) as db:
+        event=one(db,'SELECT * FROM integration_events WHERE id=?',(event_id,))
+        if not event or event['event_type'] not in ('gmail_quote','gmail_missed_call','gmail_voicemail','gmail_email'):raise HTTPException(404,'Client inquiry review item not found.')
+        try:payload,match=_review_details(db,event)
+        except ValueError as ex:raise HTTPException(409,str(ex))
+        prior=payload.get('resolution') or {}
+        if event['status']!='Needs review':
+            if prior.get('decision')==decision and (decision!='match' or prior.get('lead_id')==lead_id):return {'ok':True,'duplicate':True,'lead_id':prior.get('lead_id'),'status':event['status']}
+            raise HTTPException(409,'This inquiry was already resolved. Refresh its history before making another decision.')
+        if data.get('fingerprint')!=match['fingerprint']:raise HTTPException(409,'The matching services changed. Refresh and compare them before choosing.')
+        parsed=payload['parsed'];created=False
+        if decision=='dismiss':status='Ignored';lead_id=None
+        else:
+            selected=next((r for r in match['candidates'] if r['id']==lead_id),None) if decision=='match' else None
+            if decision=='match' and not selected:raise HTTPException(409,'Choose one of the current matching services. No inquiry was attached.')
+            if event['event_type']=='gmail_quote':
+                lead_id,created=_quote_inquiry(db,parsed,payload,user['id'],event['event_key'],new_lead,selected)
+            elif event['event_type']=='gmail_email':
+                if not selected:
+                    fields={k:v for k,v in parsed.items() if k in ('client_name','email','phone','move_date')};fields.update(source='Gmail',lead_type='Email',client_name=fields.get('client_name') or 'Email inquiry')
+                    selected=new_lead(db,fields,user['id'],external_id=event['event_key'],suppressed=1);created=True
+                lead_id=selected['id'];payload['message_id']=_record_incoming_message(db,lead_id,user['id'],payload.get('subject',''),payload.get('body') or payload.get('snippet') or '',payload.get('received_at'))
+                from .platform_common import add_task
+                add_task(db,lead_id,'Read incoming client email',selected.get('assigned_to') or '',key='gmail-email:'+event['event_key'])
+            else:
+                if not selected:selected=_new_call_lead(db,parsed,payload,user['id'],event['event_key'],new_lead,event['event_type']);created=True
+                lead_id=selected['id'];payload['call_id']=_record_call_and_followup(db,lead_id,parsed,payload.get('subject',''),user['id'],payload.get('gmail_id') or event['object_id'],event['event_type'])
+            payload['lead_id']=lead_id;status='Imported'
+        payload['matching']={**_matching_payload(match),'requires_review':False}
+        payload['origin_label']='Quote Form' if event['event_type']=='gmail_quote' else 'Email' if event['event_type']=='gmail_email' else 'Voicemail' if event['event_type']=='gmail_voicemail' else 'Missed Call'
+        payload['resolution']={'decision':decision,'lead_id':lead_id,'note':note,'actor':user['id'],'resolved_at':now(),'created_service':created}
+        db.execute('UPDATE integration_events SET status=?,object_id=?,payload_json=? WHERE id=?',(status,lead_id or event['object_id'],dumps(payload),event_id))
+        db.execute("UPDATE tasks SET status='Done' WHERE legacy_id=?",('gmail-match:'+event['event_key'],))
+        audit(db,user['id'],'Incoming Gmail inquiry resolved','integration_events',event_id,payload['resolution'])
+    return {'ok':True,'duplicate':False,'lead_id':lead_id,'status':status,'created_service':created}
+
+
+def register_gmail_resolution(app,path,auth,new_lead):
+    from contextlib import closing
+    from fastapi import Depends,HTTPException
+    from .platform_common import SALES,require_role
+
+    @app.get('/api/gmail/review/{event_id}/match-options')
+    def options(event_id:str,u=Depends(auth)):
+        require_role(u,SALES)
+        with closing(connect(path)) as db:
+            event=one(db,'SELECT * FROM integration_events WHERE id=?',(event_id,))
+            if not event or event['event_type'] not in ('gmail_quote','gmail_missed_call','gmail_voicemail','gmail_email'):raise HTTPException(404,'Client inquiry review item not found.')
+            try:payload,match=_review_details(db,event)
+            except ValueError as ex:raise HTTPException(409,str(ex))
+        return {'id':event['id'],'event_type':event['event_type'],'status':event['status'],'payload':payload,'matching':_matching_payload(match)}
+
+    @app.post('/api/gmail/review/{event_id}/resolve')
+    def resolve(event_id:str,data:dict,u=Depends(auth)):
+        return resolve_review_match(path,event_id,data,u,new_lead)

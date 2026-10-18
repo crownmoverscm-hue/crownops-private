@@ -2,15 +2,16 @@
 from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 import json, hashlib, os, secrets, re
 from fastapi import HTTPException
 from .store import connect, transaction, rows, one, insert, audit, uid, now, dumps
 from .job_planning import can_plan_jobs
 
-MANAGERS={'owner'}
-OFFICE={'owner','sales','dispatch','accounting'}
-SALES={'owner','sales'}
+MANAGERS={'owner','manager'}
+OFFICE={'owner','manager','sales','dispatch','accounting'}
+SALES={'owner','manager','sales'}
 
 def settings(db,key,default=None):
     r=one(db,'SELECT value_json FROM settings WHERE key=?',(key,))
@@ -34,11 +35,30 @@ def staff_read_project(db,lid,u):
         raise HTTPException(403,'Crew can view their assigned client projects only.')
     return l
 
+def staff_project_attachments(db,lid,u):
+    """List only files the current staff account can open, without raising for All Jobs."""
+    query='SELECT a.* FROM attachments a WHERE a.lead_id=? AND a.deleted_at IS NULL'
+    params=[lid]
+    if u['role']=='crew' and not can_plan_jobs(db,u):
+        query+=""" AND EXISTS (SELECT 1 FROM jobs j JOIN assignments own ON own.job_id=j.id
+            WHERE j.lead_id=a.lead_id AND own.resource_type='employee' AND own.resource_id=?)
+            AND (a.job_id IS NULL OR EXISTS (SELECT 1 FROM assignments own
+                WHERE own.job_id=a.job_id AND own.resource_type='employee' AND own.resource_id=?))"""
+        params.extend([u.get('employee_id') or '']*2)
+    return rows(db,query+' ORDER BY a.created_at DESC,a.id',params)
+
 def assigned(db,jid,u):
     j=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
     if not j:raise HTTPException(404,'Job not found.')
     if u['role']=='crew' and not can_plan_jobs(db,u) and not one(db,"SELECT job_id FROM assignments WHERE job_id=? AND resource_type='employee' AND resource_id=?",(jid,u.get('employee_id') or '')):
         raise HTTPException(403,'Only the assigned team can change this job.')
+    return j
+
+def invoice_job(db,jid,u):
+    """Planning authority alone never grants a Crew account another team's billing."""
+    j=assigned(db,jid,u)
+    if u['role']=='crew' and not one(db,"SELECT job_id FROM assignments WHERE job_id=? AND resource_type='employee' AND resource_id=?",(jid,u.get('employee_id') or '')):
+        raise HTTPException(403,'Only the assigned crew can invoice this move.')
     return j
 
 def project_write(db,lid,jid,u):
@@ -141,9 +161,13 @@ def invoice_current(db,iid):
     calc=calculate_invoice(json.loads(inv['terms_json']),json.loads(inv['actual_json']),verified_allocated(db,iid))
     return inv,calc
 
+def business_day(at=None):
+    moment=datetime.fromisoformat(at) if isinstance(at,str) else at or datetime.now(timezone.utc)
+    return moment.astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+
 def add_task(db,lid,title,owner='',key=None):
     if key and one(db,'SELECT id FROM tasks WHERE legacy_id=?',(key,)):return
-    insert(db,'tasks',dict(id=uid('TASK'),legacy_id=key,lead_id=lid,title=title,due_date=now()[:10],owner=owner,created_at=now()))
+    insert(db,'tasks',dict(id=uid('TASK'),legacy_id=key,lead_id=lid,title=title,due_date=business_day(),owner=owner,created_at=now()))
 
 def queue_message(db,lid,subject,body,category,actor,key,jid=None,version=None):
     l=one(db,'SELECT * FROM leads WHERE id=?',(lid,))

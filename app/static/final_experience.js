@@ -9,7 +9,7 @@
 
   const hrs=v=>{const n=Number(v);if(!Number.isFinite(n))return '—';return Number.isInteger(n)?String(n):String(n.toFixed(2)).replace(/0+$/,'').replace(/\.$/,'');};
   const estimate=q=>q&&q.service_low!=null&&q.service_high!=null?`${hrs(q.service_low)}–${hrs(q.service_high)} hrs`:'Estimate needed';
-  const transport=q=>q?`${hrs(q.transport_hours||0)} hr${Number(q.transport_hours)===1?'':'s'} · ${money(q.transport_cents||0)}`:'Not quoted';
+  const transport=q=>!q?'Not quoted':q.fixed_transport!==null&&q.fixed_transport!==undefined?`Local fee · ${money(q.transport_cents||0)}`:!Number(q.transport_hours||0)&&Number(q.transport_cents||0)>0?`Transportation fee · ${money(q.transport_cents)}`:`${hrs(q.transport_hours||0)} hr${Number(q.transport_hours)===1?'':'s'} · ${money(q.transport_cents||0)}`;
   const serviceType=p=>String(p||'Moving').replace(/demolition/ig,'Moving');
   const phoneHref=v=>`tel:${String(v||'').replace(/[^+\d]/g,'')}`;
   const textHref=v=>`sms:${String(v||'').replace(/[^+\d]/g,'')}`;

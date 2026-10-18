@@ -1,0 +1,107 @@
+/* Clear current actions and accessible read views; no new permissions or background work. */
+'use strict';
+(function(){
+ const hints={
+  owner:['Keep the company moving','Review the team’s open actions and today’s jobs. Resolve payment or readiness exceptions before dispatch.'],
+  manager:['Review the team, then your own services','Clear the action queue and check the crew and trucks. Use My Jobs in Schedule when you are leading a service.'],
+  sales:['Keep each inquiry moving forward','Claim the work you are handling, collect missing details and review the estimate. Record the next follow-up so the team can see what happens next.']
+ };
+ function finishTables(container){
+  if(!container)return;
+  container.querySelectorAll('table').forEach(table=>{
+   if(table.classList.contains('finish-mobile-table')||table.closest('.staff-directory-table,.incident-report-table,.expense-ledger-table,#qs-document,.quote-layout,.client-lines')||table.querySelector('input,select,textarea'))return;
+   const headings=[...(table.tHead?.rows[0]?.cells||[])];if(headings.length<3||headings.length>10)return;
+   const records=[...table.tBodies].flatMap(body=>[...body.rows]);if(!records.length||records.some(row=>row.cells.length!==headings.length||[...row.cells].some(cell=>cell.colSpan!==1||cell.rowSpan!==1)))return;
+   table.classList.add('finish-mobile-table');table.setAttribute('role','table');
+   table.closest('.table-wrap')?.classList.add('finish-mobile-wrap');
+   table.tHead.setAttribute('role','rowgroup');table.tHead.rows[0].setAttribute('role','row');
+   headings.forEach(cell=>{cell.scope='col';cell.setAttribute('role','columnheader');});
+   [...table.tBodies].forEach(body=>body.setAttribute('role','rowgroup'));
+   records.forEach(row=>{
+    row.setAttribute('role','row');[...row.cells].forEach((cell,index)=>{
+     cell.setAttribute('role','cell');
+     const label=(headings[index].textContent||'').trim()||(index===headings.length-1?'Actions':'Details');
+     cell.dataset.label=label;
+     const tag=document.createElement('span');tag.className='finish-cell-label';tag.setAttribute('aria-hidden','true');tag.textContent=label;cell.prepend(tag);
+     if(index===0)cell.classList.add('finish-primary-cell');
+     if(index===headings.length-1&&(!headings[index].textContent.trim()||/^(?:actions?|options?)$/i.test(label)))cell.classList.add('finish-actions-cell');
+    });
+   });
+  });
+ }
+ function finishNavigation(){
+  const sidebar=document.getElementById('sidebar');if(!sidebar)return;
+  sidebar.setAttribute('role','navigation');sidebar.setAttribute('aria-label','CrownOps workspace');
+  document.documentElement.classList.toggle('finish-navigation-open',sidebar.classList.contains('open')&&matchMedia('(max-width:1023px)').matches);
+  sidebar.querySelectorAll('.nav-button[data-page]').forEach(button=>{
+   if(button.dataset.page===S.page)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
+  });
+  const label=sidebar.querySelector('.workspace-label');
+  if(label&&!label.dataset.finished){
+   const notes={owner:'Sales, operations and company oversight.',manager:'Coordinate the team and your own services.',sales:'Clients, estimates and next actions.',crew:'Your assigned services and team information.'};
+   label.innerHTML='<span class="dot"></span>Team workspace<div class="tiny">'+h(notes[S.user?.role]||'Use your own team account.')+'</div>';label.dataset.finished='1';
+  }
+  const menu=document.querySelector('[data-action=menu]');if(menu){menu.setAttribute('aria-controls','sidebar');menu.setAttribute('aria-expanded',String(sidebar.classList.contains('open')));}
+ }
+ function finishPage(){
+  const content=document.getElementById('content');if(!content?.querySelector('h1'))return;
+  content.dataset.workspaceRole=S.user?.role||'';content.dataset.workspacePage=S.page;
+  if(S.user?.role==='crew'&&S.page==='schedule')content.querySelector('.page-head h1').textContent=S.jobScope==='mine'?'My Jobs':'All Jobs';
+  if(S.user?.role==='crew'&&S.page==='invoices')content.querySelector('.page-head p').textContent='Prepare and follow invoices for your assigned services.';
+  finishNavigation();finishTables(content);
+  if(S.page==='dashboard'&&hints[S.user?.role]&&!content.querySelector('.finish-start')){
+   const [title,description]=hints[S.user.role],firstAction=content.querySelector('.attention-row [data-ux=attention]');
+   const box=document.createElement('section');box.className='finish-start';box.setAttribute('aria-label','Start here');
+   box.innerHTML='<div><strong>'+h(title)+'</strong><p>'+h(description)+'</p></div>'+(firstAction?'<button type="button" class="btn-primary" data-workspace-next>Review first action</button>':'');
+   content.querySelector('.page-head')?.insertAdjacentElement('afterend',box);
+  }
+  if(S.page==='schedule'&&['crew','manager'].includes(S.user?.role)&&!content.querySelector('.finish-route-tip')){
+   const text=S.user.role==='crew'?(S.jobScope==='mine'?'Open an assigned service for the crew brief, route, photos, materials and truck check.':'Use My Jobs to prepare your assigned services. All Jobs shows the wider company plan.'):(S.jobScope==='mine'?'These are your crew assignments. Your Manager access stays available while you lead the service.':'Use All Jobs to coordinate the team, or My Jobs to prepare the services you are working on.');
+   const note=document.createElement('p');note.className='finish-route-tip';note.textContent=text;
+   (content.querySelector('.job-scope')||content.querySelector('.page-head'))?.insertAdjacentElement('afterend',note);
+  }
+  if(S.page==='help'){
+   const list=content.querySelector('.device-task-list');list?.closest('.panel')?.classList.add('finish-help-start');
+   list?.querySelector('li button[data-page]')?.classList.add('btn-primary');
+   const tasks=list?.closest('.grid2'),installation=content.querySelector('.device-install-grid')?.closest('.panel');
+   if(tasks&&installation&&tasks.compareDocumentPosition(installation)&Node.DOCUMENT_POSITION_PRECEDING){tasks.classList.add('finish-help-grid');installation.before(tasks);}
+  }
+ }
+ const previousShell=shell;
+ shell=function(){const result=previousShell();finishNavigation();return result;};
+ const previousNavigate=navigate;
+ navigate=async function(page){const result=await previousNavigate(page);finishPage();return result;};
+ const previousModal=showModal;
+ showModal=function(...args){
+  const result=previousModal(...args),title=modal.querySelector('.modal-head h2');
+  if(title){title.id='workspace-dialog-title';modal.setAttribute('aria-labelledby',title.id);}
+  const invoiceForm=modal.querySelector('#invoice-form'),save=invoiceForm?.querySelector('button[type=submit]'),footer=modal.querySelector('.modal-foot');
+  if(save&&footer){save.setAttribute('form','invoice-form');footer.append(save);}
+  modal.querySelector('#modal-error')?.setAttribute('role','alert');finishTables(modal);return result;
+ };
+ document.addEventListener('click',event=>{
+  const next=event.target.closest('[data-workspace-next]');
+  if(next){event.preventDefault();document.querySelector('#content .attention-row [data-ux=attention]')?.click();return;}
+  const menu=event.target.closest('[data-action=menu]'),sidebar=document.getElementById('sidebar');
+  if(menu){queueMicrotask(()=>{finishNavigation();if(sidebar?.classList.contains('open'))(sidebar.querySelector('[aria-current=page]')||sidebar.querySelector('button'))?.focus();});return;}
+  if(sidebar?.classList.contains('open')&&!event.target.closest('#sidebar')){sidebar.classList.remove('open');finishNavigation();}
+ });
+ document.addEventListener('click',event=>{
+  const sidebar=document.getElementById('sidebar');
+  if(sidebar?.classList.contains('open')&&matchMedia('(max-width:1023px)').matches&&!event.target.closest('#sidebar,[data-action=menu]')){
+   event.preventDefault();event.stopImmediatePropagation();sidebar.classList.remove('open');finishNavigation();
+  }
+ },true);
+ document.addEventListener('keydown',event=>{
+  const sidebar=document.getElementById('sidebar');if(event.key==='Escape'&&sidebar?.classList.contains('open')&&!modal.open){sidebar.classList.remove('open');finishNavigation();document.querySelector('[data-action=menu]')?.focus();}
+  if(event.key==='Tab'&&sidebar?.classList.contains('open')&&matchMedia('(max-width:1023px)').matches){
+   const controls=[...sidebar.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled)')].filter(element=>element.getClientRects().length);
+   const first=controls[0],last=controls.at(-1);
+   if(first&&event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+   else if(last&&!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+  }
+ });
+ window.addEventListener('resize',finishNavigation);
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',finishPage,{once:true});else finishPage();
+ window.CrownWorkspaceFinish={refresh:finishPage};
+})();
