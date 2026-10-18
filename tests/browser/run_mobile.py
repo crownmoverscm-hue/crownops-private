@@ -14,7 +14,7 @@ import time
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('suite', choices=['mobile_smoke', 'navigation_audit', 'dialog_audit'],
+    parser.add_argument('suite', choices=['mobile_smoke', 'navigation_audit', 'dialog_audit', 'schedule_import'],
                         default='mobile_smoke', nargs='?')
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
