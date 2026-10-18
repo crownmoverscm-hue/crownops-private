@@ -1,10 +1,10 @@
-.schedule-availability,.intake-status{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:16px 20px;background:#f4f8fb;border:1px solid #dae5ed;border-radius:12px;margin-bottom:18px}.schedule-availability>div,.intake-status>div{flex:1;min-width:180px}.schedule-availability p{margin:5px 0 0}.day-closed{background:#fff6f3}.day-closed .weekly-open-slot{background:#fff0e9}.day-closed-label{background:#ffe5d9;color:#852e0a;padding:8px;font-size:11px;font-weight:bold}.intake-status .small{max-width:760px;overflow-wrap:anywhere}.intake-status button{min-height:40px}.schedule-availability .small{overflow-wrap:anywhere}
+.schedule-availability,.intake-status{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:16px 20px;background:#f4f8fb;border:1px solid #dae5ed;border-radius:12px;margin-bottom:18px}.schedule-availability>div,.intake-status>div{flex:1;min-width:180px}.schedule-availability p{margin:5px 0 0}.day-closed{background:#fff6f3}.day-closed .weekly-open-slot{background:#fff0e9}.day-closed-label{background:#ffe5d9;color:#852e0a;padding:8px;font-size:14px;font-weight:bold}.intake-status .small{max-width:760px;overflow-wrap:anywhere}.intake-status button{min-height:40px}.schedule-availability .small{overflow-wrap:anywhere}
 @media(max-width:700px){
  .sales-inquiry-table .table-wrap{overflow:visible}
  .sales-inquiry-table table,.sales-inquiry-table tbody,.sales-inquiry-table tr,.sales-inquiry-table td{display:block;min-width:0;width:100%}
  .sales-inquiry-table thead{display:none}
  .sales-inquiry-table tr{padding:14px 16px;border-bottom:1px solid var(--line)}
  .sales-inquiry-table td{padding:6px 0;border:0;white-space:normal;overflow-wrap:anywhere}
- .sales-inquiry-table td[data-label]:not(:first-child):not(:last-child)::before{content:attr(data-label);display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:4px}
+ .sales-inquiry-table td[data-label]:not(:first-child):not(:last-child)::before{content:attr(data-label);display:block;font-size:14px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:4px}
  .sales-inquiry-table td:last-child button{min-height:42px;width:100%}
 }
