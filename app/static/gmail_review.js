@@ -37,9 +37,11 @@ async function gmailMatchDialog(id){
   '<p class="small"><strong>'+h(p.subject||'Client inquiry')+'</strong><br>'+h([parsed.client_name||parsed.caller,parsed.email,parsed.phone,parsed.move_date].filter(Boolean).join(' · '))+'</p>'+
   '<details><summary>Read original inquiry</summary><div class="message-draft">'+h(p.body||p.snippet||JSON.stringify(parsed,null,2))+'</div></details><div class="spacer"></div>';
  if(item.status!=='Needs review')return showModal('Inquiry already resolved',summary+'<p>'+h(item.status)+'</p>',btn('close','Close'),true);
- const decisions=[['','Choose an action'],...(candidates.length?[['match','Attach to an existing service']]:[]),['new','Create a separate new inquiry'],['dismiss','Dismiss this item with a reason']];
+ const invalid=p.validation_review;
+ const correction=invalid?'<div class="callout orange"><strong>Correct the incoming details before creating a service</strong><p>'+h(invalid.message)+'</p><p>Create a corrected inquiry in Sales &amp; clients, then return here to attach this original message. You can also dismiss an invalid or unwanted submission with a reason.</p></div>':'';
+ const decisions=[['','Choose an action'],...(candidates.length?[['match','Attach to an existing service']]:[]),...(!invalid?[['new','Create a separate new inquiry']]:[]),['dismiss','Dismiss this item with a reason']];
  const choices=[['','Choose the correct service'],...candidates.map(c=>[c.id,[c.client_name,uxDateLabel(c.move_date,'Date needed'),c.pickup||'Address needed',c.stage].join(' · ')])];
- showModal('Choose the correct client service',summary+'<form id="gmail-match-form" data-gmail-event="'+h(id)+'"><input type="hidden" name="fingerprint" value="'+h(match.fingerprint)+'"><div class="grid2">'+
+ showModal('Choose the correct client service',summary+correction+'<form id="gmail-match-form" data-gmail-event="'+h(id)+'"><input type="hidden" name="fingerprint" value="'+h(match.fingerprint)+'"><div class="grid2">'+
   select('decision','What should happen?',decisions,decisions[0][0])+
   (candidates.length?select('lead_id','Existing service',choices,choices[0][0]):'')+
   textArea('note','Short reason for this decision','',3)+checkedField('reviewed','I compared the original inquiry with this service or new inquiry',false)+
