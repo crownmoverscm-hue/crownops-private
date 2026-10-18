@@ -184,7 +184,7 @@ def create_app(database_path=None):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.12.0-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.12.1-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     app.state.db_path=path
     railway_domain=os.environ.get('RAILWAY_PUBLIC_DOMAIN','').strip()
     public_url=(os.environ.get('CROWNOPS_PUBLIC_URL') or (f'https://{railway_domain}' if railway_domain else 'http://127.0.0.1:8080')).rstrip('/')
@@ -258,7 +258,7 @@ def create_app(database_path=None):
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
         from .photo_safety import photo_mode,upload_policy
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.0-rc1',
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.1-rc1',
                 'private_photos_available':photo_mode() and upload_policy()['enabled']}
 
     @app.post('/api/setup-owner')
