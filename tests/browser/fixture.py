@@ -30,4 +30,9 @@ with transaction(fixture.path) as db:
         terms_approved_by='manager', terms_approved_at=now(), created_by='manager', created_at=now(), updated_at=now()))
 with transaction(fixture.path) as db:
     insert(db,'integration_events',dict(id='LAYOUT-BAD-QUOTE',event_key='gmail:fictional-invalid',event_type='gmail_quote',object_id='fictional-invalid',payload_json=dumps({'parsed':{'client_name':'Fictional invalid form','email':'invalid-layout@example.invalid'},'origin_label':'Quote Form','body':'Fictional original information retained for office review.','validation_review':{'message':'Review inventory.','original_preserved':True}}),status='Needs review',created_at=now()))
+if os.getenv('CROWNOPS_BROWSER_HOURS_COSTS')=='1':
+    from app.cost_tracking import stage_records
+    with transaction(fixture.path) as db:
+        db.execute("UPDATE jobs SET status='Completed' WHERE id='J1'")
+        stage_records(db,'fictional-company','production',[('Purchase',dict(Id='fictional-1',TxnDate='2026-11-15',CurrencyRef={'value':'CAD'},TotalAmt=114.98,TxnTaxDetail={'TotalTax':14.98},EntityRef={'name':'Fictional fuel supplier'},Line=[{'Description':'Fuel for the fictional service'}]))],'owner')
 uvicorn.run(fixture.app, host='127.0.0.1', port=8095, log_level='warning')

@@ -31,10 +31,17 @@ teamPage=async function(){
 X.pageRenderers.payroll=async()=>{
  if(!UX.payStart)[UX.payStart,UX.payEnd]=uxDefaultRange();
  const d=await api('/ux/payroll-summary?start='+encodeURIComponent(UX.payStart)+'&end='+encodeURIComponent(UX.payEnd));UX.payroll=d;
- const owner=may(['owner']),own=d.employees.find(e=>e.employee_id===S.user.employee_id);
+ const owner=may(['owner']),exportUrl='/api/ux/payroll-hours/export.csv?'+new URLSearchParams({start:d.start,end:d.end}),own=d.employees.find(e=>e.employee_id===S.user.employee_id);
  const ownPay=!owner&&own&&Object.hasOwn(own,'hourly_cents')?'<div class="callout teal"><strong>Your pay rate · '+h(staffRate(own))+'</strong>'+(own.pay_rate_pending?'':'Gross estimate for this range: '+money(own.gross_cents))+'</div>':'';
- const records=d.employees.filter(e=>e.hours||e.pending_entries).map(e=>[h(e.employee_name),h(e.jobs),'<strong>'+Number(e.hours).toFixed(2)+' h</strong>',pill(e.status),...(owner?[h(staffRate(e)),e.pay_rate_pending?'Pending':money(e.gross_cents)]:[]),'<button class="btn-small" data-ux="payroll-detail" data-id="'+h(e.employee_id)+'">Details</button>']);
- return head('Payroll & hours','Choose the dates to total worked hours. Individual pay stays private.',d.can_manage_hours?'<button class="btn-primary" data-ux="payroll-approve">Approve current range</button>':'')+
+ const records=d.employees.filter(e=>e.hours||e.pending_entries||e.missing_entries).map(e=>[h(e.employee_name),h(e.jobs),'<strong>'+Number(e.hours).toFixed(2)+' h</strong>',pill(e.status),...(owner?[h(staffRate(e)),e.pay_rate_pending?'Pending':money(e.gross_cents)]:[]),'<button class="btn-small" data-ux="payroll-detail" data-id="'+h(e.employee_id)+'">Details</button>']);
+ return head('Payroll & hours','1. Record hours  ·  2. Review completed services  ·  3. Export for payroll.',(d.can_manage_hours?'<button class="btn-primary" data-ux="payroll-approve">Approve completed hours</button>':'')+(owner?'<button data-hours-export data-url="'+h(exportUrl)+'">Export approved hours</button>':''))+
   '<div class="filterbar payroll-range"><label class="small">From <input id="ux-pay-start" type="date" value="'+h(d.start)+'"></label><label class="small">To <input id="ux-pay-end" type="date" value="'+h(d.end)+'"></label><button data-ux="payroll-load">Load payroll</button><div class="grow"></div><span class="pill blue">'+Number(d.total_hours).toFixed(2)+' total hours</span></div>'+ownPay+
-  panel('Hours summary',records.length?xtable(['Employee','Jobs','Hours','State',...(owner?['Pay rate','Gross estimate']:[]),''],records):empty('No hours in this range','Choose another date range or enter the hours after a service.'));
+  '<div class="payroll-metrics"><div><span>Recorded</span><strong>'+Number(d.total_hours).toFixed(2)+' h</strong></div><div><span>Approved</span><strong>'+Number(d.approved_hours).toFixed(2)+' h</strong></div><div><span>To review</span><strong>'+(d.missing_entries+d.pending_entries)+'</strong><small>'+d.missing_entries+' missing · '+d.pending_entries+' submitted</small></div></div>'+
+  panel('Hours summary',records.length?xtable(['Employee','Jobs','Hours','State',...(owner?['Pay rate','Gross estimate']:[]),''],records):empty('No hours in this range','Choose another date range or enter the hours after a service.'))+'<p class="small muted">Amounts are straight-time estimates. Your payroll provider handles overtime, vacation pay, deductions and payment. Exporting does not pay staff.</p>';
 };
+
+document.addEventListener('click',async e=>{
+ const button=e.target.closest('[data-hours-export]');if(!button)return;
+ button.disabled=true;
+ try{const response=await fetch(button.dataset.url,{credentials:'same-origin'});if(!response.ok){const error=await response.json();throw Error(error.detail||'Export could not finish.');}const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download='crownops-approved-hours-'+UX.payStart+'-'+UX.payEnd+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(error){toast(error.message);}finally{button.disabled=false;}
+});

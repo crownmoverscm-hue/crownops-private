@@ -28,9 +28,10 @@
    select('status','Status',[['','All statuses'],['Paid','Paid'],['Unpaid','Unpaid'],['Voided','Voided']],EX.status)+
    '<button type="submit">Apply filters</button></form>'+(items.length?'<div class="expense-ledger-table">'+panel('Expense ledger',xtable(['Date','Vendor / description','Category','Before tax','Tax','Total CAD','Status','Move / truck',''],items))+'</div><div class="expense-ledger-cards">'+cards+'</div>':panel('Expense ledger',empty('No expenses in this view','Add an expense or adjust the filters.')))+
    '<div class="expense-pages"><span class="small muted">'+d.total+' matching records. Voided amounts are excluded from totals.</span><button data-expense="previous" '+(EX.offset?'':'disabled')+'>Previous</button><button data-expense="next" '+(EX.offset+d.items.length<d.total?'':'disabled')+'>Next</button></div>'+
-   '<p class="small muted">Expenses are recorded in CrownOps. This ledger does not automatically create bills, expenses or payments in QuickBooks. Reconcile the CSV with your accounting records.</p>';
+   '<p class="small muted">Assign costs to a related move to include them in Job margins. Use QuickBooks review to fetch and match posted expenses. Saving here does not make a payment or change QuickBooks.</p>';
  };
  async function expenseForm(id=''){
+  if(!EX.data)EX.data=await api('/expenses?limit=1');
   const [e,jobs,trucks]=await Promise.all([id?api('/expenses/'+encodeURIComponent(id)):Promise.resolve({expense_date:today(),status:'Paid',category:'Other'}),api('/jobs'),api('/vehicles')]);
   EX.current=e;const closed=e.status==='Voided';
   const body='<form id="expense-form" data-expense-form data-request-key="'+crypto.randomUUID()+'"><div class="grid2">'+
