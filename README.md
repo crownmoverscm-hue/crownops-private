@@ -1,4 +1,4 @@
-# CrownOps 0.11.2-rc1
+# CrownOps 0.12.0-rc1
 
 Private CRM and moving-service workspace for Crown Movers. Start with [START_HERE.md](START_HERE.md) for the team process and [WORKFLOW_RELEASE_2026-10-18.md](WORKFLOW_RELEASE_2026-10-18.md) for the base workflow release. See [INTAKE_CORRECTION_2026-10-18.md](INTAKE_CORRECTION_2026-10-18.md) for the subsequent live-intake correction.
 

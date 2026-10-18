@@ -78,18 +78,18 @@ def invitation_content(person, public_url, signup_url=None):
         if title.startswith('2.'):
             plain += 'Regular app address: '+address+'\n\n'
     plain += 'Crown Movers\nIf you were not expecting this invitation, contact the Crown Movers owner.'
-    accent = '#315fa8'
+    accent = '#c4510a'
     button = ('<a href="'+escape(signup_url,quote=True)+'" style="display:inline-block;padding:14px 22px;background:'+accent+';color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold">Create my CrownOps account</a>'
-              if signup_url else '<p style="padding:14px;background:#eef3fa">Your private signup button will appear here.</p>')
-    body = '<p style="margin:0;color:#6b768b;font-size:12px;font-weight:bold;letter-spacing:1px">CROWN MOVERS</p><h1 style="font-size:28px;line-height:1.2;color:#22395f">Welcome to CrownOps</h1>'
+              if signup_url else '<p style="padding:14px;background:#fff2e9">Your private signup button will appear here.</p>')
+    body = '<p style="margin:0;color:#626262;font-size:14px;font-weight:bold;letter-spacing:1px">CROWN MOVERS</p><h1 style="font-size:28px;line-height:1.2;color:#161616">Welcome to CrownOps</h1>'
     body += '<p>Hi '+escape(name)+',</p><p>Your team account is ready to set up.</p><p><strong>Account email:</strong> '+escape(email)+'<br><strong>Access:</strong> '+escape(ROLE_LABELS[role])+'</p>'+button
     if signup_url:
-        body += '<p style="font-size:12px;color:#65748b;overflow-wrap:anywhere;word-break:break-all">If the button does not open, copy this private link:<br><a href="'+escape(signup_url,quote=True)+'">'+escape(signup_url)+'</a></p>'
+        body += '<p style="font-size:14px;color:#626262;overflow-wrap:anywhere;word-break:break-all">If the button does not open, copy this private link:<br><a href="'+escape(signup_url,quote=True)+'">'+escape(signup_url)+'</a></p>'
     for title, items in sections:
-        body += '<h2 style="font-size:18px;color:#22395f;margin-top:26px">'+escape(title)+'</h2>'
+        body += '<h2 style="font-size:18px;color:#161616;margin-top:26px">'+escape(title)+'</h2>'
         body += '<ul style="padding-left:22px">'+''.join('<li style="margin:0 0 10px">'+escape(item)+'</li>' for item in items)+'</ul>'
         if title.startswith('2.'):
             body += '<p><strong>Regular app address:</strong><br><a style="overflow-wrap:anywhere;word-break:break-all" href="'+escape(address,quote=True)+'">'+escape(address)+'</a></p>'
-    body += '<p style="font-size:12px;color:#65748b;border-top:1px solid #e0e6ee;padding-top:18px">Crown Movers<br>If you were not expecting this invitation, contact the Crown Movers owner.</p>'
-    html = '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Welcome to CrownOps</title></head><body style="margin:0;padding:16px;background:#f3f6fa;font:15px/1.6 Arial,sans-serif;color:#28374d"><div style="max-width:620px;margin:0 auto;padding:24px;background:#ffffff;border:1px solid #e0e6ee;border-radius:12px;overflow-wrap:anywhere">'+body+'</div></body></html>'
+    body += '<p style="font-size:14px;color:#626262;border-top:1px solid #deddd9;padding-top:18px">Crown Movers<br>If you were not expecting this invitation, contact the Crown Movers owner.</p>'
+    html = '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Welcome to CrownOps</title></head><body style="margin:0;padding:16px;background:#f6f5f2;font:17px/1.6 Arial,sans-serif;color:#202020"><div style="max-width:620px;margin:0 auto;padding:24px;background:#ffffff;border:1px solid #deddd9;border-radius:12px;overflow-wrap:anywhere">'+body+'</div></body></html>'
     return {'subject':subject,'body':plain,'html':html}

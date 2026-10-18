@@ -1,7 +1,7 @@
 .qe-template{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;text-align:left;padding:22px;gap:12px;min-width:0;width:100%;border-radius:12px}
-.qe-template strong{font-size:16px}.qe-template-action{display:flex;align-items:center;gap:7px;color:var(--blue);margin-top:auto;padding-top:8px;font-weight:650}
+.qe-template strong{font-size:18px}.qe-template-action{display:flex;align-items:center;gap:7px;color:var(--blue);margin-top:auto;padding-top:8px;font-weight:650}
 .qe-template:hover,.qe-template:focus-visible{border-color:var(--blue);background:#f2f6fc}.qe-client,.qe-quote-info{margin-bottom:16px}
-.qe-client label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px;font-weight:650}
+.qe-client label{display:block;margin-bottom:6px;color:var(--muted);font-size:16px;font-weight:650}
 #qe-client-search{flex:1 1 220px;min-width:0;width:100%}#qe-client-results{max-height:220px;overflow:auto;margin-top:10px}
 .qe-client-result{width:100%;text-align:left;justify-content:flex-start;margin-bottom:6px}.qe-client-result .grow{min-width:0;overflow-wrap:anywhere}.qe-client-result .tiny{display:block}
 #qe-service-choice:not(:empty){margin-top:14px}#qe-new-contact:not([hidden]){margin-top:12px}.qe-details{margin-bottom:16px}

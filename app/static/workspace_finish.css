@@ -12,29 +12,29 @@ html.finish-navigation-open{overflow:hidden}
 .panel-head h2{line-height:1.4}
 .small,.callout{line-height:1.6}
 .metric .foot,.ux-overview-foot,.ux-overview-label,.client-sub,.source-warning{color:#627086}
-.pill{font-size:11px;line-height:1.35;padding:4px 9px;font-weight:650}
+.pill{font-size:14px;line-height:1.35;padding:4px 9px;font-weight:650}
 .pill.orange{color:#86571e;background:#fff3df}
 .pill.gray{color:#56667d;background:#eef2f7}
 .pill.teal{color:#17685e;background:#e4f4ed}
 .pill.purple{color:#71518f;background:#f1eafa}
 button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid #4584c2;outline-offset:3px}
 .sidebar{scrollbar-width:thin;scrollbar-color:#607b9f transparent}
-.sidebar .nav-button{min-height:40px;font-size:13px;border-radius:9px}
-.sidebar .nav-label{font-size:10px;color:#b0c4df;letter-spacing:1.15px}
+.sidebar .nav-button{min-height:40px;font-size:16px;border-radius:9px}
+.sidebar .nav-label{font-size:14px;color:#b0c4df;letter-spacing:1.15px}
 .sidebar .nav-button.active{box-shadow:inset 3px 0 #f2b263;background:#345a8b}
 .sidebar .brand{padding-bottom:17px}
 .sidebar .profile{flex-shrink:0}
-.sidebar .workspace-label{font-size:11px;line-height:1.55}
-.sidebar .workspace-label .tiny{color:#bfd0e6;margin-top:5px;font-size:11px}
+.sidebar .workspace-label{font-size:14px;line-height:1.55}
+.sidebar .workspace-label .tiny{color:#bfd0e6;margin-top:5px;font-size:14px}
 .topbar .breadcrumb{color:#65758c}
 .topbar .breadcrumb b{color:#30465f}
-.pilot-strip{font-size:11px;line-height:1.5;color:#74562d}
+.pilot-strip{font-size:14px;line-height:1.5;color:#74562d}
 .finish-start{display:flex;align-items:center;gap:18px;justify-content:space-between;padding:17px 20px;margin:-3px 0 20px;border:1px solid #d9e6f3;border-left:4px solid #386da6;background:#f2f7fc;border-radius:11px}
 .finish-start>div{min-width:0}
-.finish-start strong{display:block;font-size:14px;color:#244869;margin-bottom:3px}
-.finish-start p{margin:0;color:#536c84;font-size:13px;line-height:1.55}
+.finish-start strong{display:block;font-size:18px;color:#244869;margin-bottom:3px}
+.finish-start p{margin:0;color:#536c84;font-size:16px;line-height:1.55}
 .finish-start>button{flex-shrink:0}
-.finish-route-tip{margin:-1px 0 17px;color:#5d6f85;font-size:13px;line-height:1.55;max-width:900px}
+.finish-route-tip{margin:-1px 0 17px;color:#5d6f85;font-size:16px;line-height:1.55;max-width:900px}
 .content[data-workspace-role=crew] .truck-legend-bar,.content[data-workspace-role=crew] .weekly-capacity{display:none}
 .finish-help-start{border-color:#c7dbee}
 .finish-help-grid{margin-bottom:20px}
@@ -45,19 +45,19 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .today-job{gap:16px}
 .today-job>div{min-width:0}
 .today-job .strong{line-height:1.5}
-.table-wrap th{font-size:11px;color:#5f7087;letter-spacing:.4px}
-.table-wrap td{font-size:13px;line-height:1.55}
+.table-wrap th{font-size:14px;color:#5f7087;letter-spacing:.4px}
+.table-wrap td{font-size:16px;line-height:1.55}
 .finish-cell-label{display:none}
 .weekly-dispatch-grid{grid-template-columns:repeat(7,minmax(155px,1fr));min-width:1085px}
 .weekly-day-jobs{min-height:230px;gap:9px}
 .weekly-open-slot{display:none}
 .weekly-dispatch-card{padding:10px;min-height:110px}
-.weekly-card-top,.weekly-card-top strong{font-size:10px;color:#516780}
-.weekly-client{font-size:13px;line-height:1.45}
-.weekly-service{font-size:11px;color:#536981;white-space:normal;line-height:1.45}
-.weekly-crew,.weekly-truck{font-size:11px;line-height:1.5;color:#405875}
-.weekly-dispatch-card .pill{white-space:normal;font-size:10px;margin-top:7px}
-.truck-legend-title span,.truck-legend-chip{font-size:11px;color:#536981}
+.weekly-card-top,.weekly-card-top strong{font-size:14px;color:#516780}
+.weekly-client{font-size:16px;line-height:1.45}
+.weekly-service{font-size:14px;color:#536981;white-space:normal;line-height:1.45}
+.weekly-crew,.weekly-truck{font-size:14px;line-height:1.5;color:#405875}
+.weekly-dispatch-card .pill{white-space:normal;font-size:14px;margin-top:7px}
+.truck-legend-title span,.truck-legend-chip{font-size:14px;color:#536981}
 .truck-legend-title{min-width:145px}
 .modal-head h2{line-height:1.35;overflow-wrap:anywhere}
 .modal-error{line-height:1.55}
@@ -85,27 +85,27 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
  .weekly-day-head{height:auto;position:static;padding:12px 15px;min-height:62px}
  .weekly-day-head>div{display:flex;align-items:baseline;gap:9px}
  .weekly-day-head strong{font-size:19px;margin:0}
- .weekly-day-head small{font-size:11px}
- .weekly-day-head>span{font-size:11px}
+ .weekly-day-head small{font-size:14px}
+ .weekly-day-head>span{font-size:14px}
  .weekly-day-jobs{min-height:0;padding:10px 12px;grid-auto-rows:auto}
  .weekly-day-jobs:not(:has(.weekly-dispatch-card)){padding:0}
- .weekly-client{white-space:normal;font-size:16px}
- .weekly-card-top,.weekly-card-top strong{font-size:12px}
- .weekly-service,.weekly-crew,.weekly-truck{font-size:13px}
+ .weekly-client{white-space:normal;font-size:18px}
+ .weekly-card-top,.weekly-card-top strong{font-size:16px}
+ .weekly-service,.weekly-crew,.weekly-truck{font-size:16px}
  .weekly-dispatch-card{min-height:0;padding:13px 14px}
- .weekly-dispatch-card .pill{font-size:11px}
+ .weekly-dispatch-card .pill{font-size:14px}
  .finish-mobile-wrap{overflow:visible!important}
  .finish-mobile-table{display:block;min-width:0!important;width:100%}
  .finish-mobile-table>thead{display:table-header-group!important;position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%);white-space:nowrap}
  .finish-mobile-table>tbody{display:block;width:100%}
  .finish-mobile-table>tbody>tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 20px;width:100%;padding:18px;border-bottom:1px solid var(--line);background:#fff}
  .finish-mobile-table>tbody>tr:last-child{border-bottom:0}
- .finish-mobile-table>tbody>tr>td{display:block;width:auto;min-width:0;padding:0!important;border:0;font-size:13px;white-space:normal;overflow-wrap:anywhere;max-width:none;text-align:left}
+ .finish-mobile-table>tbody>tr>td{display:block;width:auto;min-width:0;padding:0!important;border:0;font-size:16px;white-space:normal;overflow-wrap:anywhere;max-width:none;text-align:left}
  .finish-mobile-table td[data-label]::before{content:none!important}
  .finish-mobile-table td.finish-primary-cell,.finish-mobile-table td.finish-actions-cell{grid-column:1/-1}
- .finish-mobile-table td.finish-primary-cell{font-size:16px;color:#263e5e}
+ .finish-mobile-table td.finish-primary-cell{font-size:18px;color:#263e5e}
  .finish-mobile-table td.finish-primary-cell>.finish-cell-label{display:none}
- .finish-mobile-table .finish-cell-label{display:block;margin-bottom:5px;font-size:10px;line-height:1.4;letter-spacing:.6px;text-transform:uppercase;font-weight:750;color:#627086}
+ .finish-mobile-table .finish-cell-label{display:block;margin-bottom:5px;font-size:14px;line-height:1.4;letter-spacing:.6px;text-transform:uppercase;font-weight:750;color:#627086}
  .finish-mobile-table .finish-actions-cell{padding-top:12px!important;border-top:1px solid #e9eef5}
  .finish-mobile-table .finish-actions-cell>.finish-cell-label{display:none}
  .finish-mobile-table .finish-actions-cell button{min-height:40px}
@@ -121,17 +121,17 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 @media(max-width:600px){
  .content{padding:20px max(14px,env(safe-area-inset-left)) max(32px,env(safe-area-inset-bottom))}
  .topbar{padding:0 max(13px,env(safe-area-inset-left))}
- .pilot-strip{padding:8px 15px;font-size:11px}
+ .pilot-strip{padding:8px 15px;font-size:14px}
  .page-head{gap:14px;margin-bottom:18px}
- .page-head p{font-size:13px}
+ .page-head p{font-size:16px}
  .head-actions{display:flex;gap:8px;flex-wrap:wrap}
- .head-actions>button,.head-actions>.button-link{flex:1 1 145px;min-height:44px;font-size:13px;width:auto}
+ .head-actions>button,.head-actions>.button-link{flex:1 1 145px;min-height:44px;font-size:16px;width:auto}
  .metric-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:18px}
  .metric{padding:15px 13px;min-width:0}
- .metric .label{font-size:12px;line-height:1.4}
+ .metric .label{font-size:16px;line-height:1.4}
  .metric .ico{display:none}
  .metric .value{font-size:28px!important;margin:9px 0 4px}
- .metric .foot{font-size:11px;line-height:1.45}
+ .metric .foot{font-size:14px;line-height:1.45}
  .ux-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
  .ux-overview-metric{padding:16px 14px;text-align:left;border-right:1px solid var(--line);border-bottom:1px solid var(--line)!important}
  .ux-overview-metric:nth-child(even){border-right:0}
@@ -142,7 +142,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
  .grid3,.grid2,.split{grid-template-columns:minmax(0,1fr)}
  .grid3>.panel:last-child:nth-child(odd){grid-column:auto}
  .panel-head,.panel-body{padding:16px}
- .panel-head h2{font-size:16px}
+ .panel-head h2{font-size:18px}
  .finish-start{padding:15px;align-items:stretch;flex-direction:column;margin-bottom:18px}
  .finish-start>button{align-self:flex-start;min-height:42px}
  .attention-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:8px 10px;padding:15px 0}
@@ -155,7 +155,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
  .finish-mobile-table>tbody>tr{padding:16px;gap:12px 16px}
  .finish-mobile-table .finish-actions-cell button{min-height:42px}
  .finish-mobile-table .finish-actions-cell>.row>button{flex:1 1 90px}
- #root input:not([type=checkbox]):not([type=radio]),#root select,#root textarea,#modal input:not([type=checkbox]):not([type=radio]),#modal select,#modal textarea{font-size:16px}
+ #root input:not([type=checkbox]):not([type=radio]),#root select,#root textarea,#modal input:not([type=checkbox]):not([type=radio]),#modal select,#modal textarea{font-size:18px}
  #root input[type=checkbox],#modal input[type=checkbox]{min-width:20px;min-height:20px}
  .modal-head{padding:15px 17px}
  .modal-head h2{font-size:19px}

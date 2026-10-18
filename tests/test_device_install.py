@@ -1,5 +1,6 @@
 """Verify the public install assets are usable on Apple and Android launchers."""
 from html.parser import HTMLParser
+from urllib.parse import urlsplit
 import importlib.util
 import json
 import os
@@ -45,7 +46,7 @@ class DeviceAssetTests(unittest.TestCase):
             if icon['type'] != 'image/png':
                 continue
             self.assertTrue(icon['src'].startswith('/static/'))
-            size = png_dimensions(STATIC / icon['src'].removeprefix('/static/'))
+            size = png_dimensions(STATIC / urlsplit(icon['src']).path.removeprefix('/static/'))
             self.assertEqual(icon['sizes'], f'{size[0]}x{size[1]}')
             available.add((size, icon['purpose']))
         self.assertTrue({((192, 192), 'any'), ((512, 512), 'any'),
@@ -54,9 +55,9 @@ class DeviceAssetTests(unittest.TestCase):
     def test_apple_touch_icon_and_favicon_reference_existing_pngs(self):
         links = Links((STATIC / 'index.html').read_text()).links
         apple = next(link for link in links if link.get('rel') == 'apple-touch-icon')
-        self.assertEqual(png_dimensions(STATIC / apple['href'].removeprefix('/static/')), (180, 180))
+        self.assertEqual(png_dimensions(STATIC / urlsplit(apple['href']).path.removeprefix('/static/')), (180, 180))
         favicon = next(link for link in links if link.get('rel') == 'icon' and link.get('type') == 'image/png')
-        self.assertEqual(png_dimensions(STATIC / favicon['href'].removeprefix('/static/')), (32, 32))
+        self.assertEqual(png_dimensions(STATIC / urlsplit(favicon['href']).path.removeprefix('/static/')), (32, 32))
 
 
 @unittest.skipUnless(importlib.util.find_spec('fastapi') and importlib.util.find_spec('httpx'),
