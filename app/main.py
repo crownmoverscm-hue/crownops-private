@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .client_communications import pending_scope_changes,quote_scope_current
@@ -184,7 +184,9 @@ def create_app(database_path=None):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.12.2-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.12.3-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    from .app_release import register_app_release
+    register_app_release(app,ROOT)
     app.state.db_path=path
     railway_domain=os.environ.get('RAILWAY_PUBLIC_DOMAIN','').strip()
     public_url=(os.environ.get('CROWNOPS_PUBLIC_URL') or (f'https://{railway_domain}' if railway_domain else 'http://127.0.0.1:8080')).rstrip('/')
@@ -215,6 +217,8 @@ def create_app(database_path=None):
         response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         if request.url.path.startswith('/api/') or request.url.path in ('/','/portal','/request','/approval','/invoice-access'):
             response.headers['Cache-Control']='no-store'
+        elif request.url.path.startswith('/static/') and request.url.path.endswith(('.js','.css','.html')):
+            response.headers['Cache-Control']='no-cache'
         if secure:
             response.headers['Strict-Transport-Security']='max-age=31536000'
         return response
@@ -258,7 +262,7 @@ def create_app(database_path=None):
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
         from .photo_safety import photo_mode,upload_policy
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.2-rc1',
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.3-rc1',
                 'private_photos_available':photo_mode() and upload_policy()['enabled']}
 
     @app.post('/api/setup-owner')
@@ -1400,7 +1404,7 @@ def create_app(database_path=None):
         require(u,{'owner','manager'});return app.openapi()
 
     @app.get('/')
-    def index():return FileResponse(ROOT/'app'/'static'/'index.html')
+    def index():return HTMLResponse(app.state.ui_index)
 
     @app.get('/manifest.webmanifest')
     def manifest():return FileResponse(ROOT/'app'/'static'/'manifest.webmanifest',media_type='application/manifest+json',headers={'Cache-Control':'no-cache'})
