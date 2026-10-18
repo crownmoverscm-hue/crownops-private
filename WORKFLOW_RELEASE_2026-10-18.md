@@ -1,6 +1,6 @@
 # CrownOps workflow release 0.11.0-rc1
 
-Prepared October 18, 2026 UTC / October 17 in Montréal. This candidate is saved and tested; it is not yet deployed. GitHub repository access is still required to publish it to the existing Railway service. No production client record, message, invoice or payment was changed by this review.
+Prepared October 18, 2026 UTC / October 17 in Montréal. The validated source is tracked in [pull request #60](https://github.com/crownmoverscm-hue/crownops-private/pull/60). Check that PR and the existing Railway deployment history for current publication status. No production client record, message, invoice or payment was changed by the isolated workflow review.
 
 ## What improved
 
@@ -29,9 +29,9 @@ Prepared October 18, 2026 UTC / October 17 in Montréal. This candidate is saved
 
 ## Publishing status
 
-The connected Railway service still uses the existing production source. This release has not been pushed to `crownmoverscm-hue/crownops-private` and no fresh Railway deployment is claimed. Repository synchronization must preserve any newer remote work. The package contains no company database, uploads, credentials or access tokens.
+GitHub access is confirmed and the release branch is published in PR #60. Main matched the original supplied source when compared before publication. The release branch retains that history and adds the validated source. The package contains no company database, uploads, credentials or access tokens. A successful source upload is separate from merge and production deployment.
 
-A direct Railway upload route was blocked by the environment's automatic approval review because the Railway network connection was rejected. Reusing the old image would not publish this source. The available route is to connect GitHub with access to the company repository, then reconcile/push the tested source and verify the resulting deployment.
+The release uses the existing GitHub-to-Railway deployment route. GitHub CI provisions ffmpeg/ffprobe, matching the Docker media runtime, before running the full suite. Review current CI and deployment evidence before treating the release as live.
 
 ## Remaining launch steps
 

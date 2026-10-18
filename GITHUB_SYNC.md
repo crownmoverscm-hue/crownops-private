@@ -2,8 +2,8 @@
 
 Target repository: `crownmoverscm-hue/crownops-private`, branch `main`.
 
-The supplied source archive represents GitHub commit `247844fc1308abf19eb5cc0e0c1efb2be621a581`. The subsequent releases through this 0.11.0-rc1 workflow release were developed from that archive. No GitHub push has been made from this session.
+The supplied archive represents GitHub commit `247844fc1308abf19eb5cc0e0c1efb2be621a581`. Releases through 0.11.0-rc1 were developed from that archive. Repository access was confirmed on October 18, 2026 UTC; `main` still matched that baseline. The validated source was published on `audit/crownops-0.11-workflow-release` in [pull request #60](https://github.com/crownmoverscm-hue/crownops-private/pull/60).
 
-Do not replace production with the older repository contents. Review the updated source, create a branch from the current company repository, reconcile any changes since the supplied commit, and apply the prepared source changes. Run the Python and Node checks before merging. The separate patch is relative to the supplied archive; it is not evidence of a remote commit or pull request.
+Use the PR, its current checks and Railway deployment history for the publishing outcome. The initial source package and binary patch are preparation evidence rather than a claim of production deployment. Compare any newer remote work before applying an older archive. Do not replace the company database, uploads, persistent volume or encryption key when updating source.
 
-Once the GitHub connection is available, the intended action is to publish a reviewable branch/PR, preserve any newer repository work and verify the resulting Railway deployment. Authentication and repository access are required; no credential should be placed in this source package or chat.
+The intended release flow is a checked branch and PR, merge with the expected head, then terminal Railway success and public version/asset verification. No credential belongs in source or chat.
