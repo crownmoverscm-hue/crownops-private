@@ -196,7 +196,7 @@ def create_app(database_path=None):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.12.5-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.12.6-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     from .app_release import register_app_release
     register_app_release(app,ROOT)
     app.state.db_path=path
@@ -274,7 +274,7 @@ def create_app(database_path=None):
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
         from .photo_safety import photo_mode,upload_policy
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.5-rc1',
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.6-rc1',
                 'private_photos_available':photo_mode() and upload_policy()['enabled']}
 
     @app.post('/api/setup-owner')
@@ -1220,7 +1220,8 @@ def create_app(database_path=None):
             args=(u.get('employee_id') or '',) if u['role']=='crew' else ()
             result=rows(db,'SELECT t.*,e.name AS employee_name,e.hourly_cents,j.title AS job_title FROM times t JOIN employees e ON e.id=t.employee_id JOIN jobs j ON j.id=t.job_id'+clause+' ORDER BY t.created_at DESC',args)
         for r in result:
-            if not can_view_pay(u,r['employee_id']):r.pop('hourly_cents',None)
+            if not can_view_pay(u,r['employee_id']):
+                r.pop('hourly_cents',None);r.pop('approved_hourly_cents',None)
         return result
 
     @app.post('/api/times')
@@ -1253,7 +1254,8 @@ def create_app(database_path=None):
         with transaction(path) as db:
             t=one(db,'SELECT t.id,j.status FROM times t JOIN jobs j ON j.id=t.job_id WHERE t.id=?',(tid,))
             if not t or t['status']!='Completed':raise HTTPException(422,'Complete the job before approving time.')
-            db.execute("UPDATE times SET status='Approved',approved_by=? WHERE id=?",(u['id'],tid))
+            from .worked_hours import approve_entry
+            approve_entry(db,tid,u['id'])
             audit(db,u['id'],'Time approved; payroll not processed','times',tid)
         return {'ok':True,'payroll_processed':False}
 
@@ -1469,6 +1471,8 @@ def create_app(database_path=None):
     register_media_links(app,path,auth)
     from .expenses import register_expenses
     register_expenses(app,path,auth)
+    from .cost_tracking import register_cost_tracking
+    register_cost_tracking(app,path,auth)
     from .availability import register_availability
     register_availability(app,path,auth)
     from .automatic_intake import register_automatic_intake

@@ -362,3 +362,13 @@ CREATE TABLE IF NOT EXISTS invoice_change_orders (
  reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Requested', requested_by TEXT NOT NULL REFERENCES users(id),
  created_at TEXT NOT NULL, agreement TEXT NOT NULL DEFAULT '', reviewed_by TEXT REFERENCES users(id), reviewed_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS expense_sources (
+ id TEXT PRIMARY KEY, realm_id TEXT NOT NULL, environment TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('Purchase','Bill')), external_id TEXT NOT NULL,
+ source_hash TEXT NOT NULL, data_json TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('Review','Imported','Linked','Ignored','Changed','Unsupported')),
+ expense_id TEXT UNIQUE REFERENCES expenses(id), version INTEGER NOT NULL DEFAULT 1,
+ checked_at TEXT NOT NULL, created_at TEXT NOT NULL,
+ UNIQUE(realm_id,environment,kind,external_id)
+);

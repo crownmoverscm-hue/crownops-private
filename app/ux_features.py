@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 
 from .store import connect, transaction, rows, one, insert, audit, uid, now
 from .staff_records import can_view_pay
+from . import worked_hours
 from .job_planning import can_plan_jobs
 from .platform_common import require_role, OFFICE, MANAGERS, text, settings, put_setting, invoice_current
 from .operations import hos_dispatch_status
@@ -545,29 +546,34 @@ def register_ux_features(app,path,auth):
             if not j:raise HTTPException(404,'Job not found.')
             if u['role']=='crew' and not one(db,"SELECT 1 FROM assignments WHERE job_id=? AND resource_type='employee' AND resource_id=?",(jid,u.get('employee_id') or '')):
                 raise HTTPException(403,'Assigned team only.')
-            team=rows(db,"""SELECT e.id,e.name,e.role,t.id time_id,t.service_minutes,t.transport_minutes,t.note,t.status
+            team=rows(db,"""SELECT e.id,e.name,e.role,t.id time_id,t.service_minutes,t.transport_minutes,t.note,t.status,t.version
               FROM assignments a JOIN employees e ON e.id=a.resource_id AND a.resource_type='employee'
               LEFT JOIN times t ON t.job_id=a.job_id AND t.employee_id=e.id WHERE a.job_id=? ORDER BY e.name""",(jid,))
             inv=one(db,'SELECT actual_json FROM job_invoices WHERE job_id=?',(jid,))
             paid=one(db,'SELECT paid_transport_minutes FROM paid_work_terms WHERE job_id=?',(jid,))
+            is_lead=bool(u['role']=='crew' and one(db,'SELECT 1 FROM employee_directory_profiles WHERE employee_id=? AND team_lead=1',(u.get('employee_id'),)))
         suggested=None
         if inv:
             try:suggested=float(json.loads(inv['actual_json']).get('service_hours') or 0)+(float(paid['paid_transport_minutes'])/60 if paid and paid['paid_transport_minutes'] is not None else 0)
             except Exception:suggested=None
-        for e in team:e['total_hours']=round((int(e['service_minutes'] or 0)+int(e['transport_minutes'] or 0))/60,2) if e['time_id'] else None
-        return {'job':{'id':j['id'],'title':j['title'],'status':j['status']},'employees':team,'suggested_total_hours':suggested}
+        own_only=u['role']=='crew' and not is_lead
+        if own_only:team=[e for e in team if e['id']==u.get('employee_id')]
+        for e in team:e['total_hours']=(int(e['service_minutes'] or 0)+int(e['transport_minutes'] or 0))/60 if e['time_id'] else None
+        return {'own_only':own_only,'job':{'id':j['id'],'title':j['title'],'status':j['status']},'employees':team,'suggested_total_hours':suggested}
 
     @app.post('/api/ux/jobs/{jid}/crew-hours')
     def crew_hours_save(jid:str,data:dict,u=Depends(auth)):
         manager=u['role'] in {'owner','manager','accounting','dispatch'}
         with closing(connect(path)) as checkdb:
             is_lead=bool(u['role']=='crew' and u.get('employee_id') and one(checkdb,'SELECT team_lead FROM employee_directory_profiles WHERE employee_id=? AND team_lead=1',(u['employee_id'],)))
-        if not manager and not is_lead:raise HTTPException(403,'Only managers or assigned Team Leads can submit team hours.')
+        own_only=u['role']=='crew' and not is_lead
+        if not manager and not is_lead and not own_only:raise HTTPException(403,'Only managers, assigned Team Leads or the employee can submit hours.')
         selected=data.get('employee_ids') or []
-        if not isinstance(selected,list) or not selected or len(set(selected))!=len(selected):raise HTTPException(422,'Select the employees receiving the team hours.')
-        try:common=float(data.get('team_hours'))
-        except Exception:raise HTTPException(422,'Enter the team hours.')
-        if common<0 or common>24 or round(common*60)!=common*60:raise HTTPException(422,'Use valid hours that resolve to whole minutes.')
+        if not isinstance(selected,list) or not selected or not all(isinstance(x,str) for x in selected) or len(set(selected))!=len(selected):raise HTTPException(422,'Select the employees receiving the team hours.')
+        if own_only and selected!=[u.get('employee_id')]:raise HTTPException(403,'Crew members can submit only their own hours.')
+        common=worked_hours.hour_minutes(data.get('team_hours'))
+        versions=data.get('versions')
+        if versions is not None and not isinstance(versions,dict):raise HTTPException(422,'Reload the hours form.')
         exceptions=data.get('exceptions') or {}
         if not isinstance(exceptions,dict):raise HTTPException(422,'Invalid individual adjustments.')
         note=text(data.get('note',''),'Optional team note',2000)
@@ -580,19 +586,20 @@ def register_ux_features(app,path,auth):
             if set(selected)-assigned:raise HTTPException(422,'Selected employees must be assigned to this job.')
             changed=[]
             for eid in selected:
-                hrs=common
+                minutes=common
                 if eid in exceptions:
-                    try:hrs=float(exceptions[eid].get('total_hours'))
-                    except Exception:raise HTTPException(422,'Review the individual hours.')
-                    if hrs<0 or hrs>24 or round(hrs*60)!=hrs*60:raise HTTPException(422,'Individual hours must resolve to whole minutes.')
+                    if not isinstance(exceptions[eid],dict):raise HTTPException(422,'Review the individual hours.')
+                    minutes=worked_hours.hour_minutes(exceptions[eid].get('total_hours'))
                 existing=one(db,'SELECT * FROM times WHERE job_id=? AND employee_id=?',(jid,eid))
-                if existing and existing['status']=='Approved' and not manager:raise HTTPException(409,'Approved payroll hours can only be corrected by a payroll manager.')
-                minutes=round(hrs*60)
-                individual_note=text((exceptions.get(eid) or {}).get('note',''),'Optional adjustment note',1000) or note
+                if versions is not None and versions.get(eid)!=(existing['version'] if existing else None):raise HTTPException(409,'These hours changed. Reopen the form before saving.')
+                individual_note=text((exceptions.get(eid) or {}).get('note',''),'Optional adjustment note',1000) or note or (existing['note'] if existing else '')
+                if existing and existing['status']=='Approved' and not manager:
+                    if minutes!=existing['service_minutes']+existing['transport_minutes'] or individual_note!=existing['note']:raise HTTPException(409,'Approved payroll hours can only be corrected by a payroll manager.')
+                    continue
                 if existing:
-                    new_status='Submitted' if existing['status']!='Approved' else 'Approved'
-                    approved_by=existing.get('approved_by') if new_status=='Approved' else None
-                    db.execute("UPDATE times SET service_minutes=?,transport_minutes=0,note=?,status=?,submitted_by=?,approved_by=? WHERE id=?",(minutes,individual_note,new_status,u['id'],approved_by,existing['id']))
+                    if existing['service_minutes']+existing['transport_minutes']!=minutes or existing['note']!=individual_note:
+                        db.execute("UPDATE times SET service_minutes=?,transport_minutes=0,note=?,status='Submitted',submitted_by=?,approved_by=NULL,approved_hourly_cents=NULL,approved_at=NULL,version=version+1 WHERE id=?",(minutes,individual_note,u['id'],existing['id']))
+                        audit(db,u['id'],'Hours changed; approval reset','times',existing['id'],{'before_minutes':existing['service_minutes']+existing['transport_minutes'],'after_minutes':minutes,'before_status':existing['status']})
                 else:
                     insert(db,'times',dict(id=uid('TIME'),job_id=jid,employee_id=eid,service_minutes=minutes,transport_minutes=0,note=individual_note,status='Submitted',submitted_by=u['id'],created_at=now()))
                 changed.append({'employee_id':eid,'total_minutes':minutes})
@@ -697,51 +704,39 @@ def register_ux_features(app,path,auth):
     @app.get('/api/ux/payroll-summary')
     def payroll_summary(start:str='',end:str='',u=Depends(auth)):
         if u['role'] not in OFFICE|{'crew'}:raise HTTPException(403,'Payroll summary is restricted to staff.')
-        end_d=_date_arg(end,'end date') if end else date.today();start_d=_date_arg(start,'start date') if start else end_d-timedelta(days=13)
-        if end_d<start_d or (end_d-start_d).days>366:raise HTTPException(422,'Choose a payroll range up to one year.')
-        private=u['role'] in PRIVATE_HR
-        with closing(connect(path)) as db:
-            emps=rows(db,'SELECT * FROM employees WHERE active=1 ORDER BY name')
-            times=rows(db,"""SELECT t.*,j.title,j.start_at FROM times t JOIN jobs j ON j.id=t.job_id WHERE j.status!='Cancelled' ORDER BY j.start_at""")
-        details={e['id']:[] for e in emps}
-        for t in times:
-            day=_local_date(t['start_at'])
-            if start_d.isoformat()<=day<=end_d.isoformat() and t['employee_id'] in details:
-                mins=int(t['service_minutes'] or 0)+int(t['transport_minutes'] or 0)
-                details[t['employee_id']].append({'time_id':t['id'],'job_id':t['job_id'],'job_title':t['title'],'date':day,'hours':round(mins/60,2),'status':t['status']})
-        out=[]
-        for e in emps:
-            if u['role']=='crew' and e['id']!=u.get('employee_id'):continue
-            d=details[e['id']];hours=round(sum(x['hours'] for x in d),2);pending=sum(x['status']!='Approved' for x in d)
-            r={'employee_id':e['id'],'employee_name':e['name'],'jobs':len({x['job_id'] for x in d}),'hours':hours,'pending_entries':pending,'status':'Ready' if d and not pending else ('Needs review' if d else 'No hours'),'details':d}
-            if can_view_pay(u,e['id']):r.update({'hourly_cents':e['hourly_cents'],'gross_cents':round(hours*e['hourly_cents']),'pay_rate_pending':bool(json.loads(e['raw_json']).get(PAY_PENDING))})
-            out.append(r)
-        return {'start':start_d.isoformat(),'end':end_d.isoformat(),'private':private,'can_manage_hours':u['role'] in {'owner','manager','accounting'},'employees':out,'total_hours':round(sum(x['hours'] for x in out),2)}
+        with closing(connect(path)) as db:return worked_hours.summary(db,u,start,end)
+
+    @app.get('/api/ux/payroll-hours/export.csv')
+    def payroll_hours_export(start:str='',end:str='',u=Depends(auth)):
+        start,end=worked_hours.date_range(start,end)
+        with transaction(path) as db:return worked_hours.export_csv(db,u,start,end)
 
     @app.post('/api/ux/payroll-summary/approve')
     def payroll_approve(data:dict,u=Depends(auth)):
         if u['role'] not in {'owner','manager','accounting'}:raise HTTPException(403,'Only payroll managers can approve hours.')
-        start=_date_arg(data.get('start'),'start date').isoformat();end=_date_arg(data.get('end'),'end date').isoformat()
+        start,end=worked_hours.date_range(data.get('start'),data.get('end'))
         with transaction(path) as db:
-            items=rows(db,"SELECT t.id,j.start_at FROM times t JOIN jobs j ON j.id=t.job_id WHERE t.status!='Approved' AND j.status!='Cancelled'")
+            before=worked_hours.summary(db,u,start,end)
+            if data.get('review_token') is not None and data['review_token']!=before['review_token']:raise HTTPException(409,'Hours or assignments changed. Reload payroll and review them before approving.')
+            items=rows(db,"SELECT t.id,j.start_at FROM times t JOIN jobs j ON j.id=t.job_id WHERE (t.status!='Approved' OR t.approved_hourly_cents IS NULL) AND j.status='Completed'")
             ids=[x['id'] for x in items if start<=_local_date(x['start_at'])<=end]
-            for tid in ids:db.execute("UPDATE times SET status='Approved',approved_by=? WHERE id=?",(u['id'],tid))
-            audit(db,u['id'],'Payroll range hours approved','times',start+'..'+end,{'count':len(ids)})
-        return {'ok':True,'approved':len(ids)}
-
+            for tid in ids:worked_hours.approve_entry(db,tid,u['id'])
+            report=worked_hours.summary(db,u,start,end)
+            audit(db,u['id'],'Completed service hours approved','times',start+'..'+end,{'count':len(ids)})
+        return {'ok':True,'approved':len(ids),'pending_entries':report['pending_entries'],'missing_entries':report['missing_entries']}
 
     @app.patch('/api/ux/payroll-time/{tid}')
     def payroll_time_edit(tid:str,data:dict,u=Depends(auth)):
         if u['role'] not in {'owner','manager','accounting'}:raise HTTPException(403,'Only payroll managers can correct payroll hours.')
-        try:hours=float(data.get('hours'))
-        except Exception:raise HTTPException(422,'Enter valid total hours.')
-        if hours<0 or hours>24 or round(hours*60)!=hours*60:raise HTTPException(422,'Hours must resolve to whole minutes.')
+        minutes=worked_hours.hour_minutes(data.get('hours'))
         with transaction(path) as db:
             t=one(db,'SELECT * FROM times WHERE id=?',(tid,))
             if not t:raise HTTPException(404,'Time entry not found.')
-            before=int(t['service_minutes'] or 0)+int(t['transport_minutes'] or 0)
-            db.execute('UPDATE times SET service_minutes=?,transport_minutes=0 WHERE id=?',(round(hours*60),tid))
-            audit(db,u['id'],'Payroll hours corrected','times',tid,{'before_minutes':before,'after_minutes':round(hours*60)})
+            if 'version' in data and data['version']!=t['version']:raise HTTPException(409,'These hours changed. Reopen the details before saving.')
+            before=t['service_minutes']+t['transport_minutes']
+            if before!=minutes:
+                db.execute("UPDATE times SET service_minutes=?,transport_minutes=0,status='Submitted',approved_by=NULL,approved_hourly_cents=NULL,approved_at=NULL,version=version+1 WHERE id=?",(minutes,tid))
+                audit(db,u['id'],'Payroll hours corrected; approval reset','times',tid,{'before_minutes':before,'after_minutes':minutes,'before_status':t['status']})
         return {'ok':True}
 
     @app.get('/api/calls')

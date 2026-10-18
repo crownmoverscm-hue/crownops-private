@@ -71,8 +71,9 @@ def initialize(path):
     db = connect(path)
     legacy = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
     pending_manager=bool(legacy and not re.search(r"['\"]manager['\"]",legacy[0]))
-    pending_journey=bool(legacy and any(not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(name,)).fetchone() for name in ('schedule_days','saved_media_links','detail_requests','portal_detail_drafts','quote_views','invoice_deposit_reviews','job_handoffs','invoice_access_invites','invoice_access_sessions','invoice_change_orders')))
-    if os.getenv('CROWNOPS_ENV') == 'production' and (pending_manager or pending_journey):
+    pending_journey=bool(legacy and any(not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(name,)).fetchone() for name in ('expense_sources','schedule_days','saved_media_links','detail_requests','portal_detail_drafts','quote_views','invoice_deposit_reviews','job_handoffs','invoice_access_invites','invoice_access_sessions','invoice_change_orders')))
+    pending_hours=bool(legacy and 'version' not in {r[1] for r in db.execute('PRAGMA table_info(times)')})
+    if os.getenv('CROWNOPS_ENV') == 'production' and (pending_manager or pending_journey or pending_hours):
         # Back up and restore-test the existing database/uploads before any new schema.
         from .release_recovery import before_manager_migration
         try:
@@ -85,6 +86,9 @@ def initialize(path):
     db.executescript(Path(__file__).with_name('schema.sql').read_text())
     db.executescript(Path(__file__).with_name('platform_schema.sql').read_text())
     migrate_manager_role(db)
+    time_cols={r[1] for r in db.execute('PRAGMA table_info(times)')}
+    for column,definition in [('version','INTEGER NOT NULL DEFAULT 1'),('approved_hourly_cents','INTEGER'),('approved_at','TEXT')]:
+        if column not in time_cols:db.execute('ALTER TABLE times ADD COLUMN '+column+' '+definition)
     lead_cols={r[1] for r in db.execute('PRAGMA table_info(leads)').fetchall()}
     if 'intake_json' not in lead_cols:db.execute("ALTER TABLE leads ADD COLUMN intake_json TEXT NOT NULL DEFAULT '{}'")
     # Lightweight forward migration for the private review builds.
