@@ -12,8 +12,8 @@ from openpyxl import load_workbook
 from .store import connect, transaction, rows, one, insert, audit, now, uid, dumps
 from .employee_contacts import clean, phone_key, name_key
 
-STAFF = {'owner', 'sales', 'dispatch', 'accounting', 'crew'}
-EDITORS = {'owner', 'dispatch'}
+STAFF = {'owner','manager', 'sales', 'dispatch', 'accounting', 'crew'}
+EDITORS = {'owner','manager', 'dispatch'}
 CATEGORIES = ('Roadside assistance', 'Towing', 'Truck repairs', 'Glass', 'Rentals',
               'Equipment', 'Logistics', 'Locations', 'General')
 HEADERS = {
@@ -537,7 +537,7 @@ def register_company_ops(app, path, auth):
 
     @app.post('/api/company/reference-import/preview')
     async def preview(file: UploadFile = File(...), u=Depends(auth)):
-        require_role(u, {'owner'})
+        require_role(u, {'owner','manager'})
         try:
             return preview_reference(path, await file.read(2_000_001), file.filename or '', u['id'])
         except ReferenceError as e:
@@ -545,7 +545,7 @@ def register_company_ops(app, path, auth):
 
     @app.post('/api/company/reference-import/apply')
     def apply(data: dict, u=Depends(auth)):
-        require_role(u, {'owner'})
+        require_role(u, {'owner','manager'})
         try:
             return apply_reference(path, str(data.get('batch_id') or ''), u['id'])
         except ReferenceError as e:
@@ -553,7 +553,7 @@ def register_company_ops(app, path, auth):
 
     @app.get('/api/company/launch-checks')
     def launch_checks(u=Depends(auth)):
-        require_role(u, {'owner'})
+        require_role(u, {'owner','manager'})
         with closing(connect(path)) as db:
             employees = rows(db, 'SELECT * FROM employees')
             pay_pending = sum(bool(e['active'] and json.loads(e['raw_json']).get('contact_import_pay_pending')) for e in employees)

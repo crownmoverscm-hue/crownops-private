@@ -1,4 +1,21 @@
 -- v0.4: additive migration. No source records or live app data are replaced.
+CREATE TABLE IF NOT EXISTS detail_requests (
+ id TEXT PRIMARY KEY,lead_id TEXT NOT NULL REFERENCES leads(id),request_key TEXT NOT NULL,request_json TEXT NOT NULL,
+ fields_json TEXT NOT NULL,note TEXT NOT NULL DEFAULT '',mail_id TEXT REFERENCES outbound_messages(id),
+ status TEXT NOT NULL DEFAULT 'Open',created_by TEXT NOT NULL,created_at TEXT NOT NULL,submitted_at TEXT,reviewed_at TEXT,
+ UNIQUE(lead_id,request_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS detail_requests_open ON detail_requests(lead_id) WHERE status='Open';
+CREATE TABLE IF NOT EXISTS portal_detail_drafts (
+ lead_id TEXT PRIMARY KEY REFERENCES leads(id),base_version INTEGER NOT NULL,fields_json TEXT NOT NULL,
+ revision INTEGER NOT NULL,updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS quote_views (
+ id TEXT PRIMARY KEY,quote_id TEXT NOT NULL REFERENCES quotes(id),lead_id TEXT NOT NULL REFERENCES leads(id),
+ session_hash TEXT NOT NULL,time_bucket INTEGER NOT NULL,viewed_at TEXT NOT NULL,
+ UNIQUE(quote_id,session_hash,time_bucket)
+);
+CREATE INDEX IF NOT EXISTS quote_views_quote ON quote_views(quote_id,viewed_at);
 CREATE TABLE IF NOT EXISTS portal_invites (
  token_hash TEXT PRIMARY KEY, lead_id TEXT NOT NULL REFERENCES leads(id), email TEXT NOT NULL,
  expires_at TEXT NOT NULL, used_at TEXT, revoked INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at TEXT NOT NULL
@@ -157,6 +174,21 @@ CREATE TABLE IF NOT EXISTS field_collections (
  request_id TEXT UNIQUE NOT NULL, received_by TEXT NOT NULL, handover_status TEXT NOT NULL DEFAULT 'Awaiting verification',
  verified_by TEXT, verified_at TEXT, note TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS schedule_days (
+ day TEXT PRIMARY KEY, status TEXT NOT NULL CHECK(status IN ('Open','Fully booked')),
+ reason TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
+ updated_by TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS intake_drafts (
+ lead_id TEXT PRIMARY KEY REFERENCES leads(id), inputs_json TEXT NOT NULL DEFAULT '{}',
+ missing_json TEXT NOT NULL DEFAULT '[]', quote_id TEXT REFERENCES quotes(id),
+ status TEXT NOT NULL DEFAULT 'Needs details', updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS client_callbacks (
+ id TEXT PRIMARY KEY, lead_id TEXT NOT NULL REFERENCES leads(id), request_key TEXT NOT NULL,
+ phone TEXT NOT NULL, preferred_time TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',
+ status TEXT NOT NULL DEFAULT 'Requested', created_at TEXT NOT NULL, UNIQUE(lead_id,request_key)
+);
 CREATE TABLE IF NOT EXISTS account_resets (
  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at TEXT NOT NULL, used_at TEXT
 );
@@ -282,4 +314,51 @@ CREATE INDEX IF NOT EXISTS incident_reporter ON incident_reports(reported_by,sub
 CREATE TABLE IF NOT EXISTS incident_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT, incident_id TEXT NOT NULL REFERENCES incident_reports(id),
  actor TEXT NOT NULL, action TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
+
+-- Company costs are available only through Owner / Manager expense routes.
+CREATE TABLE IF NOT EXISTS expenses (
+ id TEXT PRIMARY KEY, request_key TEXT NOT NULL, request_hash TEXT NOT NULL, expense_date TEXT NOT NULL, vendor TEXT NOT NULL, category TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', reference TEXT NOT NULL DEFAULT '',
+ subtotal_cents INTEGER NOT NULL CHECK(subtotal_cents>=0), tax_cents INTEGER NOT NULL CHECK(tax_cents>=0),
+ total_cents INTEGER NOT NULL CHECK(total_cents=subtotal_cents+tax_cents AND total_cents>0),
+ status TEXT NOT NULL CHECK(status IN ('Paid','Unpaid','Voided')), receipt_url TEXT NOT NULL DEFAULT '',
+ job_id TEXT REFERENCES jobs(id), vehicle_id TEXT REFERENCES vehicles(id),
+ version INTEGER NOT NULL DEFAULT 1, void_reason TEXT NOT NULL DEFAULT '',
+ created_by TEXT NOT NULL REFERENCES users(id), updated_by TEXT NOT NULL REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(created_by,request_key)
+);
+CREATE INDEX IF NOT EXISTS expense_date ON expenses(expense_date,status);
+
+CREATE TABLE IF NOT EXISTS saved_media_links (
+ id TEXT PRIMARY KEY,lead_id TEXT NOT NULL REFERENCES leads(id),job_id TEXT REFERENCES jobs(id),
+ label TEXT NOT NULL,url TEXT NOT NULL,created_by TEXT NOT NULL,created_at TEXT NOT NULL,removed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS media_links_lead ON saved_media_links(lead_id);
+CREATE TABLE IF NOT EXISTS invoice_deposit_reviews (
+ invoice_id TEXT PRIMARY KEY REFERENCES job_invoices(id), fingerprint TEXT NOT NULL,
+ reason TEXT NOT NULL, reviewed_by TEXT NOT NULL REFERENCES users(id), reviewed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS job_handoffs (
+ job_id TEXT PRIMARY KEY REFERENCES jobs(id), job_version INTEGER NOT NULL,
+ checklist_json TEXT NOT NULL DEFAULT '{}', notes TEXT NOT NULL DEFAULT '',
+ version INTEGER NOT NULL DEFAULT 1, updated_by TEXT REFERENCES users(id), updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS invoice_access_invites (
+ token_hash TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES job_invoices(id),
+ revision INTEGER NOT NULL, recipient TEXT NOT NULL, expires_at TEXT NOT NULL,
+ used_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS invoice_access_sessions (
+ token_hash TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES job_invoices(id),
+ revision INTEGER NOT NULL, recipient TEXT NOT NULL, csrf TEXT NOT NULL, expires_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS invoice_change_orders (
+ id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES job_invoices(id),
+ request_key TEXT NOT NULL UNIQUE, payload_hash TEXT NOT NULL,
+ name TEXT NOT NULL, quantity INTEGER NOT NULL CHECK(quantity>0), unit_cents INTEGER NOT NULL CHECK(unit_cents>=0),
+ reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Requested', requested_by TEXT NOT NULL REFERENCES users(id),
+ created_at TEXT NOT NULL, agreement TEXT NOT NULL DEFAULT '', reviewed_by TEXT REFERENCES users(id), reviewed_at TEXT
 );

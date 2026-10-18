@@ -5,7 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     CROWNOPS_ALLOW_EXTERNAL=0
 WORKDIR /app
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir -r requirements.txt \
     && useradd --uid 10001 --create-home crown \
     && mkdir -p /data/uploads /app/instance \
     && chown -R crown:crown /data /app

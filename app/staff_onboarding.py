@@ -1,12 +1,17 @@
 """Plain-text and HTML staff invitations; no credentials or delivery side effects."""
 from html import escape
 
-ROLE_LABELS = {'owner':'Owner','sales':'Sales','dispatch':'Dispatch / manager','crew':'Crew','accounting':'Accounting'}
+ROLE_LABELS = {'owner':'Owner','manager':'Manager','sales':'Sales','dispatch':'Dispatch','crew':'Crew','accounting':'Accounting'}
 ROLE_STEPS = {
     'owner':[
         'Open Team access to review staff accounts and invitations.',
         'Review the Launch checklist, operating rules and company connections before approving live work.',
         'Keep your owner login private. Give each team member their own account.'
+    ],
+    'manager':[
+        'Open Today to review company work, then use Sales, Schedule, Team and Expenses as needed.',
+        'Your Manager account has full company access, including financial and staff information.',
+        'Link your employee record to appear in crew assignments and My Jobs. Keep this sign-in when leading a move.'
     ],
     'sales':[
         'Open Sales & clients to review quote requests, missed calls and follow-ups.',

@@ -6,10 +6,12 @@ from email.message import EmailMessage
 import base64, hashlib, json, os, secrets, time
 import requests
 from fastapi import Depends, HTTPException, Request
+from .client_communications import pending_scope_changes,quote_scope_current
 from .store import *
 from .platform_common import *
 from .pricing import number, cents
 from .providers import qbo_call,qbo_customer,qbo_mapping,provider_token,process_mail,token_save
+from .invoice_payments import checked_quickbooks_link
 
 
 def qbo_work(path,kind,obj,rev,actor,action):
@@ -33,6 +35,11 @@ def qbo_work(path,kind,obj,rev,actor,action):
 
 
 def register_extensions(app,path,auth,public_url):
+    @app.get('/api/invoices/{iid}/quickbooks-payment-link')
+    def quickbooks_payment_link(iid:str,u=Depends(auth)):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(checked_quickbooks_link(path,iid,u),headers={'Cache-Control':'no-store'})
+
     @app.post('/api/quotes/{qid}/quickbooks')
     def export_estimate(qid:str,data:dict,u=Depends(auth)):
         require_role(u,SALES);quickbooks_gate()
@@ -41,7 +48,7 @@ def register_extensions(app,path,auth,public_url):
             q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
             if not q or q['status'] not in ('Approved','Accepted'):raise HTTPException(409,'Approve this estimate before export.')
             l=one(db,'SELECT * FROM leads WHERE id=?',(q['lead_id'],))
-            if l['notifications_suppressed'] or l['version']!=q['lead_version']:raise HTTPException(409,'Activate and review the current client project first.')
+            if l['notifications_suppressed'] or not quote_scope_current(db,q,l):raise HTTPException(409,'Activate and review the current client project first.')
             r=json.loads(q['result_json'])
         # Range is not a fixed quote: staff must choose which endpoint QBO displays.
         if data.get('basis') not in ('low','high'):raise HTTPException(422,'Choose the reviewed low or high range endpoint for the QuickBooks draft.')
@@ -61,7 +68,7 @@ def register_extensions(app,path,auth,public_url):
 
     @app.post('/api/payments/{pid}/quickbooks')
     def export_payment(pid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'});quickbooks_gate()
+        require_role(u,{'owner','manager','accounting'});quickbooks_gate()
         if data.get('confirm') is not True:raise HTTPException(422,'Confirm this accounting payment posting; it does not charge a card.')
         with closing(connect(path)) as db:
             p=one(db,'SELECT * FROM payments WHERE id=?',(pid,))
@@ -88,7 +95,7 @@ def register_extensions(app,path,auth,public_url):
     def cancel_checkout(iid:str,data:dict,u=Depends(auth)):
         external_gate()
         with transaction(path) as db:
-            inv,_=invoice_current(db,iid);assigned(db,inv['job_id'],u)
+            inv,_=invoice_current(db,iid);invoice_job(db,inv['job_id'],u)
             link=one(db,"SELECT * FROM payment_links WHERE invoice_id=? AND status IN ('Active','Unknown','Creating') ORDER BY created_at DESC LIMIT 1",(iid,))
             if not link:return {'ok':True,'already_closed':True}
             if link['status']!='Active' or not link['link_id']:raise HTTPException(409,'An unresolved checkout creation must be checked in Square before it can be closed here.')
@@ -106,21 +113,57 @@ def register_extensions(app,path,auth,public_url):
             with transaction(path) as db:db.execute("UPDATE payment_links SET status='Unknown' WHERE id=? AND status='Cancelling'",(link['id'],))
             raise HTTPException(502,'Checkout cancellation was not confirmed. Check Square before collecting or correcting.')
 
+    @app.get('/api/invoices/{iid}/delivery-state')
+    def invoice_delivery_state(iid:str,u=Depends(auth)):
+        with closing(connect(path)) as db:
+            inv,_=invoice_current(db,iid);invoice_job(db,inv['job_id'],u)
+            record=one(db,"""SELECT id,status,sent_at,created_at FROM outbound_messages
+                WHERE event_key IN (?,?) ORDER BY CASE WHEN status='Sent' THEN 0 WHEN status='Draft' THEN 2 ELSE 1 END,created_at DESC LIMIT 1""",
+                ('invoice-delivery:'+iid+':'+str(inv['revision']),'invoice-mail:'+iid+':'+str(inv['revision'])))
+            lead=one(db,'SELECT email FROM leads WHERE id=(SELECT lead_id FROM jobs WHERE id=?)',(inv['job_id'],))
+            terms=json.loads(inv['terms_json']);billing=str(terms.get('customer',{}).get('email') or lead['email']).strip().lower()
+            recipients=list(dict.fromkeys([billing,lead['email'].lower()]))
+        return {'invoice_id':iid,'revision':inv['revision'],'version':inv['version'],'recipient':billing,'recipients':recipients,'message_id':record['id'] if record else None,'status':record['status'] if record else 'Not sent',
+                'sent_at':record['sent_at'] if record else None,'can_send':inv['status']=='Issued' and (not record or record['status'] in ('Draft','Cancelled'))}
+
     @app.post('/api/invoices/{iid}/deliver')
     def deliver(iid:str,data:dict,u=Depends(auth)):
-        if data.get('confirm') is not True:raise HTTPException(422,'Confirm sending this finalized invoice to the saved client email.')
+        if data.get('confirm') is not True:raise HTTPException(422,'Confirm sending this finalized invoice to its reviewed billing recipient.')
         external_gate()
+        from .invoice_payments import quickbooks_payment_state
+        payment_state=quickbooks_payment_state(path,iid,user=u,reconcile=True,actor=u['id'])
+        if payment_state['mapped'] and (payment_state['status'] in ('Review required','Unavailable') or payment_state['local_balance_cents']!=payment_state['remote_balance_cents']):raise HTTPException(409,payment_state['reason'] or 'Reconcile the current payment status before emailing this invoice.')
+        payment=checked_quickbooks_link(path,iid,u) if data.get('include_quickbooks_payment') is True else None
         with transaction(path) as db:
-            inv,calc=invoice_current(db,iid);j=assigned(db,inv['job_id'],u);l=one(db,'SELECT * FROM leads WHERE id=?',(j['lead_id'],))
+            inv,calc=invoice_current(db,iid);j=invoice_job(db,inv['job_id'],u);l=one(db,'SELECT * FROM leads WHERE id=?',(j['lead_id'],))
+            if inv['version']!=payment_state['version'] or inv['revision']!=payment_state['revision']:raise HTTPException(409,'Invoice or payments changed. Reload before emailing it.')
             if inv['status']!='Issued' or l['notifications_suppressed']:raise HTTPException(409,'A finalized invoice and an activated client email are required.')
-            if os.getenv('CROWNOPS_ENV','test')!='production' and not l['email'].endswith('.invalid'):
+            terms=json.loads(inv['terms_json']);billing=str(terms.get('customer',{}).get('email') or l['email']).strip().lower()
+            recipient=str(data.get('recipient') or billing).strip().lower()
+            if recipient not in {billing,l['email'].lower()} or not __import__('re').fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',recipient):raise HTTPException(422,'Choose the saved billing or client email. Management must correct any other billing recipient first.')
+            if 'version' in data and (data['version']!=inv['version'] or data.get('revision')!=inv['revision']):raise HTTPException(409,'Invoice changed. Reload before confirming its recipient.')
+            if os.getenv('CROWNOPS_ENV','test')!='production' and not recipient.endswith('.invalid'):
                 allow={x.strip().lower() for x in os.getenv('CROWNOPS_TEST_EMAIL_ALLOWLIST','').split(',') if x.strip()}
-                if l['email'].lower() not in allow:raise HTTPException(409,'Test installation can send only to explicitly allowlisted test recipients.')
-            m=queue_message(db,l['id'],'Votre facture Crown Movers' if l['language']=='French' else 'Your Crown Movers invoice',
-              f"{l['client_name']},\n\nInvoice {inv['number']} (revision {inv['revision']}) is attached.\nTotal: CA${calc['total_cents']/100:.2f}\nVerified payments: CA${calc['deposit_cents']/100:.2f}\nConfirmed balance: CA${calc['balance_cents']/100:.2f}\nRecently collected payments may still be awaiting verification.\n\nThank you,\nCrown Movers",'Invoice',u['id'],'invoice-delivery:'+iid+':'+str(inv['revision']),jid=j['id'])
+                if recipient not in allow:raise HTTPException(409,'Test installation can send only to explicitly allowlisted test recipients.')
+            existing=one(db,"""SELECT * FROM outbound_messages WHERE event_key IN (?,?)
+                ORDER BY CASE WHEN status='Sent' THEN 0 WHEN status='Draft' THEN 2 ELSE 1 END,created_at DESC LIMIT 1""",
+                ('invoice-delivery:'+iid+':'+str(inv['revision']),'invoice-mail:'+iid+':'+str(inv['revision'])))
+            if existing and existing['status']=='Sent':return {'sent':True,'duplicate':True}
+            if existing and existing['status'] not in ('Draft','Cancelled'):raise HTTPException(409,'This delivery is already approved, in progress or unresolved. Review delivery status before retrying.')
+            if payment and (payment['version']!=inv['version'] or payment['revision']!=inv['revision'] or payment['amount_cents']!=calc['balance_cents']):
+                raise HTTPException(409,'Invoice changed after checking its payment link. Reload before sending.')
+            is_fr=l['language'].lower().startswith('fr')
+            subject='Votre facture Crown Movers' if is_fr else 'Your Crown Movers invoice'
+            from .client_communications import invoice_body
+            from .invoice_access import invoice_access_link
+            link=invoice_access_link(db,inv,recipient,u['id'],public_url)
+            body=invoice_body(l,inv,calc,link,payment)
+            m=existing or queue_message(db,l['id'],subject,body,'Invoice',u['id'],'invoice-delivery:'+iid+':'+str(inv['revision']),jid=j['id'])
             old=one(db,'SELECT * FROM outbound_messages WHERE id=?',(m['id'],))
             if old['status']=='Sent':return {'sent':True,'duplicate':True}
-            if old['status']!='Draft':raise HTTPException(409,'This delivery is already approved, in progress or unresolved.')
+            if old['status'] not in ('Draft','Cancelled'):raise HTTPException(409,'This delivery is already approved, in progress or unresolved.')
+            # Direct delivery always regenerates the current financial summary.
+            db.execute('UPDATE outbound_messages SET subject=?,body=?,recipient=?,source_version=? WHERE id=?',(subject,body,recipient,inv['version'],m['id']))
             db.execute("UPDATE outbound_messages SET status='Approved',approved_by=? WHERE id=?",(u['id'],m['id']))
         return process_mail(path,m['id'])
 
@@ -128,7 +171,7 @@ def register_extensions(app,path,auth,public_url):
     def clients(u=Depends(auth)):
         with closing(connect(path)) as db:
             if u['role']=='crew':
-                r=rows(db,"SELECT DISTINCT l.id,l.client_name,l.email,l.phone,l.pickup,l.dropoff,l.inventory,l.boxes,l.pickup_access,l.dropoff_access,l.pickup_walk,l.dropoff_walk,l.heavy_items,l.move_date,l.language,l.version FROM leads l JOIN jobs j ON j.lead_id=l.id ORDER BY l.move_date DESC")
+                r=rows(db,"SELECT DISTINCT l.id,l.client_name,l.email,l.phone,l.pickup,l.dropoff,l.inventory,l.boxes,l.pickup_access,l.dropoff_access,l.pickup_walk,l.dropoff_walk,l.heavy_items,l.move_date,l.language,l.version FROM leads l JOIN jobs j ON j.lead_id=l.id JOIN assignments a ON a.job_id=j.id WHERE a.resource_type='employee' AND a.resource_id=? ORDER BY l.move_date DESC",(u.get('employee_id') or '',))
             else:r=rows(db,'SELECT id,client_name,email,phone,pickup,dropoff,inventory,boxes,pickup_access,dropoff_access,move_date,language,version,photo_link FROM leads ORDER BY move_date DESC LIMIT 1000')
             return r
 

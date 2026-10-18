@@ -31,7 +31,7 @@ class PrivateFilePermissionTests(unittest.TestCase):
                     role='crew' if role=='unlinked' else role,employee_id='E1' if role=='crew' else None,
                     password_hash='unused-test-password',created_at=now()))
             for lid in ('L1','L2'):
-                insert(db,'leads',dict(id=lid,client_name=lid,created_at=now(),updated_at=now()))
+                insert(db,'leads',dict(id=lid,client_name=lid,email='client@example.invalid' if lid=='L1' else 'other@example.invalid',created_at=now(),updated_at=now()))
             for jid,lid,eid in [('J1','L1','E1'),('J2','L1','E2'),('J3','L2','E2')]:
                 insert(db,'jobs',dict(id=jid,lead_id=lid,title=jid,phase='Moving',
                     start_at='2027-01-01T09:00:00+00:00',end_at='2027-01-01T13:00:00+00:00',
@@ -83,6 +83,33 @@ class PrivateFilePermissionTests(unittest.TestCase):
             client=self.client(role)
             self.assertEqual(client.get('/api/uploads/other-client').status_code,200,role)
             self.assertEqual(len(client.get('/api/leads/L1/uploads').json()),3,role)
+
+    def test_move_and_schedule_counts_match_the_files_crew_can_list(self):
+        listing=self.crew.get('/api/leads/L1/uploads').json()
+        detail=self.crew.get('/api/ux/final/job/J1')
+        self.assertEqual(detail.status_code,200,detail.text)
+        self.assertEqual(detail.json()['photo_count'],len(listing))
+        self.assertEqual(detail.json()['files_count'],len(listing))
+        schedule={j['id']:j for j in self.crew.get('/api/ux/final/schedule').json()}
+        self.assertEqual(schedule['J1']['photo_count'],len(listing))
+        self.assertEqual(schedule['J3']['photo_count'],0)
+        other=self.crew.get('/api/ux/final/job/J3').json()
+        self.assertEqual((other['photo_count'],other['files_count']),(0,0))
+
+    def test_summary_counts_change_immediately_after_assignment_removal(self):
+        with transaction(self.path) as db:db.execute("DELETE FROM assignments WHERE job_id='J1'")
+        detail=self.crew.get('/api/ux/final/job/J1').json()
+        self.assertEqual((detail['photo_count'],detail['files_count']),(0,0))
+        self.assertTrue(all(j['photo_count']==0 for j in self.crew.get('/api/ux/final/schedule').json()))
+
+    def test_office_and_designated_team_leads_keep_their_existing_file_visibility(self):
+        with transaction(self.path) as db:
+            insert(db,'employee_directory_profiles',dict(employee_id='E1',team_lead=1))
+        for client in (self.client('owner'),self.crew):
+            listing=client.get('/api/leads/L1/uploads').json()
+            self.assertEqual(len(listing),3)
+            detail=client.get('/api/ux/final/job/J1').json()
+            self.assertEqual((detail['photo_count'],detail['files_count']),(3,3))
 
     def test_client_portal_remains_scoped_to_its_own_project(self):
         client=self.client()

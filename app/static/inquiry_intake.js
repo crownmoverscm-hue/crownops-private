@@ -18,7 +18,7 @@ function inquiryChecks(name,label,choices,selected=[]){return '<fieldset class="
 editLead=async function(id=''){
  const [l,policy]=await Promise.all([id?api('/leads/'+encodeURIComponent(id)):Promise.resolve({}),api('/upload-policy')]);
  const m=inquiryMeta(l);S.modalContext={lead:l};
- const photos=policy.enabled?'<label class="form-field full" for="inquiry-photo-files">Upload photos now · up to 10, '+h(policy.max_file_mb)+' MB each<input type="file" id="inquiry-photo-files" name="file" accept="'+h(policy.accept)+'" multiple></label>':'<p class="small muted">'+h(policy.message)+'</p>';
+ const photos=policy.enabled?'<label class="form-field full" for="inquiry-photo-files">Upload photos / short videos now · up to 10, '+h(policy.max_file_mb)+' MB each<input type="file" id="inquiry-photo-files" name="file" accept="'+h(policy.accept)+'" multiple></label>':'<p class="small muted">'+h(policy.message)+'</p>';
  showModal(id?'Edit inquiry':'New client inquiry','<form id="lead-form" data-inquiry data-max-mb="'+h(policy.max_file_mb||15)+'"><input type="hidden" name="id" value="'+h(id)+'"><input type="hidden" name="version" value="'+h(l.version||'')+'">'+
   '<section class="panel panel-body"><h3>1 · Client & service</h3><div class="grid2">'+field('client_name','Client name',l.client_name||'','text','required')+field('move_date','Requested move date',l.move_date||'','date')+field('email','Email',l.email||'','email')+field('phone','Phone',l.phone||'','tel')+
   select('lead_type','Service type',[['Moving','Local moving'],['Packing','Packing'],['Long Distance','Long distance'],['Junk Removal','Junk removal'],...(!['Moving','Packing','Long Distance','Junk Removal','Form',undefined].includes(l.lead_type)?[[l.lead_type,l.lead_type]]:[])],l.lead_type==='Form'?'Moving':l.lead_type||'Moving')+
@@ -43,10 +43,10 @@ document.addEventListener('submit',async e=>{
   for(const key of ['heavy_items','additional_services']){d.intake[key]=[...f.querySelectorAll('[name="intake_'+key+'"]:checked')].map(x=>x.value);delete d['intake_'+key];}
   const files=[...(f.elements.file?.files||[])];
   if(files.length>10)throw Error('Choose up to 10 photos at a time.');
-  if(files.some(x=>x.size>Number(f.dataset.maxMb)*1024*1024))throw Error('One of the photos exceeds '+f.dataset.maxMb+' MB.');
+
   const result=await api(id?'/leads/'+encodeURIComponent(id):'/leads',{method:id?'PATCH':'POST',data:d});savedId=id||result.id;
   let saved=0,error='';
-  for(const file of files){const data=new FormData();data.append('file',file);data.append('category','Move photos');document.getElementById('inquiry-progress').textContent='Inquiry saved. Uploading '+(saved+1)+' of '+files.length+' photos…';try{await api('/leads/'+encodeURIComponent(savedId)+'/uploads',{method:'POST',form:data});saved++;}catch(ex){error=ex.message;break;}}
+  for(const file of files){const data=new FormData();data.append('file',file);data.append('category','Move photos');document.getElementById('inquiry-progress').textContent='Inquiry saved. Uploading '+(saved+1)+' of '+files.length+' photos…';try{await api('/leads/'+encodeURIComponent(savedId)+'/uploads',{method:'POST',form:data});saved++;}catch(ex){error+=(error?' · ':'')+file.name+': '+ex.message;}}
   await navigate('sales');await openLead(savedId);toast('Inquiry saved'+(saved?' with '+saved+' photo(s).':'.'));
   if(error)modalError(new Error('The inquiry is saved. '+saved+' of '+files.length+' photos uploaded. '+error+' Use Add photos to upload the remaining files.'));
  }catch(ex){
@@ -64,9 +64,15 @@ openLead=async function(id){
 const inquiryQuoteBuilder=crmQuoteBuilder;
 crmQuoteBuilder=async function(id='',options={}){
  inquirySuggestion=null;
+ let automatic=null;
+ if(id&&!options.seed){
+  automatic=await api('/intake/drafts/'+encodeURIComponent(id)+'/prepare',{method:'POST',data:{}});
+  if(automatic.quote_id){const q=await api('/crm/quotes/'+encodeURIComponent(automatic.quote_id));if(q.quote.status==='Draft'&&q.quote.lead_version===q.lead.version)options={...options,seed:q.quote.inputs,result:q.quote.result};}
+ }
  await inquiryQuoteBuilder(id,options);
  const f=document.getElementById('crm-quote-form');if(!f)return;
  const details=document.getElementById('qe-service-details');
+ if(automatic)f.insertAdjacentHTML('afterbegin','<div class="callout '+(automatic.missing?.length?'orange':'teal')+'"><strong>'+h(automatic.status)+'</strong><p>'+h(automatic.missing?.length?'Confirm: '+automatic.missing.join(', ')+'.':'Review the prepared crew, hours, transport and rates before sending.')+'</p></div>');
  details.insertAdjacentHTML('afterend','<section class="panel panel-body" id="inquiry-quote-summary"></section>');inquiryQuoteSummary();
 };
 const inquirySetDetails=qeSetDetails;
@@ -122,3 +128,13 @@ clientFiles=async function(id){
  if(link)modal.querySelector('.modal-body')?.insertAdjacentHTML('afterbegin','<p><a class="button-link" href="'+h(link)+'" target="_blank" rel="noopener noreferrer">Open photo folder</a></p>');
  if(inquiryPhotoReturn)modal.querySelector('.modal-foot')?.insertAdjacentHTML('afterbegin','<button type="button" data-inquiry-action="return">'+h(inquiryPhotoReturn.label)+'</button>');
 };
+
+document.addEventListener('click',async e=>{
+ const b=e.target.closest('[data-intake]');if(!b)return;e.preventDefault();if(b.disabled)return;b.disabled=true;
+ try{
+  if(b.dataset.intake==='sync'){const result=await api('/intake/sync',{method:'POST',data:{}});toast(result.error||result.summary?.errors?.[0]?.error||(result.running?'An import is already running.':'Inquiry check complete.'));}
+  if(b.dataset.intake==='toggle')await api('/intake/settings',{method:'PUT',data:{enabled:b.dataset.enabled==='true'}});
+  if(b.dataset.intake==='callback-complete')await api('/callbacks/'+encodeURIComponent(b.dataset.id)+'/complete',{method:'POST',data:{}});
+  await navigate('sales');
+ }catch(ex){toast(ex.message);}finally{if(b.isConnected)b.disabled=false;}
+});

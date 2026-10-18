@@ -1,7 +1,7 @@
 /* Direct planning actions with account-based history; no routine reason prompts. */
 'use strict';
 const JP={data:null,busy:false,preview:0,drafts:{}};
-function canPlanJobs(){return Boolean(S.user?.can_plan_jobs||['owner','sales','dispatch','accounting'].includes(S.user?.role));}
+function canPlanJobs(){return Boolean(S.user?.can_plan_jobs||['owner','manager','sales','dispatch','accounting'].includes(S.user?.role));}
 function jpTarget(issue){
  if(/crew|driver|employee|pay rate|\bOFF\b/i.test(issue))return 'crew';
  if(/truck|vehicle|inspection|pre-use|repair/i.test(issue))return 'trucks';
@@ -84,7 +84,7 @@ document.addEventListener('click',async e=>{
   const action=b.dataset.plan,id=b.dataset.id||JP.data?.job.id,target=b.dataset.target;
   if(action==='review')return openJobPlan(id,['crew','trucks','timing'].includes(target)?target:'');
   if(action==='focus')return jpFocus(target);
-  if(action==='back')return openJob(id);
+  if(action==='back'){jpRemember();return openJob(id);}
   if(action==='fix'){
    if(['crew','trucks','timing'].includes(target))return jpFocus(target);
    if(target==='quote'){jpFocus('timing');return;}

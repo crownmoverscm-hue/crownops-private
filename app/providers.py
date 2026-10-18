@@ -6,6 +6,7 @@ Provider interfaces have mocked contract tests, not live-account certification.
 from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
+from email.utils import formataddr
 from urllib.parse import urlencode, quote
 import base64, hashlib, hmac, json, os, secrets, time
 import requests
@@ -106,7 +107,20 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
        'CustomerMemo':{'value':t.get('approval_reference','')[:1000]},'ApplyTaxAfterDiscount':True}
 
 def send_gmail(path,message):
-    t=provider_token(path,'gmail');m=EmailMessage();m['To']=message['recipient'];m['Subject']=message['subject'];m['Message-ID']='<'+message['id'].lower()+'@crownops.local>';m.set_content(message['body'])
+    t=provider_token(path,'gmail')
+    profile=requests.get('https://gmail.googleapis.com/gmail/v1/users/me/profile',headers={'Authorization':'Bearer '+t['access_token']},timeout=15)
+    profile.raise_for_status();sender=profile.json().get('emailAddress','')
+    if not isinstance(sender,str) or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',sender):raise ValueError('Gmail sender identity could not be confirmed.')
+    with closing(connect(path)) as db:identity=settings(db,'company_communications',{}) or {}
+    reply_to=sender
+    if identity.get('approved') is True:
+        if str(identity.get('connected_mailbox','')).lower()!=sender.lower():raise ValueError('The connected mailbox changed. Management must review company email rules before sending.')
+        alias=identity.get('send_as','');reply=identity.get('reply_to','')
+        if any(not isinstance(value,str) or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',value) for value in (alias,reply)):raise ValueError('Review the company sender and reply email addresses before sending.')
+        sender=alias;reply_to=reply
+    m=EmailMessage();m['From']=formataddr(('Crown Movers',sender));m['Reply-To']=reply_to;m['To']=message['recipient'];m['Subject']=message['subject'];m['Message-ID']='<'+message['id'].lower()+'@crownops.local>';m.set_content(message['body'])
+    from .client_communications import email_html
+    m.add_alternative(email_html(message['subject'],message['body']),subtype='html')
     if message['category']=='Invoice':
         marker=message['event_key'].split(':')
         if marker[0] in ('invoice-delivery','invoice-mail') and len(marker)==3:
@@ -123,13 +137,77 @@ def send_gmail(path,message):
 
 def process_mail(path,mid):
     external_gate()
+    # Network reads and optional local receipt reconciliation happen before the
+    # write lock. The final transaction rechecks the exact invoice version.
+    collection_check=None
+    invoice_check=None
+    with closing(connect(path)) as db:
+        preview=one(db,'SELECT * FROM outbound_messages WHERE id=?',(mid,))
+        if preview and preview['status']=='Approved' and preview['category']=='Collection':
+            marker=(preview.get('event_key') or '').split(':')
+            if len(marker)==4 and marker[0]=='balance':
+                try:collection_target=(marker[1],int(marker[3]))
+                except ValueError:raise HTTPException(409,'Prepare a current invoice reminder before sending.')
+            else:
+                candidates=rows(db,"SELECT i.id FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND i.status='Issued'"+(' AND j.id=?' if preview['job_id'] else ''),
+                    (preview['lead_id'],preview['job_id']) if preview['job_id'] else (preview['lead_id'],))
+                if len(candidates)!=1:raise HTTPException(409,'Choose one issued invoice and prepare its current balance reminder.')
+                collection_target=(candidates[0]['id'],None)
+    if preview and preview['status']=='Approved' and preview['category']=='Invoice':
+        marker=(preview.get('event_key') or '').split(':')
+        if len(marker)!=3 or marker[0] not in ('invoice-delivery','invoice-mail'):raise HTTPException(409,'Prepare the current invoice email before sending.')
+        from .invoice_payments import quickbooks_payment_state
+        invoice_check=quickbooks_payment_state(path,marker[1],reconcile=True,actor=preview['approved_by'])
+        if invoice_check['mapped'] and (invoice_check['status'] in ('Review required','Unavailable') or invoice_check['local_balance_cents']!=invoice_check['remote_balance_cents']):
+            raise HTTPException(409,invoice_check['reason'] or 'Reconcile the current payment status before sending this invoice.')
+    if preview and preview['status']=='Approved' and preview['category']=='Collection':
+        from .invoice_payments import collection_payment_check
+        collection_check=collection_payment_check(path,*collection_target)
+        if not collection_check['can_collect']:
+            reason=collection_check['reason'] or 'No unpaid balance is confirmed. Review the invoice before following up.'
+            with transaction(path) as db:
+                db.execute("UPDATE outbound_messages SET status='Cancelled',error=? WHERE id=? AND status='Approved'",(reason,mid))
+            return {'sent':False,'reason':reason,'payment_status':collection_check['status']}
     with transaction(path) as db:
         m=one(db,'SELECT * FROM outbound_messages WHERE id=?',(mid,))
         if not m or m['status']!='Approved':raise HTTPException(409,'Only a reviewed and approved message can be sent.')
         l=one(db,'SELECT * FROM leads WHERE id=?',(m['lead_id'],))
         if l['notifications_suppressed']:raise HTTPException(409,'Client communication remains suppressed. Review and activate this project first.')
-        if l['email'].lower()!=m['recipient'].lower():raise HTTPException(409,'Client email changed. Prepare a new message.')
-        if m['job_id'] and m['source_version']:
+        recipients={l['email'].strip().lower()}
+        if m['category']=='Invoice':
+            marker=(m.get('event_key') or '').split(':')
+            if len(marker)!=3 or marker[0] not in ('invoice-delivery','invoice-mail'):raise HTTPException(409,'Prepare the current issued invoice email before sending.')
+            inv=one(db,'SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE i.id=? AND j.lead_id=?',(marker[1],l['id']))
+            if not inv or inv['status']!='Issued' or str(inv['revision'])!=marker[2]:raise HTTPException(409,'Invoice changed. Prepare the current issued invoice email.')
+            if not invoice_check or inv['version']!=invoice_check['version'] or inv['revision']!=invoice_check['revision'] or (m['source_version'] and inv['version']!=m['source_version']):
+                db.execute("UPDATE outbound_messages SET status='Cancelled',error='Invoice or payments changed; review the current invoice email' WHERE id=?",(mid,))
+                return {'sent':False,'reason':'Invoice or payments changed; review and send the current invoice.'}
+            issued=one(db,'SELECT document_json FROM invoice_revisions WHERE invoice_id=? AND revision=?',(inv['id'],inv['revision']))
+            if not issued:raise HTTPException(409,'The issued invoice snapshot is unavailable.')
+            billing=json.loads(issued['document_json']).get('terms',{}).get('customer',{}).get('email','')
+            if isinstance(billing,str) and '@' in billing:recipients.add(billing.strip().lower())
+        if m['category']=='Invoice access':
+            marker=(m.get('event_key') or '').split(':')
+            if len(marker)!=4 or marker[0]!='invoice-access':raise HTTPException(409,'Prepare a current private invoice access email.')
+            inv=one(db,'SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE i.id=? AND j.lead_id=?',(marker[1],l['id']))
+            if not inv or inv['status']!='Issued' or str(inv['revision'])!=marker[2]:raise HTTPException(409,'Invoice changed. Request a new private link.')
+            issued=one(db,'SELECT document_json FROM invoice_revisions WHERE invoice_id=? AND revision=?',(inv['id'],inv['revision']))
+            billing=json.loads(issued['document_json']).get('terms',{}).get('customer',{}).get('email','') if issued else ''
+            if isinstance(billing,str) and '@' in billing:recipients.add(billing.strip().lower())
+        if m['recipient'].strip().lower() not in recipients:raise HTTPException(409,'Client or approved billing email changed. Prepare a new message.')
+        if m['event_key'].startswith('quote-delivery:'):
+            _,qid,revision=m['event_key'].split(':')
+            q=one(db,'SELECT * FROM quotes WHERE id=? AND lead_id=?',(qid,l['id']))
+            from .client_communications import quote_scope_current,pending_scope_changes
+            if not q or q['status'] not in ('Approved','Accepted') or q['revision']!=int(revision) or not quote_scope_current(db,q,l) or pending_scope_changes(db,l['id']):
+                db.execute("UPDATE outbound_messages SET status='Cancelled',error='Estimate or client details changed; prepare a current message' WHERE id=?",(mid,))
+                return {'sent':False,'reason':'Estimate needs review; stale delivery cancelled'}
+        if (m.get('event_key') or '').startswith('booking-confirmed:'):
+            from .client_communications import booking_confirmation_current
+            if not booking_confirmation_current(db,m):
+                db.execute("UPDATE outbound_messages SET status='Cancelled',error='Booking details changed; prepare the current confirmation' WHERE id=?",(mid,))
+                return {'sent':False,'reason':'Booking details changed; stale confirmation cancelled'}
+        elif m['category']!='Invoice' and m['job_id'] and m['source_version']:
             j=one(db,'SELECT * FROM jobs WHERE id=?',(m['job_id'],))
             if not j or j['version']!=m['source_version'] or j['status']=='Cancelled':
                 db.execute("UPDATE outbound_messages SET status='Cancelled',error='Job changed; recreate this message' WHERE id=?",(mid,))
@@ -139,10 +217,19 @@ def process_mail(path,mid):
             invoice,calc=invoice_current(db,invoice_id)
             if invoice['status']!='Issued' or invoice['revision']!=int(revision) or calc['balance_cents']!=int(balance) or pending_received(db,invoice_id) or one(db,"SELECT id FROM cases WHERE lead_id=? AND status!='Resolved'",(m['lead_id'],)):
                 db.execute("UPDATE outbound_messages SET status='Cancelled',error='Invoice/payment/dispute changed' WHERE id=?",(mid,));return {'sent':False,'reason':'Collection state changed; stale reminder cancelled'}
+        if m['category']=='Collection':
+            if not collection_check:raise HTTPException(409,'Check the current invoice balance before sending.')
+            invoice,calc=invoice_current(db,collection_check['invoice_id'])
+            if (invoice['version']!=collection_check['version'] or invoice['revision']!=collection_check['revision'] or
+                    calc['balance_cents']!=collection_check['local_balance_cents'] or calc['balance_cents']<=0 or
+                    pending_received(db,invoice['id']) or one(db,"SELECT id FROM cases WHERE lead_id=? AND status!='Resolved'",(l['id'],))):
+                db.execute("UPDATE outbound_messages SET status='Cancelled',error='Invoice or receipt changed after the payment check' WHERE id=?",(mid,))
+                return {'sent':False,'reason':'Collection state changed; prepare a current reminder'}
         if os.getenv('CROWNOPS_ENV','test')!='production':
             allow={x.strip().lower() for x in os.getenv('CROWNOPS_TEST_EMAIL_ALLOWLIST','').split(',') if x.strip()}
             if m['recipient'].lower() not in allow:raise HTTPException(409,'Add this controlled test recipient to CROWNOPS_TEST_EMAIL_ALLOWLIST before sending.')
         db.execute("UPDATE outbound_messages SET status='Sending' WHERE id=?",(mid,))
+        audit(db,m['approved_by'],'Email delivery attempt started','outbound_messages',mid,{'recipient':m['recipient']})
     try:
         pid=send_gmail(path,m)
         with transaction(path) as db:
@@ -324,6 +411,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         with transaction(path) as db:
             ev=one(db,"SELECT * FROM integration_events WHERE id=? AND event_type LIKE 'gmail_%'",(eid,))
             if not ev:raise HTTPException(404,'Gmail review item not found.')
+            if ev['event_type'] in ('gmail_quote','gmail_missed_call','gmail_voicemail','gmail_email') and ev['status']=='Needs review':raise HTTPException(409,'Choose the correct client service, create a new inquiry, or dismiss this intake with a reason using its review action.')
             db.execute("UPDATE integration_events SET status='Reviewed' WHERE id=?",(eid,));audit(db,u['id'],'Gmail review item marked reviewed','integration_events',eid)
         return {'ok':True}
 
@@ -348,7 +436,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             s=one(db,'SELECT * FROM oauth_states WHERE state_hash=? AND provider=? AND used_at IS NULL AND expires_at>?',(stamp_hash(state),provider,now()))
             if not s:raise HTTPException(401,'Connection request expired or was already used.')
             raw=request.cookies.get('crownops_session','')
-            staff=one(db,"SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.active=1 AND u.role='owner'",(stamp_hash(raw),now()))
+            staff=one(db,"SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.active=1 AND u.role IN ('owner','manager')",(stamp_hash(raw),now()))
             if not staff or staff['user_id']!=s['user_id']:raise HTTPException(403,'Sign in as the manager who started the connection.')
             db.execute('UPDATE oauth_states SET used_at=? WHERE state_hash=?',(now(),stamp_hash(state)))
         cid=os.getenv(cfg['prefix']+'_CLIENT_ID','');cs=os.getenv(cfg['prefix']+'_CLIENT_SECRET','');body={'grant_type':'authorization_code','code':code,'redirect_uri':public_url+'/api/oauth/'+provider+'/callback'}
@@ -376,7 +464,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
 
     @app.post('/api/invoices/{iid}/quickbooks')
     def sync_invoice(iid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'});quickbooks_gate()
+        require_role(u,{'owner','manager','accounting'});quickbooks_gate()
         if data.get('confirmed',data.get('confirm')) is not True:raise HTTPException(422,'Confirm the accounting write after reviewing mappings and totals.')
         with transaction(path) as db:
             inv,calc=invoice_current(db,iid)
@@ -412,7 +500,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         token=os.getenv('SQUARE_ACCESS_TOKEN','');loc=os.getenv('SQUARE_LOCATION_ID','')
         if not token or not loc:raise HTTPException(503,'Square is not configured.')
         with transaction(path) as db:
-            inv,calc=invoice_current(db,iid);assigned(db,inv['job_id'],u)
+            inv,calc=invoice_current(db,iid);invoice_job(db,inv['job_id'],u)
             if inv['status']!='Issued':raise HTTPException(409,'Finalize the invoice before requesting payment.')
             issued_doc=json.loads(one(db,'SELECT document_json FROM invoice_revisions WHERE invoice_id=? AND revision=?',(iid,inv['revision']))['document_json'])
             if os.getenv('SQUARE_ENV','sandbox')!='sandbox' and issued_doc.get('test_mode',True):raise HTTPException(409,'A test invoice cannot create a production card charge.')

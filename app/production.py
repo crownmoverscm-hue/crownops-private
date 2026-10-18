@@ -52,8 +52,8 @@ def latest_backup(path):
 def hosting_status(path, public_url, secure):
     path, uploads, backups, persisted = storage_paths(path)
     with closing(connect(path)) as db:
-        owners = db.execute("SELECT count(*) FROM users WHERE active=1 AND role='owner'").fetchone()[0]
-        protected = db.execute("SELECT count(*) FROM users u JOIN auth_factors f ON f.user_id=u.id WHERE u.active=1 AND u.role='owner' AND f.enabled=1").fetchone()[0]
+        owners = db.execute("SELECT count(*) FROM users WHERE active=1 AND role IN ('owner','manager')").fetchone()[0]
+        protected = db.execute("SELECT count(*) FROM users u JOIN auth_factors f ON f.user_id=u.id WHERE u.active=1 AND u.role IN ('owner','manager') AND f.enabled=1").fetchone()[0]
     try:
         secret_box(); encrypted = True
     except Exception:
@@ -71,7 +71,7 @@ def hosting_status(path, public_url, secure):
         {'key':'storage','label':'Persistent company storage','ready':persisted,'detail':'Database, uploads and backup paths are configured under the attached Railway volume.' if persisted else 'Verify the attached Railway volume and data paths before production.','page':''},
         {'key':'https','label':'HTTPS and secure sign-ins','ready':secure and urlparse(public_url).scheme=='https','detail':'Secure cookies and an HTTPS public address are required.','page':''},
         {'key':'encryption','label':'Server encryption key','ready':encrypted,'detail':'Keep the existing key in a separate company password vault. Its value is never shown here.','page':''},
-        {'key':'mfa','label':'Owner two-factor authentication','ready':owners>0 and protected==owners,'detail':str(protected)+' of '+str(owners)+' active owners have an authenticator enabled.','page':'account'},
+        {'key':'mfa','label':'Owner / Manager two-factor authentication','ready':owners>0 and protected==owners,'detail':str(protected)+' of '+str(owners)+' active Owners / Managers have an authenticator enabled.','page':'account'},
         {'key':'email','label':'Staff invitation and recovery emails','ready':email['available'],'detail':'Configured for '+email['mode']+'. Configuration does not prove inbox delivery.','page':'access'},
         {'key':'uploads','label':'Private upload protection','ready':not uploads_enabled() or upload_policy()['enabled'],'detail':upload_policy()['message']+' Test a real photo upload and crew access before marking the workflow verified.','page':''},
         {'key':'space','label':'Storage headroom','ready':free>=256*1024*1024,'detail':str(round(free/1024/1024))+' MB free on the database filesystem.','page':''},
@@ -85,12 +85,12 @@ def hosting_status(path, public_url, secure):
 def register_production(app, path, auth, public_url, secure):
     @app.get('/api/hosting-status')
     def status(u=Depends(auth)):
-        require_role(u,{'owner'})
+        require_role(u,{'owner','manager'})
         return hosting_status(path,public_url,secure)
 
     @app.post('/api/owner-backups')
     def create_backup(u=Depends(auth)):
-        require_role(u,{'owner'})
+        require_role(u,{'owner','manager'})
         import fcntl
         _, uploads, directory, _ = storage_paths(path)
         if directory.is_relative_to(uploads):
@@ -138,7 +138,7 @@ def register_production(app, path, auth, public_url, secure):
 
     @app.get('/api/owner-backups/{filename}')
     def download_backup(filename:str,u=Depends(auth)):
-        require_role(u,{'owner'})
+        require_role(u,{'owner','manager'})
         record = latest_backup(path)
         if filename!=record.get('filename') or not record['available']:
             raise HTTPException(404,'Verified backup not found. Create a fresh recovery copy.')

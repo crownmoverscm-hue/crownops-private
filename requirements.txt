@@ -9,3 +9,5 @@ jsonschema==4.26.0
 cryptography==46.0.4
 httpx==0.28.1
 Pillow==12.3.0
+mini-racer==0.14.1
+pillow-heif==1.8.1

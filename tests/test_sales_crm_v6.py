@@ -41,7 +41,7 @@ class SalesCrmV6Tests(unittest.TestCase):
                   '2026-10-06T21:46:00+00:00')""",
                   (json.dumps({"date":"Tue, 6 Oct 2026 14:30:00 -0400","subject":"New Quote Request"}),))
                 activity=client_latest_activity(db,"CLIENT-GMAIL-TIME")
-            self.assertEqual(activity["label"],"Quote request")
+            self.assertEqual(activity["label"],"Quote Form")
             self.assertEqual(activity["at"],"2026-10-06T18:30:00+00:00")
         finally:
             td.cleanup()
@@ -71,7 +71,7 @@ class SalesCrmV6Tests(unittest.TestCase):
                   'New Crown Movers Quote Request - Quote Client','Form body','English','sync',
                   '2026-10-06T21:46:00+00:00')""")
                 activity=client_latest_activity(db,"CLIENT-QUOTE-COPY")
-                self.assertEqual(activity["label"],"Quote request")
+                self.assertEqual(activity["label"],"Quote Form")
                 self.assertEqual(activity["source"],"Gmail")
                 self.assertEqual(activity["at"],"2026-10-06T18:30:00+00:00")
 

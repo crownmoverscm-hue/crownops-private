@@ -3,6 +3,7 @@
 'use strict';
 (function(){
   const previousFleet=X.pageRenderers.fleet;
+  let availability={items:[],can_manage:false};
 
   const num=v=>{const n=Number(v);return Number.isFinite(n)?n:null;};
   const compact=v=>{const n=num(v);if(n===null)return '—';return Number.isInteger(n)?String(n):String(Number(n.toFixed(2)));};
@@ -74,8 +75,9 @@
       const day=dateIso(d),dayJobs=sortDayJobs(jobs.filter(j=>localDay(j.start_at)===day));
       const approved=(off||[]).filter(r=>r.status==='Approved'&&r.start_date<=day&&r.end_date>=day);
       const fillers=Math.max(0,14-dayJobs.length);
-      return `<section class="weekly-day-column">
+      return `<section class="weekly-day-column ${availability.items.some(x=>x.day===day&&x.status==='Fully booked')?'day-closed':''}">
         <header class="weekly-day-head"><div><small>${h(d.toLocaleDateString('en-CA',{weekday:'short'}))}</small><strong>${d.getDate()}</strong></div><span>${dayJobs.length} job${dayJobs.length===1?'':'s'}</span></header>
+        ${availability.items.some(x=>x.day===day&&x.status==='Fully booked')?'<div class="day-closed-label">Fully booked · no new bookings</div>':''}
         ${approved.length?`<div class="weekly-off-row">${approved.map(r=>`<span>${h(r.employee_name)} OFF</span>`).join('')}</div>`:''}
         <div class="weekly-day-jobs">${dayJobs.map(j=>weeklyJobCard(j)).join('')}${Array.from({length:fillers},()=>'<div class="weekly-open-slot" aria-hidden="true"></div>').join('')}</div>
       </section>`;
@@ -96,21 +98,42 @@
     if(S.scheduleUser!==S.user.id){S.scheduleUser=S.user.id;S.jobScope=S.user.role==='crew'?'mine':'all';}
     if(!['mine','all'].includes(S.jobScope))S.jobScope=S.user.role==='crew'?'mine':'all';
     const days=weekDays(),start=dateIso(days[0]),end=dateIso(days[6]);
-    const [jobs,allOff,vehicles,identity]=await Promise.all([
+    const [jobs,allOff,vehicles,identity,daysAvailable]=await Promise.all([
       api(`/ux/final/schedule?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&scope=${S.jobScope}`),
       api('/time-off').catch(()=>[]),
       api('/vehicles').catch(()=>[]),
-      api('/schedule-identity')
+      api('/schedule-identity'),api('/schedule/availability?start='+start+'&end='+end)
     ]);
+    availability=daysAvailable;
+    const closed=availability.items.filter(x=>x.status==='Fully booked');
+    const availabilityBar='<div class="schedule-availability"><div><strong>Date availability</strong><p class="small muted">'+(closed.length?closed.map(x=>h(uxDateLabel(x.day))+': Fully booked').join(' · '):'Dates this week are open for scheduling.')+'</p></div>'+(availability.can_manage?'<button data-availability="open" class="btn-soft">Set fully booked / reopen</button>':'')+'</div>';
     const off=S.jobScope==='mine'?allOff.filter(r=>identity.id&&r.employee_id===identity.id):allOff;
     const scope=`<div class="segmented job-scope" aria-label="Schedule scope"><button type="button" data-v5="jobs-mine" class="${S.jobScope==='mine'?'selected':''}" aria-pressed="${S.jobScope==='mine'}">My Jobs</button><button type="button" data-v5="jobs-all" class="${S.jobScope==='all'?'selected':''}" aria-pressed="${S.jobScope==='all'}">All Jobs</button></div>`;
     const missingIdentity=S.jobScope==='mine'&&!identity.matched?`<div class="callout orange schedule-identity-notice"><strong>Your login is not matched to an employee yet.</strong><p class="small">An owner can add your sign-in email (${h(S.user.email)}) to the correct employee profile. My Jobs will then show that employee’s assignments. Use All Jobs in the meantime.</p><button type="button" data-page="team">Open employee directory</button></div>`:'';
     const noJobs=!jobs.length?`<div class="callout schedule-empty"><strong>${S.jobScope==='mine'?'No jobs assigned to you this week.':'No jobs scheduled this week.'}</strong><span class="small">${S.jobScope==='mine'?'Switch to All Jobs or choose another week.':'Choose another week to see more services.'}</span></div>`:'';
     const navTools=`<div class="calendar-tools weekly-tools"><div class="weekly-nav-main"><div class="weekly-nav-buttons">${btn('week-prev',icon('left'),'btn-icon')}${btn('week-today','Today')}${btn('week-next',icon('right'),'btn-icon')}</div><div class="weekly-range-label">${h(compactWeekLabel(start,end))}</div></div><div class="weekly-nav-side"><label class="weekly-jump"><span>Jump to</span><input type="date" id="calendar-jump" value="${h(start)}" aria-label="Jump to schedule date"></label><div class="weekly-capacity">${vehicles.filter(v=>v.active).length} active trucks</div></div></div>`;
     return head('Schedule',S.jobScope==='mine'?'Your assigned services, crew and trucks.':'Company services. Select a move to see its details, team and truck.',canPlanJobs()?btn('new-job',icon('plus')+'New job','btn-primary'):'')+
-      scope+missingIdentity+navTools+(S.jobScope==='mine'?noJobs+personalAgenda(jobs,off):legend(vehicles)+noJobs+weekCalendar(jobs,off,vehicles))+
+      scope+missingIdentity+navTools+availabilityBar+(S.jobScope==='mine'?noJobs+personalAgenda(jobs,off):legend(vehicles)+noJobs+weekCalendar(jobs,off,vehicles))+
       `<p class="source-warning">Example: 5–7 + 1 means 5–7 estimated service hours plus 1 transportation hour. CrownOps allows the same crew/truck on another service later that day when the time blocks do not overlap.</p>`;
   };
+
+  document.addEventListener('click',async e=>{
+    const b=e.target.closest('[data-availability]');if(!b)return;e.preventDefault();
+    if(b.dataset.availability!=='open')return;
+    showModal('Date availability','<p>Closing a date prevents new bookings and rescheduling onto that day. Existing confirmed jobs stay on the schedule. Client inquiries can still be received.</p><form id="date-availability-form"><div class="grid2">'+field('day','Service date',document.getElementById('calendar-jump')?.value||dateIso(new Date()),'date','required')+select('status','Availability',[['Fully booked','Fully booked — block new bookings'],['Open','Open — allow scheduling']],'Fully booked')+textArea('reason','Reason for the team (optional)','',3)+'</div></form>',btn('close','Cancel')+'<button form="date-availability-form" type="submit" class="btn-primary">Save availability</button>');
+  });
+  document.addEventListener('submit',async e=>{
+    const f=e.target.closest('#date-availability-form');if(!f)return;e.preventDefault();
+    const b=document.querySelector('[form="date-availability-form"]');if(b.disabled)return;b.disabled=true;
+    try{
+      const d=Object.fromEntries(new FormData(f)),result=await api('/schedule/availability?start='+d.day+'&end='+d.day),old=result.items.find(x=>x.day===d.day);
+      // Compare with the state displayed when opening the control where possible.
+      const seen=availability.items.find(x=>x.day===d.day);
+      if(d.day>=availability.start&&d.day<=availability.end&&(old?.version||0)!==(seen?.version||0))throw Error('Availability changed since this schedule opened. Reload before saving.');
+      await api('/schedule/availability/'+d.day,{method:'PUT',data:{status:d.status,version:old?.version||0,reason:d.reason}});
+      modal.close();toast(d.status==='Fully booked'?'Date marked fully booked.':'Date reopened.');await navigate('schedule');
+    }catch(ex){toast(ex.message);}finally{if(b.isConnected)b.disabled=false;}
+  });
 
   // Fleet page: make truck name + schedule colour easy to manage.
   X.pageRenderers.fleet=async()=>{
@@ -142,5 +165,5 @@
   });
 
   const oldShell=shell;
-  shell=function(){oldShell();const strip=document.getElementById('pilot-strip');if(strip)strip.innerHTML=`${icon('shield')}<span>CrownOps live build. Gmail inquiry sync is read-only. Outbound email, QuickBooks production writes and card payments remain separately controlled.</span>`;};
+  shell=function(){oldShell();const strip=document.getElementById('pilot-strip');if(strip){strip.hidden=S.mode==='production'&&!demo();strip.innerHTML=`${icon('shield')}<span>${demo()?'Interactive preview — fictional records. Nothing is sent.':'Test workspace — use fictional records and reviewed test recipients.'}</span>`;}};
 })();

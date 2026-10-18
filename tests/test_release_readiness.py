@@ -604,7 +604,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             self.assertEqual(clients[0]["latest_activity"]["source"],"Gmail / UniFi")
             self.assertIn("New Voicemail",clients[0]["latest_activity"]["summary"])
             self.assertEqual(clients[1]["id"],"CLIENT-FORM")
-            self.assertEqual(clients[1]["latest_activity"]["label"],"Quote request")
+            self.assertEqual(clients[1]["latest_activity"]["label"],"Quote Form")
 
     def test_existing_gmail_voicemail_review_item_promotes_into_sales_locally(self):
         with tempfile.TemporaryDirectory() as td:
@@ -644,7 +644,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 task=one(db,"SELECT * FROM tasks WHERE lead_id='LEAD-GMAIL-VOICE' AND title='Review voicemail' AND status='Open'")
                 self.assertIsNotNone(task)
 
-    def test_launch_simulation_long_distance_quote_to_dispatch_and_invoice_draft(self):
+    def test_launch_simulation_sales_booking_manager_dispatch_crew_invoice_payment_and_qbo(self):
         with tempfile.TemporaryDirectory() as td:
             db_path=Path(td)/"crownops.sqlite3"
             app=create_app(db_path)
@@ -657,7 +657,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             service_date=datetime.now(timezone.utc).date().isoformat()
 
             with transaction(db_path) as db:
-                insert(db,"users",dict(id="USER-OWNER",email="owner@example.invalid",name="Owner",role="owner",
+                insert(db,"users",dict(id="USER-OWNER",email="manager@example.invalid",name="Manager",role="manager",employee_id="DRV-LAUNCH",
                     password_hash="unused-test-hash",active=1,created_at=now()))
                 insert(db,"sessions",dict(token_hash=sha(staff_token),user_id="USER-OWNER",csrf=staff_csrf,expires_at=expiry))
                 insert(db,"pricing_versions",dict(id="PRICE-LAUNCH",label="Launch test",rates_json="{}",settings_json="{}",approved=1,
@@ -666,6 +666,9 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                     approved_by="USER-OWNER",note="Launch simulation",created_at=now()))
                 for eid,name,verified in (("DRV-LAUNCH","Driver Launch",1),("MOV-2","Mover Two",0),("MOV-3","Mover Three",0)):
                     insert(db,"employees",dict(id=eid,name=name,role="Mover",active=1,driver_verified=verified,hourly_cents=2500))
+                for user_id,role,employee_id in (("USER-SALES","sales",None),("USER-CREW","crew","MOV-2")):
+                    insert(db,"users",dict(id=user_id,email=user_id.lower()+"@example.invalid",name=role.title(),role=role,employee_id=employee_id,password_hash="unused",active=1,created_at=now()))
+                    insert(db,"sessions",dict(token_hash=sha(user_id),user_id=user_id,csrf="launch-csrf",expires_at=expiry))
                 insert(db,"vehicles",dict(id="TRUCK-LAUNCH",name="Launch Truck",active=1))
                 insert(db,"fleet_profiles",dict(vehicle_id="TRUCK-LAUNCH",gvwr_kg=7000,inspection_interval_hours=24,
                     check_required=0,updated_at=now()))
@@ -682,6 +685,11 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             staff=TestClient(app)
             staff.cookies.set("crownops_session",staff_token)
             sh={"x-csrf-token":staff_csrf}
+            sales=TestClient(app);self.addCleanup(sales.close)
+            sales.cookies.set("crownops_session","USER-SALES");sales.headers["x-csrf-token"]="launch-csrf"
+            crew=TestClient(app);self.addCleanup(crew.close)
+            crew.cookies.set("crownops_session","USER-CREW");crew.headers["x-csrf-token"]="launch-csrf"
+
 
             readiness=staff.get("/api/readiness")
             self.assertEqual(readiness.status_code,200,readiness.text)
@@ -690,11 +698,11 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             self.assertEqual(readiness.json()["launch"]["missing_gvwr"],[])
             self.assertFalse(readiness.json()["launch"]["critical_ready"])  # test mode: Gmail/live actions intentionally off
 
-            r=staff.post("/api/crm/clients",headers=sh,json={"client_name":"Launch Toronto Client",
+            r=sales.post("/api/crm/clients",json={"client_name":"Launch Toronto Client",
                 "email":"launch-client@example.invalid","phone":"514-555-0142","language":"English"})
             self.assertEqual(r.status_code,200,r.text);cid=r.json()["id"]
 
-            r=staff.post(f"/api/crm/clients/{cid}/services",headers=sh,json={"service_type":"Long Distance",
+            r=sales.post(f"/api/crm/clients/{cid}/services",json={"service_type":"Long Distance",
                 "move_date":service_date,"pickup":"700 Rue Hodge, Saint-Laurent, QC",
                 "dropoff":"Toronto, ON","home_size":"2 bedroom","boxes":"40","inventory":"Launch simulation inventory"})
             self.assertEqual(r.status_code,200,r.text);lid=r.json()["lead_id"]
@@ -704,7 +712,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 "hours_low":4,"hours_high":5,"minimum_hours":3,"deposit_required":300,
                 "transport_hours":12,"distance_km":1082,"distance_rate":0.94,"materials":[],
                 "other_amount":0,"discount_amount":0}
-            r=staff.post("/api/crm/quotes",headers=sh,json=quote_data)
+            r=sales.post("/api/crm/quotes",json=quote_data)
             self.assertEqual(r.status_code,200,r.text);q=r.json();qid=q["id"]
             self.assertEqual(q["result"]["transport_cents"],241500)
             self.assertEqual(q["result"]["fuel_cents"],106793)
@@ -712,7 +720,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
 
             # Finalize prepares portal/email artifacts. QBO is requested deliberately while writes are disabled:
             # it must fail safely without poisoning a future retry operation.
-            r=staff.post(f"/api/crm/quotes/{qid}/finalize",headers=sh,json={"send_now":False,"sync_quickbooks":True})
+            r=sales.post(f"/api/crm/quotes/{qid}/finalize",json={"send_now":False,"sync_quickbooks":True})
             self.assertEqual(r.status_code,200,r.text)
             self.assertEqual(r.json()["quote_status"],"Approved")
             self.assertTrue(r.json()["quickbooks_error"])
@@ -755,7 +763,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             r=staff.patch(f"/api/jobs/{jid}",headers=sh,json={"version":job["version"],"status":"In progress"})
             self.assertEqual(r.status_code,200,r.text)
 
-            r=staff.post(f"/api/jobs/{jid}/invoice-from-quote",headers=sh,json={})
+            r=crew.post(f"/api/jobs/{jid}/invoice-from-quote",json={})
             self.assertEqual(r.status_code,200,r.text);iid=r.json()["id"]
             with connect(db_path) as db:
                 inv=db.execute("SELECT status,terms_json FROM job_invoices WHERE id=?",(iid,)).fetchone()
@@ -767,6 +775,51 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 self.assertEqual(quote["status"],"Accepted")
                 self.assertEqual(jobrow["status"],"In progress")
                 self.assertIn("Long Distance",db.execute("SELECT phase FROM jobs WHERE id=?",(jid,)).fetchone()["phase"])
+
+            # Managers stay linked to their employee while retaining full company access.
+            mine=staff.get("/api/ux/final/schedule?scope=mine").json()
+            self.assertIn(jid,[x["id"] for x in mine])
+            mine=crew.get("/api/ux/final/schedule?scope=mine").json()
+            self.assertIn(jid,[x["id"] for x in mine])
+            job=next(x for x in staff.get("/api/jobs").json() if x["id"]==jid)
+            r=crew.patch(f"/api/jobs/{jid}",json={"version":job["version"],"status":"Completed"})
+            self.assertEqual(r.status_code,200,r.text)
+            inv=crew.get(f"/api/invoices/{iid}").json()
+            r=crew.patch(f"/api/invoices/{iid}",json={"version":inv["version"],"service_hours":4.5,"quantities":{},"notes":"Controlled launch test","reason":"Actual completed service"})
+            self.assertEqual(r.status_code,200,r.text)
+            version=r.json()["version"]
+            # The unambiguous verified booking deposit is applied automatically.
+            self.assertEqual(r.json()["calculation"]["deposit_cents"],30000)
+            r=crew.post(f"/api/invoices/{iid}/issue",json={"version":version,"confirmed":True})
+            self.assertEqual(r.status_code,200,r.text)
+            inv=crew.get(f"/api/invoices/{iid}").json();total=inv["calculation"]["total_cents"]
+            self.assertEqual(inv["calculation"]["deposit_cents"],30000)
+            with patch.dict(os.environ,{"CROWNOPS_ALLOW_EXTERNAL":"1","CROWNOPS_TEST_EMAIL_ALLOWLIST":"launch-client@example.invalid"}),patch("app.providers.send_gmail",return_value="mock-launch-mail") as send:
+                r=crew.post(f"/api/invoices/{iid}/deliver",json={"confirm":True})
+                self.assertEqual(r.status_code,200,r.text);self.assertTrue(r.json()["sent"]);self.assertEqual(send.call_count,1)
+            balance=inv["calculation"]["balance_cents"]
+            r=crew.post(f"/api/invoices/{iid}/collect",json={"amount":balance/100,"method":"Interac","reference":"TEST-FINAL-LAUNCH","request_id":"launch-final-payment-0001"})
+            self.assertEqual(r.status_code,200,r.text);receipt=r.json();final_pid=receipt["payment_id"]
+            self.assertEqual(crew.get(f"/api/invoices/{iid}").json()["calculation"]["balance_cents"],balance)
+            self.assertEqual(crew.post(f"/api/collections/{receipt['id']}/verify",json={"evidence":"Not authorized"}).status_code,403)
+            r=staff.post(f"/api/collections/{receipt['id']}/verify",headers=sh,json={"evidence":"Controlled test bank reconciliation"})
+            self.assertEqual(r.status_code,200,r.text)
+            self.assertEqual(crew.get(f"/api/invoices/{iid}").json()["calculation"]["balance_cents"],0)
+            # Mock provider transport only: exercise real routes, payloads, reservations and deduplication.
+            with patch.dict(os.environ,{"CROWNOPS_ALLOW_QBO_SANDBOX_WRITES":"1"}),patch("app.providers.qbo_customer",return_value="101"),patch("app.providers.qbo_call",return_value={"Invoice":{"Id":"102","SyncToken":"0","TotalAmt":total/100}}) as export:
+                r=staff.post(f"/api/invoices/{iid}/quickbooks",headers=sh,json={"confirm":True})
+                self.assertEqual(r.status_code,200,r.text);self.assertTrue(r.json()["amount_matches"])
+                r=staff.post(f"/api/invoices/{iid}/quickbooks",headers=sh,json={"confirm":True})
+                self.assertTrue(r.json()["already_synced"]);self.assertEqual(export.call_count,1)
+            with connect(db_path) as db:
+                pid=one(db,"SELECT p.id FROM payments p JOIN invoice_payment_allocations a ON a.payment_id=p.id WHERE a.invoice_id=? AND p.purpose='Deposit'",(iid,))["id"]
+            for payment_id in (pid,final_pid):
+                with patch.dict(os.environ,{"CROWNOPS_ALLOW_QBO_SANDBOX_WRITES":"1"}),patch("app.extensions.qbo_customer",return_value="101"),patch("app.extensions.qbo_call",return_value={"Payment":{"Id":"QBO-"+payment_id,"SyncToken":"0"}}) as export:
+                    r=staff.post(f"/api/payments/{payment_id}/quickbooks",headers=sh,json={"confirm":True})
+                    self.assertEqual(r.status_code,200,r.text);self.assertFalse(r.json()["money_moved"])
+                    self.assertEqual(export.call_args.args[3]["Line"][0]["LinkedTxn"][0]["TxnId"],"102")
+                    r=staff.post(f"/api/payments/{payment_id}/quickbooks",headers=sh,json={"confirm":True})
+                    self.assertTrue(r.json()["duplicate"]);self.assertEqual(export.call_count,1)
 
     def test_read_only_qbo_call_does_not_need_global_external_switch(self):
         response = Mock()

@@ -10,7 +10,7 @@ from fastapi import Depends, HTTPException
 from .job_routes import job_route
 from .staff_records import schedule_identity
 from .store import connect, rows, one
-from .platform_common import require_role, OFFICE, invoice_current
+from .platform_common import require_role, OFFICE, invoice_current, staff_project_attachments
 from .ux_features import _job_readiness, _local_date
 
 STAFF = OFFICE | {'crew'}
@@ -76,6 +76,7 @@ def _quote_summary(db, j):
         'service_low': result.get('service_low'), 'service_high': result.get('service_high'),
         'hourly_rate_cents': result.get('hourly_rate_cents'), 'minimum_hours': result.get('minimum_hours'),
         'transport_hours': result.get('transport_hours'), 'transport_cents': result.get('transport_cents'),
+        'transport_mode': inputs.get('transport_mode'), 'fixed_transport': inputs.get('fixed_transport'),
         'fuel_cents': result.get('fuel_cents'), 'discount_cents': result.get('discount_cents', 0),
         'low_cents': result.get('low_cents'), 'high_cents': result.get('high_cents'),
         'deposit_required_cents': round(float(inputs.get('deposit_required', 300) or 0) * 100),
@@ -107,7 +108,7 @@ def register_final_features(app, path, auth):
             quote = _quote_summary(db, j)
             inv = one(db, 'SELECT id,number,status,revision,updated_at FROM job_invoices WHERE job_id=?', (jid,))
             pay = _payment_summary(db, j['lead_id'], inv['id'] if inv else None, quote['deposit_required_cents'] if quote else 0)
-            files = rows(db, "SELECT id,original_name,category,mime,scan_status,created_at FROM attachments WHERE lead_id=? AND deleted_at IS NULL ORDER BY created_at DESC", (j['lead_id'],))
+            files = staff_project_attachments(db, j['lead_id'], u)
             images = [f for f in files if str(f.get('mime') or '').startswith('image/')]
             services = rows(db, 'SELECT id,title,phase,start_at,end_at,status,quote_id FROM jobs WHERE lead_id=? ORDER BY start_at', (j['lead_id'],))
             timeline = []
@@ -165,10 +166,10 @@ def register_final_features(app, path, auth):
                 inv=one(db,'SELECT id,number,status FROM job_invoices WHERE job_id=?',(j['id'],))
                 pay=_payment_summary(db,j['lead_id'],inv['id'] if inv else None,q['deposit_required_cents'] if q else 0)
                 lead=one(db,'SELECT client_name,pickup,dropoff,phone,email FROM leads WHERE id=?',(j['lead_id'],)) or {}
-                photos=one(db,"SELECT count(*) n FROM attachments WHERE lead_id=? AND deleted_at IS NULL AND mime LIKE 'image/%'",(j['lead_id'],))
+                photos=sum(str(f.get('mime') or '').startswith('image/') for f in staff_project_attachments(db,j['lead_id'],u))
                 result.append({
                     'id':j['id'],'lead_id':j['lead_id'],'title':j['title'],'phase':j['phase'],'start_at':j['start_at'],'end_at':j['end_at'],'status':j['status'],
-                    'client':lead,'crew':crew,'trucks':trucks,'quote':q,'invoice':inv,'payments':pay,'readiness':_job_readiness(db,j),'photo_count':int((photos or {}).get('n') or 0),'assigned_to_me':is_mine
+                    'client':lead,'crew':crew,'trucks':trucks,'quote':q,'invoice':inv,'payments':pay,'readiness':_job_readiness(db,j),'photo_count':photos,'assigned_to_me':is_mine
                 })
             return result
 

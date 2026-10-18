@@ -3,6 +3,7 @@ from contextlib import closing
 from decimal import Decimal
 import json,os,requests
 from fastapi import HTTPException
+from .client_communications import pending_scope_changes,quote_scope_current
 from .store import connect,transaction,rows,one,insert,audit,now,uid
 from .platform_common import square_deposit_gate,add_task
 from .pricing import cents
@@ -23,9 +24,12 @@ def create_deposit_checkout(path,qid,lid,actor):
         if not q:raise HTTPException(409,'Accept the reviewed estimate before paying its deposit.')
         l=one(db,'SELECT * FROM leads WHERE id=?',(lid,))
         if not l:raise HTTPException(404,'Client project not found.')
+        from .availability import assert_day_open
+        existing_booking=one(db,"SELECT id FROM jobs WHERE quote_id=? AND status IN ('Confirmed','In progress','Completed')",(qid,))
+        if not existing_booking:assert_day_open(db,json.loads(q['inputs_json']).get('move_date') or l.get('move_date',''))
         env=square_deposit_gate(l['email'])
         if env=='production' and (lid.startswith('DEMO-') or l['email'].endswith('.invalid')):raise HTTPException(409,'Fictional clients cannot create production card deposits.')
-        if l['version']!=q['lead_version'] or one(db,"SELECT id FROM client_changes WHERE lead_id=? AND status='Pending'",(lid,)):raise HTTPException(409,'Ask Crown to review the latest changes before paying.')
+        if not quote_scope_current(db,q,l) or pending_scope_changes(db,lid):raise HTTPException(409,'Ask Crown to review the latest changes before paying.')
         balance=deposit_state(db,lid,q)
         if balance['pending_cents']:raise HTTPException(409,'A deposit has already been recorded and is awaiting verification. Do not pay again.')
         if not balance['due_cents']:raise HTTPException(409,'No deposit is outstanding.')
@@ -63,8 +67,12 @@ def record_deposit_callback(db,p,event_id):
     confirmed=False;job_id=None
     if q and lead and state['due_cents']<=0:
         from .sales_crm_v6 import confirm_job
-        job=confirm_job(db,q,lead,'square-webhook','Verified card deposit')
-        confirmed=True;job_id=job['id']
+        try:
+            job=confirm_job(db,q,lead,'square-webhook','Verified card deposit')
+            confirmed=True;job_id=job['id']
+        except HTTPException as ex:
+            if ex.status_code!=409:raise
+            add_task(db,lead['id'],'URGENT: deposit received; date unavailable — arrange reschedule or refund',key='date-conflict:'+pid)
     else:
         add_task(db,link['lead_id'],'Deposit received: verify remaining balance / booking status',key='deposit:'+pid)
     audit(db,'square-webhook','Verified deposit recorded','payments',pid,{'amount_cents':money['amount'],'booking_confirmed':confirmed,'job_id':job_id})

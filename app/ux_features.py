@@ -21,7 +21,7 @@ from .crm_backlog import callback_backlog_preview, archive_callbacks, restore_ca
 from .employee_contacts import register_employee_contacts, PAY_PENDING
 
 TORONTO=ZoneInfo('America/Toronto')
-PRIVATE_HR={'owner'}
+PRIVATE_HR={'owner','manager'}
 
 
 def _local_date(value):
@@ -207,7 +207,7 @@ def _sync_client_owner(db,lead_id,target_id,actor,reason,strict=False):
         inbox_conflict=one(db,"""SELECT c.message_id,c.claimed_by FROM inbox_claims c JOIN messages m ON m.id=c.message_id
           WHERE m.lead_id=? AND c.resolved_at IS NULL AND c.claimed_by!=? LIMIT 1""",(lead_id,target_id))
         if inbox_conflict:raise HTTPException(409,'An unanswered client email is already claimed by another team member.')
-    db.execute('UPDATE leads SET assigned_to=?,version=version+1,updated_at=? WHERE id=?',(target_id,now(),lead_id))
+    db.execute('UPDATE leads SET assigned_to=?,updated_at=? WHERE id=?',(target_id,now(),lead_id))
     db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND historical=0",(target_id,lead_id))
     open_mail=rows(db,"""SELECT m.id,c.message_id,c.resolved_at FROM messages m
       LEFT JOIN inbox_claims c ON c.message_id=m.id
@@ -409,7 +409,7 @@ def register_ux_features(app,path,auth):
     def action_assignees(u=Depends(auth)):
         require_role(u,OFFICE)
         with closing(connect(path)) as db:
-            return rows(db,"SELECT id,name,email,role FROM users WHERE active=1 AND role IN ('owner','sales','dispatch','accounting') ORDER BY name")
+            return rows(db,"SELECT id,name,email,role FROM users WHERE active=1 AND role IN ('owner','manager','sales','dispatch','accounting') ORDER BY name")
 
     @app.post('/api/ux/actions/{kind}/{action_id}/claim')
     def action_claim(kind:str,action_id:str,u=Depends(auth)):
@@ -438,7 +438,7 @@ def register_ux_features(app,path,auth):
 
     @app.post('/api/ux/actions/{kind}/{action_id}/outcome')
     def action_outcome(kind:str,action_id:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','sales','dispatch'})
+        require_role(u,{'owner','manager','sales','dispatch'})
         outcome=str(data.get('outcome') or '').strip().lower()
         allowed={'done','waiting','followup','quote_sent','lost'}
         if outcome not in allowed:raise HTTPException(422,'Choose a valid action outcome.')
@@ -485,9 +485,9 @@ def register_ux_features(app,path,auth):
                   due_date=followup_date,owner=owner,status='Open',historical=0,raw_json='{}',created_at=now()))
             _complete_source_action(db,ref,u['id'])
             if outcome=='waiting':
-                db.execute("UPDATE leads SET stage='Waiting on client',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
+                db.execute("UPDATE leads SET stage='Waiting on client',updated_at=? WHERE id=?",(now(),lead['id']))
             elif outcome=='quote_sent':
-                db.execute("UPDATE leads SET stage='Quote Sent',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
+                db.execute("UPDATE leads SET stage='Quote Sent',updated_at=? WHERE id=?",(now(),lead['id']))
             elif outcome=='lost':
                 db.execute("UPDATE leads SET stage='Lost',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
                 db.execute("UPDATE tasks SET status='Done' WHERE lead_id=? AND status!='Done' AND historical=0",(lead['id'],))
@@ -559,7 +559,7 @@ def register_ux_features(app,path,auth):
 
     @app.post('/api/ux/jobs/{jid}/crew-hours')
     def crew_hours_save(jid:str,data:dict,u=Depends(auth)):
-        manager=u['role'] in {'owner','accounting','dispatch'}
+        manager=u['role'] in {'owner','manager','accounting','dispatch'}
         with closing(connect(path)) as checkdb:
             is_lead=bool(u['role']=='crew' and u.get('employee_id') and one(checkdb,'SELECT team_lead FROM employee_directory_profiles WHERE employee_id=? AND team_lead=1',(u['employee_id'],)))
         if not manager and not is_lead:raise HTTPException(403,'Only managers or assigned Team Leads can submit team hours.')
@@ -716,11 +716,11 @@ def register_ux_features(app,path,auth):
             r={'employee_id':e['id'],'employee_name':e['name'],'jobs':len({x['job_id'] for x in d}),'hours':hours,'pending_entries':pending,'status':'Ready' if d and not pending else ('Needs review' if d else 'No hours'),'details':d}
             if can_view_pay(u,e['id']):r.update({'hourly_cents':e['hourly_cents'],'gross_cents':round(hours*e['hourly_cents']),'pay_rate_pending':bool(json.loads(e['raw_json']).get(PAY_PENDING))})
             out.append(r)
-        return {'start':start_d.isoformat(),'end':end_d.isoformat(),'private':private,'can_manage_hours':u['role'] in {'owner','accounting'},'employees':out,'total_hours':round(sum(x['hours'] for x in out),2)}
+        return {'start':start_d.isoformat(),'end':end_d.isoformat(),'private':private,'can_manage_hours':u['role'] in {'owner','manager','accounting'},'employees':out,'total_hours':round(sum(x['hours'] for x in out),2)}
 
     @app.post('/api/ux/payroll-summary/approve')
     def payroll_approve(data:dict,u=Depends(auth)):
-        if u['role'] not in {'owner','accounting'}:raise HTTPException(403,'Only payroll managers can approve hours.')
+        if u['role'] not in {'owner','manager','accounting'}:raise HTTPException(403,'Only payroll managers can approve hours.')
         start=_date_arg(data.get('start'),'start date').isoformat();end=_date_arg(data.get('end'),'end date').isoformat()
         with transaction(path) as db:
             items=rows(db,"SELECT t.id,j.start_at FROM times t JOIN jobs j ON j.id=t.job_id WHERE t.status!='Approved' AND j.status!='Cancelled'")
@@ -732,7 +732,7 @@ def register_ux_features(app,path,auth):
 
     @app.patch('/api/ux/payroll-time/{tid}')
     def payroll_time_edit(tid:str,data:dict,u=Depends(auth)):
-        if u['role'] not in {'owner','accounting'}:raise HTTPException(403,'Only payroll managers can correct payroll hours.')
+        if u['role'] not in {'owner','manager','accounting'}:raise HTTPException(403,'Only payroll managers can correct payroll hours.')
         try:hours=float(data.get('hours'))
         except Exception:raise HTTPException(422,'Enter valid total hours.')
         if hours<0 or hours>24 or round(hours*60)!=hours*60:raise HTTPException(422,'Hours must resolve to whole minutes.')
@@ -794,7 +794,7 @@ def register_ux_features(app,path,auth):
     def company_comms_update(data:dict,u=Depends(auth)):
         require_role(u,MANAGERS)
         connected=text(data.get('connected_mailbox',''),'Connected mailbox',240).lower();send_as=text(data.get('send_as',''),'Send-as address',240).lower();reply_to=text(data.get('reply_to',''),'Reply-to address',240).lower()
-        if '@' not in connected or '@' not in send_as or '@' not in reply_to:raise HTTPException(422,'Enter valid company email addresses.')
-        cfg={'connected_mailbox':connected,'send_as':send_as,'reply_to':reply_to,'default_from':send_as,'secondary_inbox':connected,'client_email_rule':'Store mail in the connected Gmail mailbox and send as the Crown Movers domain alias after Google verifies the alias.','approved':bool(data.get('approved')),'note':text(data.get('note',''),'Note',2000)}
+        if any(not __import__('re').fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email) for email in (connected,send_as,reply_to)):raise HTTPException(422,'Enter valid company email addresses.')
+        cfg={'connected_mailbox':connected,'send_as':send_as,'reply_to':reply_to,'default_from':send_as,'secondary_inbox':connected,'client_email_rule':'Store mail in the connected Gmail mailbox and send as the Crown Movers domain alias after Google verifies the alias.','approved':data.get('approved') is True,'note':text(data.get('note',''),'Note',2000)}
         with transaction(path) as db:put_setting(db,'company_communications',cfg);audit(db,u['id'],'Company communication defaults updated','settings','company_communications')
         return cfg

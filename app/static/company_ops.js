@@ -12,9 +12,9 @@
  ensureNav(['launch','shield','Launch checklist']);
  const fleetNav=nav.find(x=>x[0]==='fleet');if(fleetNav)fleetNav[2]='Fleet';
  const priorAllowed=allowedPages;
- allowedPages=function(){let pages=[...priorAllowed(),'contacts'];if(S.user.role!=='owner')pages=pages.filter(k=>k!=='launch');if(S.user.role==='crew')pages=pages.filter(k=>k!=='fleet');return [...new Set(pages)];};
+ allowedPages=function(){let pages=[...priorAllowed(),'contacts'];if(!['owner','manager'].includes(S.user.role))pages=pages.filter(k=>k!=='launch');if(S.user.role==='crew')pages=pages.filter(k=>k!=='fleet');return [...new Set(pages)];};
  const priorGroups=uxGroups;
- uxGroups=function(){const groups=priorGroups();const target=groups.find(x=>x[0]===(S.user.role==='crew'?'FIELD WORK':'TEAM'));if(target&&!target[1].includes('contacts'))target[1].push('contacts');const company=groups.find(x=>x[0]==='COMPANY');if(company&&S.user.role==='owner'&&!company[1].includes('launch'))company[1].unshift('launch');return groups;};
+ uxGroups=function(){const groups=priorGroups();const target=groups.find(x=>x[0]===(S.user.role==='crew'?'FIELD WORK':'TEAM'));if(target&&!target[1].includes('contacts'))target[1].push('contacts');const company=groups.find(x=>x[0]==='COMPANY');if(company&&['owner','manager'].includes(S.user.role)&&!company[1].includes('launch'))company[1].unshift('launch');return groups;};
 
  function contactCards(){
   const query=C.search.trim().toLocaleLowerCase(),digits=query.replace(/\D/g,'');

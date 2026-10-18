@@ -5,18 +5,23 @@ import warnings
 def convert(source,target):
     import resource
     resource.setrlimit(resource.RLIMIT_AS,(512*1024*1024,512*1024*1024))
-    resource.setrlimit(resource.RLIMIT_CPU,(15,15))
+    resource.setrlimit(resource.RLIMIT_CPU,(25,25))
     resource.setrlimit(resource.RLIMIT_FSIZE,(2*1024*1024,2*1024*1024))
     resource.setrlimit(resource.RLIMIT_NOFILE,(32,32))
     from PIL import Image, ImageOps
-    Image.MAX_IMAGE_PIXELS=24_000_000
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    formats=('JPEG','PNG','WEBP','HEIF')
+    Image.MAX_IMAGE_PIXELS=64_000_000
     warnings.simplefilter('error',Image.DecompressionBombWarning)
-    with Image.open(source,formats=('JPEG','PNG','WEBP')) as image:
-        if image.width*image.height>24_000_000 or getattr(image,'n_frames',1)!=1:raise ValueError('Unsupported image dimensions or animation')
+    with Image.open(source,formats=formats) as image:
+        if image.width*image.height>64_000_000:raise ValueError('Photo exceeds 64 megapixels')
+        if image.format!='HEIF' and getattr(image,'n_frames',1)!=1:raise ValueError('Unsupported animation')
         image.verify()
-    with Image.open(source,formats=('JPEG','PNG','WEBP')) as image:
-        image.load();oriented=ImageOps.exif_transpose(image)
-        oriented.thumbnail((2048,2048),Image.Resampling.LANCZOS)
+    with Image.open(source,formats=formats) as image:
+        image.draft('RGB',(2048,2048))
+        image.thumbnail((2048,2048),Image.Resampling.LANCZOS)
+        oriented=ImageOps.exif_transpose(image)
         # A fresh canvas prevents EXIF, GPS, comments, profiles and appended bytes being retained.
         clean=Image.new('RGB',oriented.size,'white')
         if oriented.mode in ('RGBA','LA') or 'transparency' in oriented.info:

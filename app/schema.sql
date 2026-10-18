@@ -1,7 +1,7 @@
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (
  id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL COLLATE NOCASE, name TEXT NOT NULL,
- role TEXT NOT NULL CHECK(role IN ('owner','sales','dispatch','crew','accounting')),
+ role TEXT NOT NULL CHECK(role IN ('owner','manager','sales','dispatch','crew','accounting')),
  password_hash TEXT NOT NULL, employee_id TEXT, active INTEGER NOT NULL DEFAULT 1,
  created_at TEXT NOT NULL
 );

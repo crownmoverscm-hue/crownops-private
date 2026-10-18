@@ -207,7 +207,7 @@ def register_operations(app,path,auth):
 
     @app.post('/api/jobs/{jid}/hos-verification')
     def save_hos_verification(jid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','dispatch'})
+        require_role(u,{'owner','manager','dispatch'})
         with transaction(path) as db:
             status=hos_dispatch_status(db,jid);j=status.get('job')
             if not j:raise HTTPException(404,'Job not found.')
@@ -373,7 +373,7 @@ def register_operations(app,path,auth):
 
     @app.post('/api/fleet/{vid}/documents')
     async def upload_fleet_document(vid:str,file:UploadFile=File(...),category:str=Form('Registration'),u=Depends(auth)):
-        require_role(u,{'owner','dispatch'})
+        require_role(u,{'owner','manager','dispatch'})
         return await save_fleet_doc(file,vid,category,u['id'])
 
     @app.get('/api/fleet-documents/{fid}')
@@ -400,7 +400,7 @@ def register_operations(app,path,auth):
 
     @app.put('/api/fleet/{vid}/profile')
     def fleet_profile(vid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','dispatch'})
+        require_role(u,{'owner','manager','dispatch'})
         allowed={'plate','vin','model','payload_kg','gvwr_kg','cargo_length_ft','odometer_km','next_service_km','next_service_date','inspection_due','inspection_interval_hours','check_required'}
         if set(data)-allowed:raise HTTPException(422,'Unknown vehicle fields.')
         with transaction(path) as db:
@@ -426,12 +426,13 @@ def register_operations(app,path,auth):
 
     @app.post('/api/fleet/{vid}/inspection')
     def inspection(vid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','dispatch','crew'})
+        require_role(u,{'owner','manager','dispatch','crew'})
         checklist=data.get('checklist',{})
         keys={'tires','lights','brakes','fluids','body','dollies_3','straps_2','blankets','paperwork','locked'}
         if not isinstance(checklist,dict) or set(checklist)!=keys or any(not isinstance(v,bool) for v in checklist.values()):raise HTTPException(422,'Complete every truck and equipment check.')
         severity=data.get('severity')
         if severity not in ('None','Minor','Major'):raise HTTPException(422,'Choose a defect classification.')
+        if severity=='None' and not all(checklist.values()):raise HTTPException(422,'Classify the defect or missing equipment before submitting an incomplete truck check.')
         notes=text(data.get('notes',''),'Inspection notes',5000)
         if (severity!='None' or not all(checklist.values())) and not notes:raise HTTPException(422,'Describe defects or missing equipment.')
         try:odo=float(number(data.get('odometer_km'),'Odometer',0,10000000))
@@ -441,6 +442,7 @@ def register_operations(app,path,auth):
             jid=data.get('job_id') or None
             if u['role']=='crew':
                 assigned(db,jid,u)
+                if not one(db,"SELECT job_id FROM assignments WHERE job_id=? AND resource_type='employee' AND resource_id=?",(jid,u.get('employee_id') or '')):raise HTTPException(403,'You must be assigned to this job to check its truck.')
                 if not one(db,"SELECT job_id FROM assignments WHERE job_id=? AND resource_type='vehicle' AND resource_id=?",(jid,vid)):raise HTTPException(403,'Truck is not assigned to this job.')
             elif jid:assigned(db,jid,u)
             p=one(db,'SELECT * FROM fleet_profiles WHERE vehicle_id=?',(vid,))
@@ -468,7 +470,7 @@ def register_operations(app,path,auth):
 
     @app.post('/api/fleet/{vid}/maintenance')
     def maintenance(vid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','dispatch'})
+        require_role(u,{'owner','manager','dispatch'})
         title=text(data.get('title',''),'Work order',200)
         if not title:raise HTTPException(422,'Describe the work order.')
         due=text(data.get('due_date',''),'Due date',10)
@@ -482,7 +484,7 @@ def register_operations(app,path,auth):
 
     @app.post('/api/maintenance/{mid}/complete')
     def maintain_done(mid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','dispatch'})
+        require_role(u,{'owner','manager','dispatch'})
         note=text(data.get('notes',''),'Service evidence',3000)
         if not note:raise HTTPException(422,'Record the completed work or receipt reference.')
         with transaction(path) as db:
@@ -521,7 +523,7 @@ def register_operations(app,path,auth):
 
     @app.post('/api/jobs/{jid}/paid-travel')
     def paid_travel(jid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'})
+        require_role(u,{'owner','manager','accounting'})
         try:m=number(data.get('transport_hours',data.get('hours')),'Paid travel hours',0,24)*60
         except ValueError as ex:raise HTTPException(422,str(ex))
         if m!=m.to_integral():raise HTTPException(422,'Use whole minutes.')
@@ -571,7 +573,7 @@ def register_operations(app,path,auth):
 
     @app.post('/api/payroll-drafts/{pid}/approve')
     def approve_draft(pid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'})
+        require_role(u,{'owner','manager','accounting'})
         with transaction(path) as db:
             r=one(db,'SELECT * FROM payroll_drafts WHERE id=?',(pid,))
             if not r or r['version']!=data.get('version'):raise HTTPException(409,'Draft changed. Refresh first.')
@@ -588,7 +590,7 @@ def register_operations(app,path,auth):
 
     @app.get('/api/payroll-export')
     def export(period_start:str,u=Depends(auth)):
-        require_role(u,{'owner'})
+        require_role(u,{'owner','manager'})
         try:start=date.fromisoformat(period_start)
         except ValueError:raise HTTPException(422,'Use a valid period date.')
         with closing(connect(path)) as db:

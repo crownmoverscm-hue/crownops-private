@@ -2,12 +2,13 @@
 from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-import asyncio, hashlib, hmac, json, os, secrets, subprocess, shlex
-from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
+import asyncio, hashlib, hmac, json, os, secrets, subprocess, shlex, re
+from fastapi import BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .platform_common import *
-from .photo_safety import READY_STATUSES, photo_mode, upload_policy, require_room, process_photo
+from .photo_safety import READY_STATUSES, photo_mode, upload_policy, require_room, process_photo,process_video
+from .client_communications import CONTACT_FIELDS, pending_scope_changes, quote_scope_current
 
 PORTAL_COOKIE='crownops_client'
 CLIENT_FIELDS={'client_name','phone','pickup','dropoff','boxes','inventory','pickup_access','dropoff_access','pickup_walk','dropoff_walk','heavy_items','move_date','home_size'}
@@ -16,12 +17,13 @@ def public_client(l):return {k:l[k] for k in ('id','client_name','email','phone'
 
 def detect(content,name):
     ext=Path(name).suffix.lower()
-    if content.startswith(b'\xff\xd8\xff') and ext in ('.jpg','.jpeg'):return 'image/jpeg'
-    if content.startswith(b'\x89PNG\r\n\x1a\n') and ext=='.png':return 'image/png'
-    if content[:4]==b'RIFF' and content[8:12]==b'WEBP' and ext=='.webp':return 'image/webp'
+    if content.startswith(b'\xff\xd8\xff') and ext in ('.jpg','.jpeg','.png','.webp','.heic','.heif'):return 'image/jpeg'
+    if content.startswith(b'\x89PNG\r\n\x1a\n') and ext in ('.jpg','.jpeg','.png','.webp','.heic','.heif'):return 'image/png'
+    if content[:4]==b'RIFF' and content[8:12]==b'WEBP' and ext in ('.jpg','.jpeg','.png','.webp','.heic','.heif'):return 'image/webp'
     if content.startswith(b'%PDF-') and ext=='.pdf':return 'application/pdf'
     if len(content)>12 and content[4:8]==b'ftyp' and ext in ('.mp4','.mov','.m4v'):return 'video/quicktime' if ext=='.mov' else 'video/mp4'
     if content.startswith(b'\x1aE\xdf\xa3') and ext=='.webm':return 'video/webm'
+    if len(content)>12 and content[4:8]==b'ftyp' and any(x in content[8:32] for x in (b'heic',b'heix',b'hevc',b'mif1',b'heif')):return 'image/heic'
     raise HTTPException(422,'Use a JPEG, PNG, WebP, PDF, MP4, MOV or WebM with matching file content.')
 
 def safe_attachment(r):return {k:r[k] for k in ('id','lead_id','job_id','category','original_name','mime','size','scan_status','created_at','deleted_at')}
@@ -33,7 +35,8 @@ def register_portal(app,path,auth,public_url,secure):
         raw=request.cookies.get(PORTAL_COOKIE,'')
         with closing(connect(path)) as db:
             s=one(db,'SELECT * FROM portal_sessions WHERE token_hash=? AND expires_at>?',(stamp_hash(raw),now()))
-        if not raw or not s:raise HTTPException(401,'Your private link has expired. Please ask Crown for a new link.')
+            lead=one(db,'SELECT email FROM leads WHERE id=?',(s['lead_id'],)) if s else None
+        if not raw or not s or not lead or lead['email'].lower()!=s['email'].lower():raise HTTPException(401,'Your private session has expired. Request a fresh email link below.')
         if request.method not in ('GET','HEAD','OPTIONS') and not hmac.compare_digest(request.headers.get('x-csrf-token',''),s['csrf']):
             raise HTTPException(403,'Refresh your portal session before saving.')
         return s
@@ -46,6 +49,35 @@ def register_portal(app,path,auth,public_url,secure):
 
     @app.get('/portal')
     def client_page():return FileResponse(Path(__file__).parent/'static'/'portal.html')
+
+    def deliver_client_access(email):
+        from .client_communications import portal_link
+        from .providers import process_mail
+        try:
+            with transaction(path) as db:
+                leads=rows(db,"SELECT * FROM leads WHERE lower(email)=? AND notifications_suppressed=0 ORDER BY updated_at DESC LIMIT 5",(email,))
+                if not leads:return
+                first=leads[0];fr=str(first['language']).lower().startswith('fr')
+                body=(f"Bonjour {first['client_name']},\n\nVoici votre nouvel accès privé à Crown Movers.\n" if fr else f"Hi {first['client_name']},\n\nHere is your fresh private access to Crown Movers.\n")
+                for lead in leads:
+                    body+='\n'+('Service : ' if fr else 'Service: ')+(lead['move_date'] or ('Date à confirmer' if fr else 'Date to confirm'))+'\n'+portal_link(db,lead,'client-access-request',public_url,tab='estimates')+'\n'
+                body+=('\nVous pouvez consulter votre devis et vos factures, ajouter des photos ou demander un rappel.\n\nChaque lien ouvre un dossier privé. Si vous n’avez pas demandé cet accès, ignorez ce courriel.\n\nL’équipe Crown Movers\n514-606-4030' if fr else '\nYou can view your estimate and invoices, add photos, or request a callback.\n\nEach link opens a private service file. If you did not request access, you can ignore this email.\n\nThe Crown Movers team\n514-606-4030')
+                msg=queue_message(db,first['id'],'Votre accès Crown Movers' if fr else 'Your Crown Movers access',body,'Reply','client-access-request','client-access:'+uid('LINK'))
+                db.execute("UPDATE outbound_messages SET status='Approved',approved_by='client-access-request' WHERE id=?",(msg['id'],))
+            process_mail(path,msg['id'])
+        except Exception:
+            import logging
+            logging.getLogger('crownops').warning('Client access email was not confirmed; review client-access delivery status.')
+
+    @app.post('/api/portal/request-link')
+    def request_link(data:dict,request:Request,tasks:BackgroundTasks):
+        from .account_access import recovery_rate_limit
+        email=text(data.get('email',''),'Email',254).lower()
+        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):raise HTTPException(422,'Enter the email address used for your Crown Movers request.')
+        if not data.get('website'):
+            with transaction(path) as db:allowed=recovery_rate_limit(db,request,email,purpose='client-link')
+            if allowed:tasks.add_task(deliver_client_access,email)
+        return {'ok':True,'message':'If this email has an active Crown Movers file, we will send a private link. Check your inbox and spam folder. For help, call 514-606-4030.'}
 
     @app.post('/api/leads/{lid}/portal-invite')
     def invite(lid:str,data:dict,u=Depends(auth)):
@@ -68,11 +100,19 @@ def register_portal(app,path,auth,public_url,secure):
         return {'ok':True}
 
     @app.post('/api/portal/exchange')
-    def exchange(data:dict):
+    def exchange(data:dict,request:Request):
         token=text(data.get('token',''),'Access token',180)
         with transaction(path) as db:
             v=one(db,'SELECT * FROM portal_invites WHERE token_hash=? AND used_at IS NULL AND revoked=0 AND expires_at>?',(stamp_hash(token),now()))
-            if not v:raise HTTPException(401,'Private link is invalid, already used or expired.')
+            if not v:
+                used=one(db,'SELECT * FROM portal_invites WHERE token_hash=? AND revoked=0 AND expires_at>?',(stamp_hash(token),now()))
+                session=one(db,'SELECT * FROM portal_sessions WHERE token_hash=? AND expires_at>?',(stamp_hash(request.cookies.get(PORTAL_COOKIE,'')),now()))
+                lead=one(db,'SELECT email FROM leads WHERE id=?',(used['lead_id'],)) if used else None
+                if used and session and lead and used['lead_id']==session['lead_id'] and used['email'].lower()==session['email'].lower()==lead['email'].lower():
+                    return {'ok':True,'csrf':session['csrf'],'existing_session':True}
+                raise HTTPException(401,'Private link is invalid, already used or expired.')
+            lead=one(db,'SELECT email FROM leads WHERE id=?',(v['lead_id'],))
+            if not lead or lead['email'].lower()!=v['email'].lower():raise HTTPException(401,'This access link needs to be replaced. Request a fresh email link.')
             raw=secrets.token_urlsafe(40);csrf=secrets.token_urlsafe(32)
             insert(db,'portal_sessions',dict(token_hash=stamp_hash(raw),lead_id=v['lead_id'],email=v['email'],csrf=csrf,expires_at=(datetime.now(timezone.utc)+timedelta(hours=12)).isoformat(timespec='seconds'),created_at=now()))
             db.execute('UPDATE portal_invites SET used_at=? WHERE token_hash=?',(now(),stamp_hash(token)))
@@ -91,13 +131,21 @@ def register_portal(app,path,auth,public_url,secure):
             quotes=[]
             for q in rows(db,"SELECT * FROM quotes WHERE lead_id=? AND status IN ('Approved','Accepted') ORDER BY revision DESC",(c['lead_id'],)):
                 r=json.loads(q['result_json']);snap=json.loads(q['lead_snapshot_json'])
-                quotes.append({'id':q['id'],'revision':q['revision'],'status':q['status'],'stale':q['lead_version']!=l['version'],
+                from .availability import date_status
+                from .quote_options import expired_quote
+                quotes.append({'id':q['id'],'revision':q['revision'],'status':q['status'],
+                    'expired':q['status']!='Accepted' and expired_quote(q),
+                    'booking_confirmed':bool(one(db,"SELECT id FROM jobs WHERE quote_id=? AND status IN ('Confirmed','In progress','Completed')",(q['id'],))),
+                    'stale':not quote_scope_current(db,q,l) or pending_scope_changes(db,l['id']),
+                    'availability':{k:v for k,v in date_status(db,json.loads(q['inputs_json']).get('move_date') or l['move_date']).items() if k in ('day','status','available')},
                     'created_at':q['created_at'],'move_date':snap.get('move_date'),'pickup':snap.get('pickup'),'dropoff':snap.get('dropoff'),
-                    'result':{k:r.get(k) for k in ('hourly_rate_cents','service_low','service_high','minimum_hours','transport_hours','transport_cents','fuel_cents','materials_cents','other_cents','discount_cents','low_cents','high_cents','movers','trucks','tax_note','service_type','language','line_items','distance_km','distance_rate_cents')},'inputs':{k:json.loads(q['inputs_json']).get(k) for k in ('service_type','language','template_key','template_snapshot','quote_title','client_note','limited_liability','start_window','start_time','start_window_label','move_date')},'deposit_required':json.loads(q['inputs_json']).get('deposit_required',300)})
-            jobs=rows(db,"SELECT id,title,phase,start_at,end_at,status FROM jobs WHERE lead_id=? AND status!='Tentative' ORDER BY start_at",(c['lead_id'],))
+                    'result':{k:r.get(k) for k in ('hourly_rate_cents','service_low','service_high','minimum_hours','transport_hours','transport_cents','fuel_cents','materials_cents','other_cents','discount_cents','low_cents','high_cents','movers','trucks','tax_note','service_type','language','line_items','distance_km','distance_rate_cents')},'inputs':{k:json.loads(q['inputs_json']).get(k) for k in ('service_type','language','template_key','template_snapshot','quote_title','client_note','limited_liability','start_window','start_time','start_window_label','move_date','billing','expiry_date','payment_terms')},'deposit_required':json.loads(q['inputs_json']).get('deposit_required',300)})
+            jobs=rows(db,"SELECT id,title,phase,start_at,end_at,status FROM jobs WHERE lead_id=? AND status IN ('Confirmed','In progress','Completed') ORDER BY start_at",(c['lead_id'],))
             invs=[]
             for inv in rows(db,"SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND i.status='Issued'",(c['lead_id'],)):
-                _,calc=invoice_current(db,inv['id']);invs.append({'id':inv['id'],'number':inv['number'],'revision':inv['revision'],'status':inv['status'],'calculation':calc,'received_pending_verification_cents':pending_received(db,inv['id'])})
+                _,calc=invoice_current(db,inv['id']);invs.append({'id':inv['id'],'number':inv['number'],'revision':inv['revision'],'version':inv['version'],'status':inv['status'],'calculation':calc,'received_pending_verification_cents':pending_received(db,inv['id']),
+                    'quickbooks_linked':bool(one(db,"SELECT object_id FROM external_records WHERE provider='quickbooks' AND kind='Invoice' AND object_id=?",(inv['id'],)) or one(db,"SELECT id FROM provider_operations WHERE provider='quickbooks' AND object_id=? AND lower(kind)='invoice'",(inv['id'],))),
+                    'quickbooks_available':bool(one(db,"SELECT object_id FROM external_records WHERE provider='quickbooks' AND kind='Invoice' AND object_id=? AND revision=?",(inv['id'],inv['revision'])))})
             from .deposits import deposit_state
             for qr in quotes:
                 source_q=one(db,'SELECT * FROM quotes WHERE id=?',(qr['id'],))
@@ -111,8 +159,11 @@ def register_portal(app,path,auth,public_url,secure):
                 public_deposit={'enabled':True,'recipient_name':dep.get('recipient_name','Crown Movers'),
                   'recipient_email':dep.get('recipient_email',''),'auto_deposit':bool(dep.get('auto_deposit',True)),
                   'reference_note':dep.get('reference_note','')}
-            return {'csrf':c['csrf'],'client':public_client(l),'quotes':quotes,'jobs':jobs,'invoices':invs,
+            from .media_links import listing
+            from .sales_journey import details_state
+            return {'details_progress':details_state(db,l),'media_links':listing(db,c['lead_id']),'csrf':c['csrf'],'client':public_client(l),'quotes':quotes,'jobs':jobs,'invoices':invs,
                 'changes':rows(db,'SELECT id,payload_json,status,created_at,review_note FROM client_changes WHERE lead_id=? ORDER BY created_at DESC',(c['lead_id'],)),
+                'callbacks':rows(db,'SELECT id,phone,preferred_time,message,status,created_at FROM client_callbacks WHERE lead_id=? ORDER BY created_at DESC',(c['lead_id'],)),
                 'upload_policy':upload_policy(),
                 'attachments':[safe_attachment(r) for r in rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(c['lead_id'],))],
                 'messages':rows(db,"SELECT id,subject,body,created_at FROM outbound_messages WHERE lead_id=? AND status='Sent' ORDER BY created_at DESC LIMIT 30",(c['lead_id'],)),
@@ -133,11 +184,25 @@ def register_portal(app,path,auth,public_url,secure):
         payload=data.get('fields',{})
         if not isinstance(payload,dict) or not payload or set(payload)-CLIENT_FIELDS:raise HTTPException(422,'Submit supported move details.')
         payload={k:text(v,k,18000 if k=='inventory' else 3000) for k,v in payload.items()}
+        if 'move_date' in payload and payload['move_date']:
+            from .availability import service_day
+            service_day(payload['move_date'])
+        if 'client_name' in payload and not payload['client_name']:raise HTTPException(422,'Please include your name.')
         with transaction(path) as db:
             l=one(db,'SELECT * FROM leads WHERE id=?',(c['lead_id'],))
             if data.get('version')!=l['version']:raise HTTPException(409,'The team updated your file. Refresh before submitting.')
+            payload={k:v for k,v in payload.items() if v!=str(l.get(k) or '')}
+            from .sales_journey import submitted_details
+            if not payload:
+                submitted_details(db,l['id'])
+                return {'ok':True,'status':'Received','message':'Thank you. Your current details were confirmed for the team.'}
+            prior=one(db,"SELECT id FROM client_changes WHERE lead_id=? AND status='Pending' AND base_version=? AND payload_json=?",(l['id'],l['version'],dumps(payload)))
+            if prior:
+                submitted_details(db,l['id'])
+                return {'ok':True,'status':'Pending review','duplicate':True}
             rec=dict(id=uid('CHANGE'),lead_id=l['id'],payload_json=dumps(payload),base_version=l['version'],created_at=now())
             insert(db,'client_changes',rec);add_task(db,l['id'],'Review customer portal changes',l['assigned_to'],rec['id'])
+            submitted_details(db,l['id'])
             db.execute("UPDATE outbound_messages SET status='Cancelled',error='Client replied; review changes first' WHERE lead_id=? AND category='Follow-up' AND status IN ('Draft','Approved')",(l['id'],))
             audit(db,'client:'+c['email'],'Move changes submitted for review','client_changes',rec['id'])
         return {'ok':True,'status':'Pending review','message':'Your changes were submitted. Dates and accepted prices do not change until Crown reviews them.'}
@@ -158,11 +223,18 @@ def register_portal(app,path,auth,public_url,secure):
             if not cr or cr['status']!='Pending':raise HTTPException(409,'Request no longer pending.')
             l=one(db,'SELECT * FROM leads WHERE id=?',(cr['lead_id'],))
             if data.get('lead_version')!=l['version']:raise HTTPException(409,'Client changed. Reload and compare before reviewing.')
+            if data['decision']=='Approve' and cr['base_version']!=l['version'] and (data.get('reconcile') is not True or not note):
+                raise HTTPException(409,'The service changed after this submission. Compare each field with the current file, confirm reconciliation and add a note.')
             if data['decision']=='Approve':
-                payload=json.loads(cr['payload_json']);columns=','.join(k+'=?' for k in payload)
-                db.execute('UPDATE leads SET '+columns+',version=version+1,updated_at=? WHERE id=?',list(payload.values())+[now(),l['id']])
-                add_task(db,l['id'],'Review estimate and booking after client scope change',l['assigned_to'],cid+':scope')
+                payload={k:v for k,v in json.loads(cr['payload_json']).items() if v!=str(l.get(k) or '')}
+                if payload:
+                    columns=','.join(k+'=?' for k in payload)
+                    db.execute('UPDATE leads SET '+columns+',version=version+1,updated_at=? WHERE id=?',list(payload.values())+[now(),l['id']])
+                    if set(payload)<=CONTACT_FIELDS:
+                        audit(db,u['id'],'Contact details reviewed','leads',l['id'],{'change_id':cid,'from_version':l['version'],'to_version':l['version']+1,'fields':sorted(payload)})
+                    else:add_task(db,l['id'],'Review estimate and booking after client scope change',l['assigned_to'],cid+':scope')
             db.execute('UPDATE client_changes SET status=?,reviewed_by=?,reviewed_at=?,review_note=? WHERE id=?',('Approved' if data['decision']=='Approve' else 'Rejected',u['id'],now(),note,cid))
+            db.execute("UPDATE tasks SET status='Done' WHERE legacy_id=?",(cid,))
             audit(db,u['id'],'Portal changes reviewed','client_changes',cid,{'decision':data['decision'],'note':note})
         return {'ok':True,'existing_quotes_unchanged':True}
 
@@ -174,10 +246,13 @@ def register_portal(app,path,auth,public_url,secure):
             if not terms.get('approved') or data.get('terms_version')!=terms.get('version'):raise HTTPException(409,'Approved booking terms are not available or changed. Contact Crown.')
             q=one(db,'SELECT * FROM quotes WHERE id=? AND lead_id=?',(qid,c['lead_id']))
             if not q:raise HTTPException(404,'Quote not found.')
-            if q['status']=='Accepted':return {'ok':True,'already_accepted':True,'booking_confirmed':False}
+            if q['status']=='Accepted':return {'ok':True,'already_accepted':True,'booking_confirmed':bool(one(db,"SELECT id FROM jobs WHERE quote_id=? AND status IN ('Confirmed','In progress','Completed')",(qid,)))}
+            from .quote_options import expired_quote
+            if expired_quote(q):raise HTTPException(409,'This estimate has expired. Request a callback so Crown can review and renew it.')
             l=one(db,'SELECT * FROM leads WHERE id=?',(c['lead_id'],))
-            if q['status']!='Approved' or q['lead_version']!=l['version']:raise HTTPException(409,'This estimate needs review before acceptance.')
-            if one(db,"SELECT id FROM client_changes WHERE lead_id=? AND status='Pending'",(c['lead_id'],)):raise HTTPException(409,'Please wait for review of your requested changes before accepting.')
+            if q['status']!='Approved' or not quote_scope_current(db,q,l):raise HTTPException(409,'This estimate needs review before acceptance.')
+            if one(db,"SELECT id FROM quotes WHERE lead_id=? AND revision>? AND status IN ('Approved','Accepted')",(l['id'],q['revision'])):raise HTTPException(409,'A newer estimate is available. Refresh to review the latest revision.')
+            if pending_scope_changes(db,c['lead_id']):raise HTTPException(409,'Please wait for review of your requested changes before accepting.')
             ref=dumps({'name':data['signed_name'],'portal_email':c['email'],'terms_version':terms['version'],'terms_text':terms['text'],'accepted_at':now()})
             db.execute("UPDATE quotes SET status='Accepted',acceptance_ref=?,accepted_at=? WHERE id=?",(ref,now(),qid))
             db.execute("UPDATE leads SET stage='Accepted' WHERE id=?",(c['lead_id'],))
@@ -211,7 +286,7 @@ def register_portal(app,path,auth,public_url,secure):
         limit=policy['max_file_mb']*1024*1024
         key=uid('FILE');temp=storage/(key+'.upload');dest=None;committed=False;n=0;digest=hashlib.sha256();head=b''
         try:
-            require_room(storage,limit)
+            require_room(storage,min(limit,1024*1024))
             with open(temp,'xb') as out:
                 temp.chmod(0o600)
                 while chunk:=await file.read(1024*1024):
@@ -223,12 +298,16 @@ def register_portal(app,path,auth,public_url,secure):
             if n==0:raise HTTPException(422,'File is empty.')
             mime=detect(head,name);status='Quarantined'
             if photo_mode():
-                if not mime.startswith('image/') or category=='Testimonial':raise HTTPException(422,'This upload mode accepts JPEG, PNG and WebP photos only. Video and PDF uploads are unavailable.')
+                if mime.startswith('video/') and not policy.get('videos_enabled'):raise HTTPException(503,'Video processing is unavailable. Paste a shared video-folder link instead.')
+                if not mime.startswith(('image/','video/')):raise HTTPException(422,'Choose a photo or short video, or paste a shared folder link.')
+                if mime.startswith('image/') and n>policy['max_photo_mb']*1024*1024:raise HTTPException(413,'This photo is over 30 MB. Use a smaller photo or share a folder link.')
                 from starlette.concurrency import run_in_threadpool
-                dest=storage/(key+'.jpg')
-                processed=await run_in_threadpool(process_photo,temp,dest)
-                n=processed['size'];digest_value=processed['sha256'];mime='image/jpeg';status='Photo checked'
-                name=Path(name).stem+'.jpg'
+                is_video=mime.startswith('video/');suffix='.mp4' if is_video else '.jpg'
+                dest=storage/(key+suffix)
+                require_room(storage,40*1024*1024 if is_video else 2*1024*1024)
+                processed=await run_in_threadpool(process_video if is_video else process_photo,temp,dest)
+                n=processed['size'];digest_value=processed['sha256'];mime='video/mp4' if is_video else 'image/jpeg';status='Video checked' if is_video else 'Photo checked'
+                name=Path(name).stem+suffix
             else:
                 if category=='Testimonial' and not mime.startswith('video/'):raise HTTPException(422,'Upload a video for a testimonial.')
                 command=os.getenv('CROWNOPS_SCAN_COMMAND','').strip()
@@ -246,15 +325,15 @@ def register_portal(app,path,auth,public_url,secure):
                 if staff_user:project_write(db,lid,jid or '',staff_user)
                 if client_session and not one(db,'SELECT token_hash FROM portal_sessions WHERE token_hash=? AND expires_at>?',(client_session['token_hash'],now())):
                     raise HTTPException(401,'Your private session expired. Ask Crown for a new link.')
+                if photo_mode():
+                    existing=one(db,'SELECT * FROM attachments WHERE lead_id=? AND job_id IS ? AND sha256=? AND deleted_at IS NULL',(lid,jid,digest_value))
+                    if existing:return safe_attachment(existing)
                 total=db.execute('SELECT coalesce(sum(size),0) FROM attachments WHERE lead_id=? AND deleted_at IS NULL',(lid,)).fetchone()[0]
                 if total+n>int(os.getenv('CROWNOPS_PROJECT_UPLOAD_MB','128' if photo_mode() else '1000'))*1024*1024:
                     raise HTTPException(413,'This moving file has reached its upload limit. Contact Crown.')
                 global_total=db.execute('SELECT coalesce(sum(size),0) FROM attachments WHERE deleted_at IS NULL').fetchone()[0]
                 if photo_mode() and global_total+n>int(os.getenv('CROWNOPS_PHOTO_STORAGE_MB','128'))*1024*1024:
                     raise HTTPException(507,'Company photo storage has reached its limit. Contact the owner to increase storage.')
-                if photo_mode():
-                    existing=one(db,'SELECT * FROM attachments WHERE lead_id=? AND job_id IS ? AND sha256=? AND deleted_at IS NULL',(lid,jid,digest_value))
-                    if existing:return safe_attachment(existing)
                 r=dict(id=key,lead_id=lid,job_id=jid,category=category,original_name=name,stored_name=dest.name,mime=mime,size=n,sha256=digest_value,scan_status=status,author=actor,created_at=now())
                 insert(db,'attachments',r);audit(db,actor,'Private file uploaded','attachments',key,{'bytes':n,'scan_status':status,'protection':'photo-reencode' if photo_mode() else 'scanner'})
                 add_task(db,lid,'Review uploaded '+category.lower(),key='upload:'+key)
@@ -277,17 +356,13 @@ def register_portal(app,path,auth,public_url,secure):
     def uploads(lid:str,u=Depends(auth)):
         with closing(connect(path)) as db:
             staff_read_project(db,lid,u)
-            records=rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL',(lid,))
-            if u['role']=='crew' and not can_plan_jobs(db,u):
-                own={r['job_id'] for r in rows(db,"SELECT job_id FROM assignments WHERE resource_type='employee' AND resource_id=?",(u.get('employee_id') or '',))}
-                records=[r for r in records if r['job_id'] is None or r['job_id'] in own]
-            return [safe_attachment(r) for r in records]
+            return [safe_attachment(r) for r in staff_project_attachments(db,lid,u)]
 
     def deliver(r):
         if r['scan_status'] not in READY_STATUSES:raise HTTPException(409,'This file is quarantined or rejected. It is not available until safety review.')
         p=(storage/r['stored_name']).resolve()
         if p.parent!=storage or not p.exists():raise HTTPException(404,'Stored file unavailable.')
-        return FileResponse(p,media_type=r['mime'],filename=r['original_name'],content_disposition_type='inline' if r['mime'].startswith('image/') else 'attachment',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"})
+        return FileResponse(p,media_type=r['mime'],filename=r['original_name'],content_disposition_type='inline' if r['mime'].startswith(('image/','video/')) else 'attachment',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; media-src 'self'; sandbox"})
 
     @app.get('/api/portal/uploads/{aid}')
     def client_download(aid:str,c=Depends(client_auth)):
@@ -348,12 +423,77 @@ def register_portal(app,path,auth,public_url,secure):
             insert(db,'cases',rec);add_task(db,c['lead_id'],'Respond to client concern',key=rec['id'])
         return {'ok':True,'reference':rec['id']}
 
+    @app.post('/api/portal/callbacks')
+    def callback(data:dict,c=Depends(client_auth)):
+        key=text(data.get('request_key',''),'Request ID',120)
+        phone=text(data.get('phone',''),'Phone',80)
+        preferred=text(data.get('preferred_time',''),'Preferred time',200)
+        message=text(data.get('message',''),'Message',2000)
+        if not re.fullmatch(r'[A-Za-z0-9_-]{12,120}',key):raise HTTPException(422,'Refresh this page before requesting a callback.')
+        if len(re.sub(r'\D','',phone))<7:raise HTTPException(422,'Enter a phone number where we can reach you.')
+        with transaction(path) as db:
+            old=one(db,'SELECT * FROM client_callbacks WHERE lead_id=? AND request_key=?',(c['lead_id'],key))
+            if old:
+                if (old['phone'],old['preferred_time'],old['message'])!=(phone,preferred,message):raise HTTPException(409,'This callback was already saved. Refresh to send a new request.')
+                return {'ok':True,'reference':old['id'],'duplicate':True}
+            cutoff=(datetime.now(timezone.utc)-timedelta(minutes=15)).isoformat(timespec='seconds')
+            if db.execute('SELECT count(*) FROM client_callbacks WHERE lead_id=? AND created_at>?',(c['lead_id'],cutoff)).fetchone()[0]>=3:raise HTTPException(429,'Your callback requests are with the team. For urgent help, call 514-606-4030.')
+            lid=c['lead_id'];lead=one(db,'SELECT * FROM leads WHERE id=?',(lid,));cid=uid('CALLBACK')
+            insert(db,'client_callbacks',dict(id=cid,lead_id=lid,request_key=key,phone=phone,preferred_time=preferred,message=message,created_at=now()))
+            add_task(db,lid,'Client requested a callback: '+phone+(' · '+preferred if preferred else ''),lead['assigned_to'],key='callback:'+cid)
+            audit(db,'client:'+c['email'],'Callback requested','client_callbacks',cid)
+        return {'ok':True,'reference':cid}
+
+    @app.get('/api/callbacks')
+    def callbacks(u=Depends(auth)):
+        require_role(u,SALES)
+        with closing(connect(path)) as db:return rows(db,'SELECT c.*,l.client_name,l.move_date FROM client_callbacks c JOIN leads l ON l.id=c.lead_id ORDER BY c.created_at DESC LIMIT 200')
+
+    @app.post('/api/callbacks/{cid}/complete')
+    def callback_done(cid:str,u=Depends(auth)):
+        require_role(u,SALES)
+        with transaction(path) as db:
+            if not one(db,'SELECT id FROM client_callbacks WHERE id=?',(cid,)):raise HTTPException(404,'Callback request not found.')
+            db.execute("UPDATE client_callbacks SET status='Completed' WHERE id=?",(cid,))
+            db.execute("UPDATE tasks SET status='Done' WHERE legacy_id=?",('callback:'+cid,))
+            audit(db,u['id'],'Callback completed','client_callbacks',cid)
+        return {'ok':True}
+
+    @app.get('/api/portal/invoices/{iid}/payment-state')
+    def client_invoice_payment_state(iid:str,c=Depends(client_auth)):
+        from .invoice_payments import quickbooks_payment_state
+        def bound_invoice(db):
+            invoice=one(db,"SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE i.id=? AND j.lead_id=? AND i.status='Issued'",(iid,c['lead_id']))
+            if not invoice:raise HTTPException(404,'Final invoice is not available.')
+            return invoice
+        with closing(connect(path)) as db:before=bound_invoice(db)
+        # The project binding is checked before any accounting lookup. This is a
+        # read-only status check; importing receipts requires management review.
+        state=quickbooks_payment_state(path,iid,user=None)
+        with closing(connect(path)) as db:current=bound_invoice(db)
+        if (before['revision'],before['version'])!=(current['revision'],current['version']) or (state['revision'],state['version'])!=(current['revision'],current['version']):
+            raise HTTPException(409,'The invoice changed. Refresh your moving file before checking payment status.')
+        return JSONResponse(state,headers={'Cache-Control':'no-store'})
+
+    @app.get('/api/portal/invoices/{iid}/quickbooks-payment-link')
+    def client_payment(iid:str,c=Depends(client_auth)):
+        from .invoice_payments import checked_quickbooks_link
+        def bound(db):
+            inv=one(db,"SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE i.id=? AND j.lead_id=? AND i.status='Issued'",(iid,c['lead_id']))
+            if not inv:raise HTTPException(404,'Final invoice is not available.')
+            return inv
+        with closing(connect(path)) as db:before=bound(db)
+        result=checked_quickbooks_link(path,iid,None,invoice_scope=iid)
+        with closing(connect(path)) as db:current=bound(db)
+        if (before['revision'],before['version'])!=(current['revision'],current['version']) or (result['revision'],result['version'])!=(current['revision'],current['version']):raise HTTPException(409,'The invoice changed. Refresh your moving file before opening its payment page.')
+        return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
     @app.get('/api/portal/invoices/{iid}/document')
-    def client_invoice(iid:str,c=Depends(client_auth)):
+    def client_invoice(iid:str,download:bool=True,c=Depends(client_auth)):
         from .invoices import invoice_html
         from fastapi.responses import HTMLResponse
         with closing(connect(path)) as db:
             r=one(db,"SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE i.id=? AND j.lead_id=? AND i.status='Issued'",(iid,c['lead_id']))
             if not r:raise HTTPException(404,'Final invoice is not available.')
             doc=json.loads(one(db,'SELECT document_json FROM invoice_revisions WHERE invoice_id=? AND revision=?',(iid,r['revision']))['document_json'])
-            return HTMLResponse(invoice_html(doc),headers={'Content-Disposition':f'attachment; filename="{r["number"]}.html"','Cache-Control':'no-store'})
+            return HTMLResponse(invoice_html(doc),headers={'Content-Disposition':('attachment' if download else 'inline')+f'; filename="{r["number"]}.html"','Cache-Control':'no-store'})

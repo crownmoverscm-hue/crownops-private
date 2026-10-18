@@ -192,7 +192,7 @@ def send_invitation_email(path, invitation_id, raw_token, public_url, message_id
 
 def deliver_invitation_email(path, invitation_id, raw_token, public_url, request_id, actor):
     invitation_request_id(request_id)
-    require_role(actor, {'owner'})
+    require_role(actor, {'owner','manager'})
     with transaction(path) as db:
         previous = previous_invitation_email(db, request_id, actor)
         if previous and previous['object_id'] != invitation_id:
@@ -303,7 +303,7 @@ def register_account_access(app, path, auth, public_url):
 
     @app.get('/api/account-access')
     def access(u=Depends(auth)):
-        require_role(u, {'owner'})
+        require_role(u, {'owner','manager'})
         with closing(connect(path)) as db:
             master = master_owner_id(db)
             accounts = rows(db, 'SELECT id,name,email,role,active,employee_id FROM users ORDER BY name')
@@ -319,7 +319,7 @@ def register_account_access(app, path, auth, public_url):
 
     @app.post('/api/users/{user_id}/access')
     def update_access(user_id:str, data:dict, u=Depends(auth)):
-        require_role(u, {'owner'})
+        require_role(u, {'owner','manager'})
         from .main import ROLES
         role, active = data.get('role'), data.get('active')
         employee = data.get('employee_id')
@@ -334,7 +334,7 @@ def register_account_access(app, path, auth, public_url):
         with transaction(path) as db:
             # Recheck authority inside the write transaction in case another owner changed it.
             actor = one(db, 'SELECT * FROM users WHERE id=? AND active=1', (u['id'],))
-            if not actor or actor['role']!='owner' or not one(db,
+            if not actor or actor['role'] not in ('owner','manager') or not one(db,
                     'SELECT user_id FROM sessions WHERE user_id=? AND csrf=? AND expires_at>?',
                     (u['id'],u['csrf'],now())):
                 raise HTTPException(403, 'Your account no longer has owner access. Sign in again.')
@@ -369,7 +369,7 @@ def register_account_access(app, path, auth, public_url):
 
     @app.post('/api/account-access/invitation-preview')
     def preview_invitation(data:dict, u=Depends(auth)):
-        require_role(u, {'owner'})
+        require_role(u, {'owner','manager'})
         from .staff_onboarding import ROLE_LABELS, invitation_content
         role = data.get('role','crew')
         if not isinstance(role,str) or role not in ROLE_LABELS:
@@ -389,7 +389,7 @@ def register_account_access(app, path, auth, public_url):
 
     @app.post('/api/account-access/invitations/{invitation_id}/send-email')
     def email_invitation(invitation_id:str, data:dict, u=Depends(auth)):
-        require_role(u, {'owner'})
+        require_role(u, {'owner','manager'})
         raw = data.get('token','')
         if not isinstance(raw,str) or len(raw)>180:
             raise HTTPException(422, 'Check the private invitation link.')
@@ -397,7 +397,7 @@ def register_account_access(app, path, auth, public_url):
 
     @app.post('/api/account-access/invitations/{invitation_id}/revoke')
     def revoke_invitation(invitation_id:str, u=Depends(auth)):
-        require_role(u, {'owner'})
+        require_role(u, {'owner','manager'})
         with transaction(path) as db:
             invite = one(db, 'SELECT * FROM invitations WHERE token_hash=? AND used_at IS NULL', (invitation_id,))
             if not invite:

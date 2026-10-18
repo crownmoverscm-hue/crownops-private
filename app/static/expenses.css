@@ -1,0 +1,11 @@
+.expense-filters{display:grid;grid-template-columns:repeat(4,minmax(130px,180px)) auto;align-items:end;gap:12px;margin:18px 0}
+.expense-metrics .panel-body{font-size:24px;font-weight:650}
+.expense-pages{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:14px 0}
+.expense-pages>span{flex:1 1 220px}
+.expense-pages>button{min-width:100px}
+.expense-ledger-cards{display:none}
+.expense-card-title{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.expense-card-title>strong{overflow-wrap:anywhere}
+.invoice-delivery-state p{margin-top:10px;overflow-wrap:anywhere}
+@media(max-width:1100px){.expense-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.expense-filters>button{min-height:40px}}
+@media(max-width:760px){.expense-ledger-table{display:none}.expense-ledger-cards{display:grid;gap:12px}.expense-pages>span{flex-basis:100%}.expense-pages>button{flex:1}.expense-metrics{gap:10px}.expense-metrics .panel-head{padding:12px 16px}.expense-metrics .panel-body{padding:12px 16px}.expense-card-title>button{min-height:44px;flex-shrink:0}}

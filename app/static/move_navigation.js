@@ -15,7 +15,7 @@ showModal=function(...args){
 const moveOpenJob=openJob;
 openJob=async function(id){
  if(MoveNav.id!==id){
-  MoveNav.id=id;MoveNav.origin={page:S.page,week:S.week,x:scrollX,y:scrollY,calendar:document.querySelector('.weekly-dispatch-scroll')?.scrollLeft||0};
+  MoveNav.id=id;MoveNav.origin={page:S.page,week:S.week?new Date(S.week):null,scope:S.jobScope,x:scrollX,y:scrollY,calendar:document.querySelector('.weekly-dispatch-scroll')?.scrollLeft||0};
  }
  MoveNav.opening=true;
  try{
@@ -38,10 +38,19 @@ navigate=async function(page){
 function restoreMovePageScroll(origin){
  if(!origin)return;requestAnimationFrame(()=>{scrollTo(origin.x,origin.y);const calendar=document.querySelector('.weekly-dispatch-scroll');if(calendar)calendar.scrollLeft=origin.calendar;});
 }
+async function restoreMoveOrigin(origin){
+ if(!origin)return;
+ const changed=S.page!==origin.page||(origin.page==='schedule'&&(
+  (S.week?.getTime()??null)!==(origin.week?.getTime()??null)||S.jobScope!==origin.scope));
+ S.week=origin.week?new Date(origin.week):null;S.jobScope=origin.scope;
+ if(changed)await moveNavigate(origin.page);
+ restoreMovePageScroll(origin);
+}
 async function backToMove(){
+ if(window.CrownPlanning&&document.getElementById('job-plan-form'))jpRemember();
  mapReturn=null;
  const id=MoveNav.id,origin=MoveNav.origin;if(!id)return;
- if(origin&&S.page!==origin.page){S.week=origin.week;await moveNavigate(origin.page);restoreMovePageScroll(origin);}
+ await restoreMoveOrigin(origin);
  return openJob(id);
 }
 function clearMoveContext(){mapReturn=null;MoveNav.id=null;MoveNav.origin=null;document.querySelectorAll('.move-return-banner').forEach(el=>el.remove());delete modal.dataset.moveRoot;}
@@ -84,7 +93,7 @@ document.addEventListener('click',async event=>{
  const el=event.target.closest('[data-move-back],[data-move-return],[data-route-action],[data-map-address],[data-map-provider],[data-map-cancel],[data-action="close"],a[href]');if(!el)return;
  try{
   if(el.matches('[data-move-back]')){event.preventDefault();event.stopImmediatePropagation();return await backToMove();}
-  if(el.matches('[data-move-return]')){event.preventDefault();event.stopImmediatePropagation();const origin=MoveNav.origin;modal.close();clearMoveContext();if(origin&&S.page!==origin.page){S.week=origin.week;await moveNavigate(origin.page);}restoreMovePageScroll(origin);return;}
+  if(el.matches('[data-move-return]')){event.preventDefault();event.stopImmediatePropagation();const origin=MoveNav.origin;modal.close();clearMoveContext();await restoreMoveOrigin(origin);return;}
   if(el.matches('[data-map-cancel]')){event.preventDefault();event.stopImmediatePropagation();if(mapReturn)restoreMapScreen();else modal.close();return;}
   if(el.matches('[data-map-provider]')){event.preventDefault();event.stopImmediatePropagation();window.open(el.href,'_blank','noopener');if(mapReturn)restoreMapScreen();else modal.close();return;}
   if(el.matches('[data-action="close"]')&&MoveNav.id){

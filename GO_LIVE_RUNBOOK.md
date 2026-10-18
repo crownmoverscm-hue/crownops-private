@@ -1,5 +1,7 @@
 # CrownOps Go-Live Runbook
 
+Current source candidate: **0.11.0-rc1**. Read `WORKFLOW_RELEASE_2026-10-18.md` first for current validation and deployment status. Earlier release notes describe historical checkpoints.
+
 For the permanent **team workspace** launch, follow [RAILWAY_SETUP.md](RAILWAY_SETUP.md#permanent-team-launch). Core team use can launch with customer email, Square and QuickBooks production writes still disabled. Their separate provider activations below do not block staff invitations, CRM work, draft estimates or schedule review. Account invitation/recovery emails use `CROWNOPS_ALLOW_AUTH_EMAIL`, independently of general customer email.
 
 The stages below cover additional customer-facing and financial integrations; perform the applicable checks when activating each provider.
@@ -117,6 +119,8 @@ First real accounting test:
 5. reconcile before doing a second client.
 
 ## Stage 7 - Enable outbound Gmail separately
+
+First verify the connected Gmail account. Review company Send-as and Reply-To in settings, test any alias in Gmail, and approve the identity only after the real recipient confirms it.
 
 Only after a controlled test recipient succeeds:
 - configure `CROWNOPS_TEST_EMAIL_ALLOWLIST` while still testing,

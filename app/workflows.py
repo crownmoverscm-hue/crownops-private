@@ -4,8 +4,9 @@ from datetime import datetime,timezone,timedelta,date
 from pathlib import Path
 from html import escape
 import hashlib,hmac,json,os,re,secrets,time
-from fastapi import Depends,HTTPException,Request
+from fastapi import BackgroundTasks,Depends,HTTPException,Request
 from fastapi.responses import FileResponse,HTMLResponse
+from .client_communications import pending_scope_changes,quote_scope_current
 from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .platform_common import *
 from .pricing import number,cents,calculate_with_overrides
@@ -52,10 +53,10 @@ def ingest_event(db,data,actor,new_lead):
             if not candidates and phone:
                 candidates=[r for r in rows(db,"SELECT * FROM leads WHERE phone!=''") if normalize_phone(r['phone'])==phone]
             if len(candidates)==1:target=candidates[0]
-            if len(candidates)>1:result['matching_requires_review']=True
+            if len(candidates)>1:raise HTTPException(409,{'message':'More than one client service matches. Review the incoming inquiry and provide its explicit project ID before importing it. No client record was created or changed.','matching_requires_review':True,'candidates':[{'id':r['id'],'client_name':r['client_name'],'move_date':r['move_date'],'stage':r['stage']} for r in candidates]})
         # A form represents a new project unless an explicit trusted project ID is supplied.
         if not target:
-            fields={k:v for k,v in lead_data.items() if k in {'client_name','email','phone','move_date','pickup','dropoff','home_size','boxes','pickup_access','dropoff_access','pickup_walk','dropoff_walk','inventory','heavy_items','language','photo_link'}}
+            fields={k:v for k,v in lead_data.items() if k in {'client_name','email','phone','move_date','pickup','dropoff','home_size','boxes','pickup_access','dropoff_access','pickup_walk','dropoff_walk','inventory','heavy_items','language','photo_link','intake'}}
             fields.setdefault('client_name','Unknown caller' if kind=='call' else 'New inquiry')
             call_disposition=str(data.get('disposition') or '').strip().lower()
             intake_type={'form':'Form','call':('Voicemail' if 'voice' in call_disposition else 'Missed Call'),'email':'Email'}[kind]
@@ -77,11 +78,24 @@ def ingest_event(db,data,actor,new_lead):
 
 
 def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
+    def send_ack(mid):
+        from .providers import process_mail
+        try:process_mail(path,mid)
+        except Exception:
+            import logging
+            logging.getLogger('crownops').warning('Request acknowledgment was not confirmed; review the outbox.')
+
     @app.get('/request')
     def request_page():return FileResponse(Path(__file__).parent/'static'/'request.html')
 
+    @app.get('/api/request/availability')
+    def requested_availability(day:str):
+        from .availability import date_status
+        with closing(connect(path)) as db:r=date_status(db,day)
+        return {'day':r['day'],'available':r['available'],'status':r['status'],'booking_confirmed':False}
+
     @app.post('/api/request')
-    def public_request(data:dict,request:Request):
+    def public_request(data:dict,request:Request,background:BackgroundTasks):
         if data.get('website'):return {'ok':True} # honeypot; do not store bot content
         if data.get('permission_to_contact') is not True:raise HTTPException(422,'Confirm permission for Crown to contact you about this request.')
         l=data.get('lead',{})
@@ -92,6 +106,19 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
         with transaction(path) as db:
             if db.execute("SELECT count(*) FROM audit WHERE actor=? AND action='Intake event captured' AND created_at>?",('public:'+ip,since)).fetchone()[0]>=8:raise HTTPException(429,'Too many submissions. Please contact Crown directly.')
             r=ingest_event(db,{'event_id':'webform:'+rid,'kind':'form','lead':l,'source':'CrownOps EN/FR form','permission_to_contact':True,'body':text(data.get('body',''))},'public:'+ip,new_lead)
+            if not r.get('duplicate'):
+                from .client_communications import portal_link
+                lead=one(db,'SELECT * FROM leads WHERE id=?',(r['lead_id'],));fr=lead['language'].lower().startswith('fr')
+                link=portal_link(db,lead,'public-request',public_url,tab='files')
+                body=(f"Bonjour {lead['client_name']},\n\nMerci d’avoir contacté Crown Movers! Nous avons reçu votre demande et notre équipe examinera les détails pour préparer votre devis.\n\nVous pouvez déjà ajouter vos photos et préciser les accès dans votre dossier privé :\n{link}\n\nVotre date souhaitée n’est pas encore réservée. Nous confirmerons les disponibilités et les prochaines étapes avec vous.\n\nUne question? Demandez un rappel dans votre dossier ou appelez le 514-606-4030.\n\nMerci,\nL’équipe Crown Movers" if fr else f"Hi {lead['client_name']},\n\nThank you for contacting Crown Movers! We have received your request. Our team will review your details and prepare your estimate.\n\nYou can already add photos and share access details in your private moving file:\n{link}\n\nYour requested date is not booked yet. We will confirm availability and the next steps with you.\n\nQuestions? Request a callback in your file or call 514-606-4030.\n\nThank you,\nThe Crown Movers team")
+                ack=queue_message(db,lead['id'],'Votre demande Crown Movers est reçue' if fr else 'We have your Crown Movers request',body,'Reply','public-request','request-ack:'+rid)
+                if live_enabled():
+                    db.execute("UPDATE outbound_messages SET status='Approved',approved_by='public-request-consent' WHERE id=?",(ack['id'],))
+                    background.add_task(send_ack,ack['id'])
+                if data.get('callback_request') is True:
+                    cid=uid('CALLBACK');preferred=text(data.get('preferred_time',''),'Preferred callback time',200)
+                    insert(db,'client_callbacks',dict(id=cid,lead_id=lead['id'],request_key=rid,phone=lead['phone'],preferred_time=preferred,message='Callback requested with estimate form',created_at=now()))
+                    add_task(db,lead['id'],'Client requested a callback: '+lead['phone']+(' · '+preferred if preferred else ''),lead.get('assigned_to',''),key='callback:'+cid)
         return {'ok':True,'reference':r['lead_id'],'message':'Request received. Your move is not yet booked.'}
 
     @app.post('/api/bridge/events')
@@ -172,26 +199,36 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
     def prepare_invoice(jid:str,u=Depends(auth)):
         from .invoices import validate_terms
         with transaction(path) as db:
-            j=assigned(db,jid,u);existing=one(db,'SELECT id FROM job_invoices WHERE job_id=?',(jid,))
+            j=invoice_job(db,jid,u);existing=one(db,'SELECT id FROM job_invoices WHERE job_id=?',(jid,))
             if existing:return {'id':existing['id'],'already_prepared':True}
             if j['status'] not in ('Tentative','Confirmed','In progress','Completed'):raise HTTPException(409,'This job is not available for invoice preparation.')
             q=one(db,"SELECT * FROM quotes WHERE id=? AND lead_id=? AND status='Accepted'",(j['quote_id'],j['lead_id']))
             cfg=settings(db,'billing_policy',{})
             if not q or not cfg.get('approved'):raise HTTPException(409,'An accepted quote and manager-approved billing policy are required. Management can set up reviewed manual terms otherwise.')
             l=one(db,'SELECT * FROM leads WHERE id=?',(j['lead_id'],))
-            if l['version']!=q['lead_version']:raise HTTPException(409,'Client scope changed. Sales must review the accepted terms first.')
-            if one(db,"SELECT id FROM client_changes WHERE lead_id=? AND status='Pending'",(j['lead_id'],)):raise HTTPException(409,'Client changes need review before billing.')
+            if not quote_scope_current(db,q,l):raise HTTPException(409,'Client scope changed. Sales must review the accepted terms first.')
+            if pending_scope_changes(db,j['lead_id']):raise HTTPException(409,'Client changes need review before billing.')
             r=json.loads(q['result_json']);base=cfg['terms'];data={**base,'customer':{'name':l['client_name'],'address':l['dropoff'],'email':l['email']},'hourly_rate':r['hourly_rate_cents']/100,'minimum_hours':r['minimum_hours'],'transport_amount':r['transport_cents']/100,'fuel_amount':r['fuel_cents']/100,'discount_amount':r['discount_cents']/100,'other_amount':r['other_cents']/100,'approval_reference':'Accepted quote '+q['id']+' revision '+str(q['revision'])+'; '+base.get('approval_reference','')}
+            quote_inputs=json.loads(q['inputs_json']);bill=quote_inputs.get('billing') or {}
+            data['customer']={'name':bill.get('company') or bill.get('name') or l['client_name'],'address':bill.get('address') or l['dropoff'],'email':bill.get('email') or l['email']}
+            accepted_materials=[x for x in r.get('line_items',[]) if x.get('kind')=='material' or x.get('code')]
+            if any(float(x['qty'])!=int(float(x['qty'])) for x in accepted_materials):raise HTTPException(409,'This older quote has fractional material quantities. Management must review the invoice terms before billing.')
+            approved_catalogue={x['code']:dict(x) for x in base.get('catalogue',[])}
+            for item in accepted_materials:approved_catalogue[item['code']]={'code':item['code'],'name':item['name'],'unit_price':item['unit_cents']/100}
+            data['catalogue']=list(approved_catalogue.values())
             try:terms=validate_terms(data)
             except (TypeError,KeyError,ValueError) as ex:raise HTTPException(422,str(ex))
-            iid=uid('INV');rec=dict(id=iid,job_id=jid,number=iid,status='Draft',terms_json=dumps(terms),actual_json='{}',terms_approved_by=q['approved_by'],terms_approved_at=q['approved_at'],created_by=u['id'],created_at=now(),updated_at=now());insert(db,'job_invoices',rec)
+            terms['payment_terms']=quote_inputs.get('payment_terms','')
+            iid=uid('INV');rec=dict(id=iid,job_id=jid,number=iid,status='Draft',terms_json=dumps(terms),actual_json=dumps({'quantities':{x['code']:int(x['qty']) for x in accepted_materials},'notes':'','service_hours':None,'estimated_service_hours':r.get('service_low',0)}),terms_approved_by=q['approved_by'],terms_approved_at=q['approved_at'],created_by=u['id'],created_at=now(),updated_at=now());insert(db,'job_invoices',rec)
             audit(db,u['id'],'Invoice prepared from accepted quote','job_invoices',iid,{'quote_id':q['id'],'rates_changed':False})
+            from .invoice_checks import apply_unambiguous_deposits
+            apply_unambiguous_deposits(db,one(db,'SELECT * FROM job_invoices WHERE id=?',(iid,)),j,u['id'])
         return {'id':iid,'ready':True}
 
     @app.get('/api/invoices/{iid}/collections')
     def collections(iid:str,u=Depends(auth)):
         with closing(connect(path)) as db:
-            inv,calc=invoice_current(db,iid);assigned(db,inv['job_id'],u)
+            inv,calc=invoice_current(db,iid);invoice_job(db,inv['job_id'],u)
             recs=rows(db,'SELECT c.*,p.amount_cents,p.method,p.reference,p.verified FROM field_collections c JOIN payments p ON p.id=c.payment_id WHERE c.invoice_id=? ORDER BY p.created_at DESC',(iid,))
             links=rows(db,'SELECT id,url,status,amount_cents,revision FROM payment_links WHERE invoice_id=? ORDER BY created_at DESC',(iid,))
             return {'collections':recs,'links':links,'balance_cents':calc['balance_cents'],'pending_received_cents':pending_received(db,iid)}
@@ -203,7 +240,7 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
         method=data.get('method');reference=text(data.get('reference',''),'Receipt / reference',300);rid=text(data.get('request_id',''),'Request ID',120)
         if method not in ('Cash','Cheque','Interac','Credit card','Other') or not reference or not re.fullmatch(r'[A-Za-z0-9_-]{12,120}',rid):raise HTTPException(422,'Choose a method and enter the receipt/reference and unique request ID.')
         with transaction(path) as db:
-            inv,calc=invoice_current(db,iid);j=assigned(db,inv['job_id'],u)
+            inv,calc=invoice_current(db,iid);j=invoice_job(db,inv['job_id'],u)
             old=one(db,'SELECT c.*,p.amount_cents,p.method,p.reference FROM field_collections c JOIN payments p ON p.id=c.payment_id WHERE request_id=?',(rid,))
             if old:
                 if old['invoice_id']!=iid or old['amount_cents']!=amount or old['method']!=method or old['reference']!=reference:raise HTTPException(409,'Request ID already used for a different payment.')
@@ -219,7 +256,7 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
 
     @app.post('/api/collections/{cid}/verify')
     def verify_collection(cid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'})
+        require_role(u,{'owner','manager','accounting'})
         note=text(data.get('evidence',''),'Reconciliation evidence',2000)
         if not note:raise HTTPException(422,'Record bank/terminal/cash-handover confirmation.')
         with transaction(path) as db:
@@ -242,7 +279,7 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
         with closing(connect(path)) as db:
             r=one(db,'SELECT c.*,p.amount_cents,p.method,p.reference,p.created_at FROM field_collections c JOIN payments p ON p.id=c.payment_id WHERE c.id=?',(cid,))
             if not r:raise HTTPException(404,'Receipt not found.')
-            inv,calc=invoice_current(db,r['invoice_id']);assigned(db,inv['job_id'],u)
+            inv,calc=invoice_current(db,r['invoice_id']);invoice_job(db,inv['job_id'],u)
         e=escape
         label='Reconciled receipt' if r['verified_at'] else 'Staff collection acknowledgment - awaiting reconciliation'
         html='<html><head><meta charset="utf-8"><title>Payment acknowledgment</title></head><body style="font:16px Arial;max-width:700px;margin:40px auto"><h1>Crown Movers</h1><h2>'+label+'</h2><p>Invoice '+e(inv['number'])+'</p><p>Amount received: CA$'+f'{r["amount_cents"]/100:,.2f}'+'</p><p>Method: '+e(r['method'])+'</p><p>Reference: '+e(r['reference'])+'</p><p>'+e(r['created_at'])+'</p><p>This acknowledgment records the collection. It is not proof of bank settlement while marked awaiting reconciliation.</p></body></html>'
@@ -251,11 +288,14 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
     @app.post('/api/invoices/{iid}/prepare-email')
     def invoice_email(iid:str,u=Depends(auth)):
         with transaction(path) as db:
-            inv,calc=invoice_current(db,iid);j=assigned(db,inv['job_id'],u);l=one(db,'SELECT * FROM leads WHERE id=?',(j['lead_id'],))
+            inv,calc=invoice_current(db,iid);j=invoice_job(db,inv['job_id'],u);l=one(db,'SELECT * FROM leads WHERE id=?',(j['lead_id'],))
             if inv['status']!='Issued':raise HTTPException(409,'Finalize the invoice before preparing delivery.')
             is_fr=l['language'].lower().startswith('fr')
-            body=(f"Bonjour {l['client_name']},\n\nVotre facture {inv['number']} est disponible dans votre portail client.\nMontant total : {calc['total_cents']/100:.2f} $ CA.\nSolde confirme : {calc['balance_cents']/100:.2f} $ CA.\nLes paiements recemment recueillis peuvent etre en cours de verification.\n\nMerci,\nJonathan\nCrown Movers" if is_fr else f"Hi {l['client_name']},\n\nYour invoice {inv['number']} is available in your private client portal.\nInvoice total: CA${calc['total_cents']/100:.2f}.\nConfirmed balance: CA${calc['balance_cents']/100:.2f}.\nRecently collected payments may still be awaiting verification.\n\nThank you,\nJonathan\nCrown Movers")
-            m=queue_message(db,l['id'],'Votre facture Crown Movers' if is_fr else 'Your Crown Movers invoice',body,'Invoice',u['id'],'invoice-mail:'+iid+':'+str(inv['revision']),jid=j['id'])
+            from .client_communications import portal_link,invoice_body
+            existing=one(db,'SELECT * FROM outbound_messages WHERE event_key=?',('invoice-delivery:'+iid+':'+str(inv['revision']),))
+            if existing:return {'id':existing['id'],'sent':existing['status']=='Sent','message':'Invoice delivery already prepared.'}
+            body=invoice_body(l,inv,calc,portal_link(db,l,u['id'],public_url,tab='invoices'))
+            m=queue_message(db,l['id'],'Votre facture Crown Movers' if is_fr else 'Your Crown Movers invoice',body,'Invoice',u['id'],'invoice-delivery:'+iid+':'+str(inv['revision']),jid=j['id'])
         return {'id':m['id'],'sent':False,'message':'Invoice email draft is ready for sales/manager review.'}
 
     @app.post('/api/employees')

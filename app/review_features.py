@@ -117,7 +117,7 @@ def register_review_features(app,path,auth,public_url):
 
     @app.post('/api/time-off')
     def time_off_request(data:dict,u=Depends(auth)):
-        if u['role'] not in ('crew','owner'): raise HTTPException(403,'Only employees or management can submit a time-off request.')
+        if u['role'] not in ('crew','owner','manager'): raise HTTPException(403,'Only employees or management can submit a time-off request.')
         eid=u.get('employee_id') if u['role']=='crew' else data.get('employee_id')
         if not eid: raise HTTPException(422,'Choose the employee requesting time off.')
         start=_date(data.get('start_date'),'Start date'); end=_date(data.get('end_date'),'End date')
@@ -202,7 +202,7 @@ def register_review_features(app,path,auth,public_url):
 
     @app.post('/api/jobs/{jid}/team-hours')
     def team_hours_save(jid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','dispatch'})
+        require_role(u,{'owner','manager','dispatch'})
         selected=data.get('employee_ids')
         if not isinstance(selected,list) or not selected: raise HTTPException(422,'Select at least one assigned employee.')
         if len(set(selected))!=len(selected) or len(selected)>30: raise HTTPException(422,'Invalid employee selection.')
@@ -245,7 +245,7 @@ def register_review_features(app,path,auth,public_url):
 
     @app.post('/api/jobs/{jid}/team-hours/approve')
     def team_hours_approve(jid:str,data:dict,u=Depends(auth)):
-        require_role(u,{'owner','accounting'})
+        require_role(u,{'owner','manager','accounting'})
         if data.get('reviewed') is not True: raise HTTPException(422,'Confirm you reviewed the individual employee hours.')
         with transaction(path) as db:
             j=_job_assigned(db,jid,u,write=False)
@@ -317,7 +317,7 @@ def register_review_features(app,path,auth,public_url):
         require_role(u,OFFICE)
         with closing(connect(path)) as db:
             result=rows(db,'SELECT * FROM material_catalog ORDER BY active DESC,category,name')
-        if u['role'] not in ('owner','accounting'): 
+        if u['role'] not in ('owner','manager'):
             for r in result:r.pop('cost_cents',None)
         return result
 
