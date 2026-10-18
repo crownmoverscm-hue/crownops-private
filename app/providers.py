@@ -359,19 +359,22 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             label_rows=gmail_sync._api(t['access_token'],'labels').get('labels') or []
             label_ids={x.get('name'):x.get('id') for x in label_rows if x.get('name') and x.get('id')}
             wanted={'quote':'New Quote Request','missed_call':'Missed Calls','voicemail':'Voice Mail'}
-            feeds={};missing=[]
+            feeds={};missing=[];content_verified=False
             for key,name in wanted.items():
                 lid=label_ids.get(name)
                 if not lid:
                     feeds[key]={'label':name,'found':False,'recent_14d':0};missing.append(name);continue
                 listing=gmail_sync._api(t['access_token'],'messages',{'labelIds':lid,'q':'newer_than:14d','maxResults':1})
-                feeds[key]={'label':name,'found':True,'recent_14d':int(listing.get('resultSizeEstimate') or 0)}
-            return {'ok':not missing,'email':profile.get('emailAddress') or '',
+                sample=next((x.get('id') for x in listing.get('messages') or [] if x.get('id')),None)
+                if sample:
+                    gmail_sync._api(t['access_token'],'messages/'+quote(sample,safe=''),{'format':'full'})
+                    content_verified=True
+                feeds[key]={'label':name,'found':True,'recent_14d':int(listing.get('resultSizeEstimate') or 0),'message_content_verified':bool(sample)}
+            return {'ok':not missing and content_verified,'message_content_verified':content_verified,'email':profile.get('emailAddress') or '',
               'messages_total':profile.get('messagesTotal'),'threads_total':profile.get('threadsTotal'),
               'feeds':feeds,'missing_labels':missing}
         except requests.RequestException as e:
-            status=getattr(getattr(e,'response',None),'status_code',None)
-            raise HTTPException(502,'Gmail read-access test failed'+(f' (HTTP {status})' if status else '')+'. Reconnect Gmail if the authorization is stale.')
+            raise HTTPException(502,gmail_sync.gmail_read_failure(e)['error'])
 
     @app.post('/api/gmail/sync-readonly')
     def gmail_sync_readonly(data:dict=None,u=Depends(auth)):

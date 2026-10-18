@@ -318,7 +318,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                     {"name":"New Quote Request","id":"LQ"},
                     {"name":"Missed Calls","id":"LM"},
                     {"name":"Voice Mail","id":"LV"}]},
-                {"resultSizeEstimate":7},{"resultSizeEstimate":3},{"resultSizeEstimate":2},
+                {"resultSizeEstimate":7,"messages":[{"id":"q"}]},{"id":"q","payload":{}},{"resultSizeEstimate":3,"messages":[{"id":"m"}]},{"id":"m","payload":{}},{"resultSizeEstimate":2,"messages":[{"id":"v"}]},{"id":"v","payload":{}},
             ]
             with patch("app.providers.provider_token",return_value={"access_token":"test-token"}),                  patch("app.providers.gmail_sync._api",side_effect=responses):
                 r=client.get("/api/gmail/test-readonly")
