@@ -129,6 +129,7 @@ def invoice_html(document):
     if calc.get('testimonial_credit_cents'):totals+=total_line(t('Approved participation credit','Crédit de participation approuvé'),'-'+money(calc['testimonial_credit_cents']))
     totals+=total_line(t('Invoice total','Total de la facture'),money(calc['total_cents']),True)+total_line(t('Verified payments applied','Paiements vérifiés appliqués'),'-'+money(calc['deposit_cents']))+total_line(t('Balance when issued','Solde à l’émission'),money(calc['balance_cents']),True)
     payment_terms=('<p><strong>'+t('Agreed payment terms','Modalités de paiement convenues')+'</strong><br>'+e(terms['payment_terms'])+'</p>') if terms.get('payment_terms') else ''
+    if terms.get('due_date'):payment_terms+='<p><strong>'+t('Payment due','Paiement dû')+'</strong> : '+e(terms['due_date'])+'</p>'
     test=t('TEST DOCUMENT — for review only.','DOCUMENT DE TEST — pour révision seulement.')
     banner=('<p class="notice">'+test+'</p>') if document.get('test_mode',True) else ''
     status=t('Issued','Émise') if document['status']=='Issued' else document['status']
@@ -165,7 +166,8 @@ def register_invoices(app,path,auth,visible_job,require):
             for inv in recs:
                 if u['role']=='crew' and not one(db,"SELECT job_id FROM assignments WHERE job_id=? AND resource_type='employee' AND resource_id=?",(inv['job_id'],u.get('employee_id') or '')):continue
                 j=invoice_job(db,inv['job_id'],u);doc=decorate(db,inv,j)
-                out.append({k:doc[k] for k in ('id','job_id','number','status','revision','version','service_date','client_name','calculation')})
+                from .document_browser import invoice_tracking
+                out.append({**{k:doc[k] for k in ('id','job_id','number','status','revision','version','service_date','client_name','calculation')}, **invoice_tracking(db,inv,doc['calculation'])})
             return out
 
     @app.get('/api/jobs/{jid}/invoice')
