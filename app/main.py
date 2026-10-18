@@ -196,7 +196,7 @@ def create_app(database_path=None):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.12.4-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.12.5-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     from .app_release import register_app_release
     register_app_release(app,ROOT)
     app.state.db_path=path
@@ -274,7 +274,7 @@ def create_app(database_path=None):
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
         from .photo_safety import photo_mode,upload_policy
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.4-rc1',
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.5-rc1',
                 'private_photos_available':photo_mode() and upload_policy()['enabled']}
 
     @app.post('/api/setup-owner')
@@ -1457,6 +1457,8 @@ def create_app(database_path=None):
     register_invoice_reconciliation(app,path,auth)
     from .invoice_access import register_invoice_access
     register_invoice_access(app,path,public_url,secure)
+    from .document_browser import register_document_browser
+    register_document_browser(app,path,auth,public_url)
     from .invoice_management import register_invoice_management
     register_invoice_management(app,path,auth)
     from starlette.middleware.trustedhost import TrustedHostMiddleware
