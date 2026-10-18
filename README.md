@@ -1,6 +1,6 @@
-# CrownOps 0.11.0-rc1
+# CrownOps 0.11.1-rc1
 
-Private CRM and moving-service workspace for Crown Movers. Start with [START_HERE.md](START_HERE.md) for the team process and [WORKFLOW_RELEASE_2026-10-18.md](WORKFLOW_RELEASE_2026-10-18.md) for this release and its validation.
+Private CRM and moving-service workspace for Crown Movers. Start with [START_HERE.md](START_HERE.md) for the team process and [WORKFLOW_RELEASE_2026-10-18.md](WORKFLOW_RELEASE_2026-10-18.md) for the base workflow release. See [INTAKE_CORRECTION_2026-10-18.md](INTAKE_CORRECTION_2026-10-18.md) for the subsequent live-intake correction.
 
 This is a tested workflow release. Publication and deployment evidence are tracked in [pull request #60](https://github.com/crownmoverscm-hue/crownops-private/pull/60) and the existing Railway service. A source archive alone does not prove that a deployment is live. No real client was emailed or charged during the isolated release checks.
 

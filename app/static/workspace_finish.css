@@ -165,3 +165,5 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 }
 
 @media(prefers-reduced-motion:reduce){.sidebar{transition:none}html{scroll-behavior:auto!important}}
+/* The browser's default [hidden] rule otherwise loses to the flex strip. */
+#pilot-strip[hidden]{display:none!important}

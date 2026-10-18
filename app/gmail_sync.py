@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 import requests
+from fastapi import HTTPException
 
 from .store import connect, transaction, one, rows, insert, audit, uid, now, dumps
 
@@ -401,16 +402,32 @@ def _record_call_and_followup(db, lead_id, parsed, subject, actor, gmail_id, eve
 
 
 def _quote_inquiry(db,data,payload,actor,event_key,new_lead,matched=None):
+    from .inquiry_intake import photo_link
+    from .platform_common import add_task
+    raw_photo=str(data.get('photo_link') or '').strip()
+    creation_data=dict(data)
+    if raw_photo.casefold() in ('','-','n/a','na','none','no'):
+        creation_data['photo_link']=''
+    else:
+        try:
+            creation_data['photo_link']=photo_link(raw_photo)
+        except HTTPException as ex:
+            if ex.status_code!=422:raise
+            # The original parsed value and body remain in the source event.
+            # An optional photo reference must not reject the client's inquiry.
+            creation_data['photo_link']=''
+            payload['photo_link_review']={'reason':str(ex.detail),'original_preserved':True}
     existing=one(db,'SELECT * FROM leads WHERE external_id=?',(event_key,))
     selected=existing or matched;created=False
     if selected:lead_id=selected['id']
     else:
-        selected=new_lead(db,data,actor,external_id=event_key,suppressed=1);lead_id=selected['id'];created=True
+        selected=new_lead(db,creation_data,actor,external_id=event_key,suppressed=1);lead_id=selected['id'];created=True
         db.execute('UPDATE leads SET created_at=? WHERE id=?',(payload.get('received_at') or now(),lead_id))
     message=_record_incoming_message(db,lead_id,actor,payload.get('subject') or '',payload.get('body') or payload.get('snippet') or '',created_at=payload.get('received_at'))
     payload.update(lead_id=lead_id,message_id=message,origin_label='Quote Form')
+    if payload.get('photo_link_review'):
+        add_task(db,lead_id,'Review client photo / folder reference in the original quote form',selected.get('assigned_to') or '',key='gmail-photo:'+event_key)
     if not created:
-        from .platform_common import add_task
         add_task(db,lead_id,'Review new quote form details for this service',selected.get('assigned_to') or '',key='quote-form:'+event_key)
     return lead_id,created
 
@@ -532,52 +549,67 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                 if one(db, 'SELECT id FROM integration_events WHERE event_key=?', (event_key,)):
                     summary['duplicates'] += 1
                     continue
-                if feed == 'quote':
-                    data = _quote_fields(body, subject)
-                    payload['parsed']=data;payload['body']=body[:20000];payload['origin_label']='Quote Form'
-                    event_type='gmail_quote'
-                    existing = one(db, 'SELECT id FROM leads WHERE external_id=?', (event_key,))
-                    match=match_inquiry_project(db,data,'quote')
-                    if match['requires_review'] and not existing:
-                        payload['matching']=_matching_payload(match);summary['needs_review']+=1
-                        _review_task(db,event_key,'Match incoming quote form to the correct client service')
+                counters={key:summary[key] for key in ('new_leads','ignored','needs_review')}
+                db.execute('SAVEPOINT incoming_inquiry')
+                try:
+                    if feed == 'quote':
+                        data = _quote_fields(body, subject)
+                        payload['parsed']=data;payload['body']=body[:20000];payload['origin_label']='Quote Form'
+                        event_type='gmail_quote'
+                        existing = one(db, 'SELECT id FROM leads WHERE external_id=?', (event_key,))
+                        match=match_inquiry_project(db,data,'quote')
+                        if match['requires_review'] and not existing:
+                            payload['matching']=_matching_payload(match);summary['needs_review']+=1
+                            _review_task(db,event_key,'Match incoming quote form to the correct client service')
+                        else:
+                            object_id,created=_quote_inquiry(db,data,payload,actor,event_key,new_lead,match['lead'])
+                            if created:summary['new_leads']+=1
+                            status='Imported'
+                    elif feed in ('bank', 'wix_payment'):
+                        parsed = _payment_payload(feed, subject, body)
+                        if not parsed:
+                            summary['ignored'] += 1
+                            event_type = 'gmail_ignored'
+                            status = 'Ignored'
+                        else:
+                            payload['parsed'] = parsed
+                            event_type = 'gmail_bank_payment' if feed == 'bank' else 'gmail_wix_payment'
+                    elif feed in ('missed_call', 'voicemail'):
+                        parsed = _call_payload(feed, subject, body, attachments)
+                        payload['parsed'] = parsed
+                        payload['origin_label']='Missed Call' if feed=='missed_call' else 'Voicemail'
+                        event_type = 'gmail_missed_call' if feed == 'missed_call' else 'gmail_voicemail'
+                        if _duplicate_call(db, parsed, event_type):
+                            event_type = 'gmail_duplicate_call'
+                            status = 'Ignored'
+                            summary['ignored'] += 1
+                        elif fluid:
+                            match=match_inquiry_project(db,parsed,'call');matched=match['lead']
+                            if match['requires_review']:
+                                payload['matching']=_matching_payload(match);summary['needs_review']+=1
+                                _review_task(db,event_key,'Match incoming voicemail / missed call to the correct client service')
+                            else:
+                                if matched:object_id=matched['id']
+                                else:
+                                    lead=_new_call_lead(db,parsed,payload,actor,event_key,new_lead,event_type);object_id=lead['id'];summary['new_leads']+=1
+                                call_id = _record_call_and_followup(db, object_id, parsed, subject, actor, mid, event_type)
+                                payload['call_id'] = call_id;payload['lead_id'] = object_id;status='Imported'
                     else:
-                        object_id,created=_quote_inquiry(db,data,payload,actor,event_key,new_lead,match['lead'])
-                        if created:summary['new_leads']+=1
-                        status='Imported'
-                elif feed in ('bank', 'wix_payment'):
-                    parsed = _payment_payload(feed, subject, body)
-                    if not parsed:
                         summary['ignored'] += 1
                         event_type = 'gmail_ignored'
                         status = 'Ignored'
-                    else:
-                        payload['parsed'] = parsed
-                        event_type = 'gmail_bank_payment' if feed == 'bank' else 'gmail_wix_payment'
-                elif feed in ('missed_call', 'voicemail'):
-                    parsed = _call_payload(feed, subject, body, attachments)
-                    payload['parsed'] = parsed
-                    payload['origin_label']='Missed Call' if feed=='missed_call' else 'Voicemail'
-                    event_type = 'gmail_missed_call' if feed == 'missed_call' else 'gmail_voicemail'
-                    if _duplicate_call(db, parsed, event_type):
-                        event_type = 'gmail_duplicate_call'
-                        status = 'Ignored'
-                        summary['ignored'] += 1
-                    elif fluid:
-                        match=match_inquiry_project(db,parsed,'call');matched=match['lead']
-                        if match['requires_review']:
-                            payload['matching']=_matching_payload(match);summary['needs_review']+=1
-                            _review_task(db,event_key,'Match incoming voicemail / missed call to the correct client service')
-                        else:
-                            if matched:object_id=matched['id']
-                            else:
-                                lead=_new_call_lead(db,parsed,payload,actor,event_key,new_lead,event_type);object_id=lead['id'];summary['new_leads']+=1
-                            call_id = _record_call_and_followup(db, object_id, parsed, subject, actor, mid, event_type)
-                            payload['call_id'] = call_id;payload['lead_id'] = object_id;status='Imported'
-                else:
-                    summary['ignored'] += 1
-                    event_type = 'gmail_ignored'
-                    status = 'Ignored'
+                except HTTPException as ex:
+                    if ex.status_code!=422 or feed not in ('quote','missed_call','voicemail'):raise
+                    db.execute('ROLLBACK TO incoming_inquiry')
+                    summary.update(counters)
+                    summary['needs_review']+=1
+                    event_type={'quote':'gmail_quote','missed_call':'gmail_missed_call','voicemail':'gmail_voicemail'}[feed]
+                    object_id=mid;status='Needs review'
+                    payload['body']=body[:20000]
+                    payload['validation_review']={'message':str(ex.detail)[:1000],'original_preserved':True}
+                    _review_task(db,event_key,'Match incoming quote form after reviewing its details' if feed=='quote' else 'Match incoming voicemail / missed call after reviewing its details')
+                finally:
+                    db.execute('RELEASE incoming_inquiry')
                 insert(db, 'integration_events', dict(id=uid('GMAIL'), event_key=event_key, event_type=event_type, object_id=object_id, payload_json=dumps(payload), status=status, created_at=now()))
                 audit(db, actor, 'Read-only Gmail item imported', 'integration_events', event_key, {'type': event_type, 'status': status})
                 summary['new_events'] += 1
