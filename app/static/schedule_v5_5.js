@@ -76,7 +76,7 @@
       const approved=(off||[]).filter(r=>r.status==='Approved'&&r.start_date<=day&&r.end_date>=day);
       const fillers=Math.max(0,14-dayJobs.length);
       return `<section class="weekly-day-column ${availability.items.some(x=>x.day===day&&x.status==='Fully booked')?'day-closed':''}">
-        <header class="weekly-day-head"><div><small>${h(d.toLocaleDateString('en-CA',{weekday:'short'}))}</small><strong>${d.getDate()}</strong></div><span>${dayJobs.length} job${dayJobs.length===1?'':'s'}</span></header>
+        <header class="weekly-day-head" aria-label="${h(d.toLocaleDateString('en-CA',{weekday:'long',month:'long',day:'numeric',year:'numeric'}))}"><div><small>${h(d.toLocaleDateString('en-CA',{weekday:'long'}))}</small><strong><time datetime="${h(day)}">${h(d.toLocaleDateString('en-CA',{month:'short',day:'numeric'}))}</time></strong></div></header>
         ${availability.items.some(x=>x.day===day&&x.status==='Fully booked')?'<div class="day-closed-label">Fully booked · no new bookings</div>':''}
         ${approved.length?`<div class="weekly-off-row">${approved.map(r=>`<span>${h(r.employee_name)} OFF</span>`).join('')}</div>`:''}
         <div class="weekly-day-jobs">${dayJobs.map(j=>weeklyJobCard(j)).join('')}${Array.from({length:fillers},()=>'<div class="weekly-open-slot" aria-hidden="true"></div>').join('')}</div>
