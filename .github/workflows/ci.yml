@@ -52,6 +52,10 @@ jobs:
           npm install --prefix /tmp/crownops-browser --no-audit --no-fund playwright@1.62.1
           /tmp/crownops-browser/node_modules/.bin/playwright install --with-deps chromium
           python tests/browser/run_mobile.py wix_sync
+      - name: Test shared Inbox and client portal on phone, tablet and desktop
+        env:
+          NODE_PATH: /tmp/crownops-browser/node_modules
+        run: python tests/browser/run_mobile.py inbox
       - name: Smoke-create application
         env:
           CROWNOPS_ENV: test

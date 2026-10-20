@@ -109,9 +109,13 @@ class CrmPolishTests(unittest.TestCase):
             self.assertEqual(one(db, "SELECT status FROM tasks WHERE id='other-task'")['status'], 'Open')
         self.email()
         quoted = client.post('/api/ux/actions/email/email/outcome', json={'outcome':'quote_sent'})
-        self.assertEqual(quoted.status_code, 200, quoted.text)
+        self.assertEqual(quoted.status_code, 409, quoted.text)
+        self.assertEqual(client.post('/api/ux/inbox/email/claim').status_code,200)
+        with transaction(self.path) as db:lid=one(db,'SELECT id FROM leads')['id']
+        token=client.get('/api/inbox/'+lid).json()['conversation']['review_token']
+        self.assertEqual(client.post('/api/inbox/'+lid+'/status',json={'review_token':token,'status':'Resolved'}).status_code,200)
         with transaction(self.path) as db:
-            self.assertEqual(one(db, 'SELECT stage FROM leads')['stage'], 'Quote Sent')
+            self.assertEqual(one(db, 'SELECT stage FROM leads')['stage'], 'Waiting on client')
             self.assertTrue(one(db, "SELECT resolved_at FROM inbox_claims WHERE message_id='email'")['resolved_at'])
         self.assertEqual(client.post('/api/ux/actions/email/email/outcome', json={'outcome':'lost'}).status_code, 409)
         self.task('done-task')

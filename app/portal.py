@@ -161,12 +161,13 @@ def register_portal(app,path,auth,public_url,secure):
                   'reference_note':dep.get('reference_note','')}
             from .media_links import listing
             from .sales_journey import details_state
+            from .conversations import safe_public_body
             return {'details_progress':details_state(db,l),'media_links':listing(db,c['lead_id']),'csrf':c['csrf'],'client':public_client(l),'quotes':quotes,'jobs':jobs,'invoices':invs,
                 'changes':rows(db,'SELECT id,payload_json,status,created_at,review_note FROM client_changes WHERE lead_id=? ORDER BY created_at DESC',(c['lead_id'],)),
                 'callbacks':rows(db,'SELECT id,phone,preferred_time,message,status,created_at FROM client_callbacks WHERE lead_id=? ORDER BY created_at DESC',(c['lead_id'],)),
                 'upload_policy':upload_policy(),
                 'attachments':[safe_attachment(r) for r in rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(c['lead_id'],))],
-                'messages':rows(db,"SELECT id,subject,body,created_at FROM outbound_messages WHERE lead_id=? AND status='Sent' ORDER BY created_at DESC LIMIT 30",(c['lead_id'],)),
+                'messages':[{**m,'body':safe_public_body(m['body'])} for m in rows(db,"SELECT id,subject,body,created_at FROM outbound_messages WHERE lead_id=? AND status='Sent' AND lower(trim(recipient))=lower(trim(?)) AND event_key NOT LIKE 'client-access:%' ORDER BY created_at DESC LIMIT 30",(c['lead_id'],l['email']))],
                 'payment_links':rows(db,"SELECT p.invoice_id,p.url,p.amount_cents FROM payment_links p JOIN job_invoices i ON i.id=p.invoice_id JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND p.status='Active' AND p.revision=i.revision AND i.status='Issued'",(c['lead_id'],)),
                 'media_program':{'approved':cfg.get('approved',False),'release_version':cfg.get('version',''),'release_text':cfg.get('release_text',''),'channels':cfg.get('channels',[]),'amount_cents':5000},
                 'terms':{k:terms.get(k) for k in ('approved','version','text')} if terms.get('approved') else {'approved':False},

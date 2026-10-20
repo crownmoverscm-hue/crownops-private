@@ -47,7 +47,7 @@ function uxGroups(){
  ];
  const full=[
    ['TODAY',['dashboard']],
-   ['SALES',['sales','quotes','followups','communications']],
+   ['SALES',['sales','quotes','communications']],
    ['OPERATIONS',['schedule','invoices','payments','timeoff','documents','portalhub','care']],
    ['TEAM',['team','payroll']],
    ['COMPANY',['rates','inventory','fleet','connections','policies','settings','account']]

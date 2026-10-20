@@ -545,22 +545,11 @@ def create_app(database_path=None):
             if lead['assigned_to'] not in ('',u['id'],u['name']):
                 raise HTTPException(409,'This inquiry has already been claimed.')
             task_conflict=one(db,"""SELECT id FROM tasks WHERE lead_id=? AND status!='Done' AND historical=0
-              AND owner!='' AND owner NOT IN (?,?) LIMIT 1""",(lid,u['id'],u['name']))
+              AND COALESCE(legacy_id,'') NOT LIKE 'conversation-reminder:%' AND owner!='' AND owner NOT IN (?,?) LIMIT 1""",(lid,u['id'],u['name']))
             if task_conflict:raise HTTPException(409,'An open follow-up is already assigned to another team member.')
-            inbox_conflict=one(db,"""SELECT c.message_id FROM inbox_claims c JOIN messages m ON m.id=c.message_id
-              WHERE m.lead_id=? AND c.resolved_at IS NULL AND c.claimed_by!=? LIMIT 1""",(lid,u['id']))
-            if inbox_conflict:raise HTTPException(409,'An unanswered client email is already claimed by another team member.')
             db.execute('UPDATE leads SET assigned_to=?,updated_at=? WHERE id=?',(u['id'],now(),lid))
-            db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND historical=0",(u['id'],lid))
-            open_mail=rows(db,"""SELECT m.id,c.message_id,c.resolved_at FROM messages m LEFT JOIN inbox_claims c ON c.message_id=m.id
-              WHERE m.lead_id=? AND (lower(m.kind) LIKE '%incoming%' OR lower(m.kind) LIKE '%email%')""",(lid,))
-            for message in open_mail:
-                if message.get('resolved_at'):continue
-                if message.get('message_id'):
-                    db.execute('UPDATE inbox_claims SET claimed_by=?,claimed_at=?,resolved_at=NULL WHERE message_id=?',(u['id'],now(),message['id']))
-                else:
-                    insert(db,'inbox_claims',dict(message_id=message['id'],claimed_by=u['id'],claimed_at=now(),resolved_at=None))
-            audit(db,u['id'],'Lead claimed','leads',lid,{'open_followups_assigned':True,'unanswered_email_assigned':True})
+            db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND historical=0 AND COALESCE(legacy_id,'') NOT LIKE 'conversation-reminder:%'",(u['id'],lid))
+            audit(db,u['id'],'Lead claimed','leads',lid,{'open_followups_assigned':True,'unanswered_email_assigned':False})
         return {'ok':True}
 
     @app.post('/api/leads/{lid}/activate')
@@ -1495,5 +1484,7 @@ def create_app(database_path=None):
     register_final_features(app,path,auth)
     from .sales_crm_v6 import register_sales_crm_v6
     register_sales_crm_v6(app,path,auth,public_url)
+    from .conversations import register_conversations
+    register_conversations(app,path,auth)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app

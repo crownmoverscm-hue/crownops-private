@@ -175,8 +175,8 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 task_owners={r[0] for r in db.execute("SELECT owner FROM tasks WHERE lead_id='LEAD-ACTION' AND status!='Done'").fetchall()}
                 self.assertEqual(task_owners,{"USER-ACTION-A"})
                 inbox=one(db,"SELECT claimed_by,resolved_at FROM inbox_claims WHERE message_id='MSG-ACTION'")
-                self.assertEqual(inbox["claimed_by"],"USER-ACTION-A")
-                self.assertIsNone(inbox["resolved_at"])
+                self.assertIsNone(inbox)  # Service ownership does not claim communications.
+            self.assertEqual(agent_a.post("/api/ux/inbox/MSG-ACTION/claim").status_code,200)
 
             agent_b=TestClient(app);agent_b.cookies.set("crownops_session","action-b-session");agent_b.headers.update({"x-csrf-token":"csrf-b"})
             conflict=agent_b.post("/api/ux/actions/task/TASK-ACTION-1/claim")
@@ -191,7 +191,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 self.assertEqual(one(db,"SELECT assigned_to FROM leads WHERE id='LEAD-ACTION'")["assigned_to"],"USER-ACTION-B")
                 task_owners={r[0] for r in db.execute("SELECT owner FROM tasks WHERE lead_id='LEAD-ACTION' AND status!='Done'").fetchall()}
                 self.assertEqual(task_owners,{"USER-ACTION-B"})
-                self.assertEqual(one(db,"SELECT claimed_by FROM inbox_claims WHERE message_id='MSG-ACTION'")["claimed_by"],"USER-ACTION-B")
+                self.assertEqual(one(db,"SELECT claimed_by FROM inbox_claims WHERE message_id='MSG-ACTION'")["claimed_by"],"USER-ACTION-A")
                 audit_count=db.execute("SELECT count(*) FROM audit WHERE action='Action reassigned'").fetchone()[0]
                 self.assertGreaterEqual(audit_count,1)
 
@@ -276,7 +276,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
                 outcomes=db.execute("SELECT count(*) FROM action_outcomes WHERE lead_id='LEAD-WORKSPACE'").fetchone()[0]
                 self.assertEqual(outcomes,2)
 
-    def test_action_workspace_email_outcomes_resolve_email_and_update_stage(self):
+    def test_legacy_email_outcomes_redirect_to_reviewed_conversation_without_false_quote_sent(self):
         with tempfile.TemporaryDirectory() as td:
             db_path=Path(td)/"crownops.sqlite3"
             app=create_app(db_path)
@@ -295,11 +295,14 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             self.assertEqual(workspace.status_code,200,workspace.text)
             self.assertIn("estimate again",workspace.json()["action"]["body"])
             sent=client.post("/api/ux/actions/email/MSG-EMAIL-OUTCOME/outcome",json={"outcome":"quote_sent","note":"Resent estimate manually."})
-            self.assertEqual(sent.status_code,200,sent.text)
+            self.assertEqual(sent.status_code,409,sent.text)
+            current=client.get('/api/inbox/LEAD-EMAIL-OUTCOME').json()['conversation']
+            resolved=client.post('/api/inbox/LEAD-EMAIL-OUTCOME/status',json={'review_token':current['review_token'],'status':'Resolved'})
+            self.assertEqual(resolved.status_code,200,resolved.text)
             with transaction(db_path) as db:
-                self.assertEqual(one(db,"SELECT stage FROM leads WHERE id='LEAD-EMAIL-OUTCOME'")["stage"],"Quote Sent")
+                self.assertEqual(one(db,"SELECT stage FROM leads WHERE id='LEAD-EMAIL-OUTCOME'")["stage"],"New Lead")
                 self.assertIsNotNone(one(db,"SELECT resolved_at FROM inbox_claims WHERE message_id='MSG-EMAIL-OUTCOME'")["resolved_at"])
-                self.assertEqual(one(db,"SELECT outcome FROM action_outcomes WHERE action_id='MSG-EMAIL-OUTCOME'")["outcome"],"quote_sent")
+                self.assertIsNone(one(db,"SELECT outcome FROM action_outcomes WHERE action_id='MSG-EMAIL-OUTCOME'"))
 
     def test_gmail_readonly_diagnostic_reports_actual_account_and_required_labels(self):
         with tempfile.TemporaryDirectory() as td:

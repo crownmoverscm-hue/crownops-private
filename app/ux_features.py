@@ -203,26 +203,11 @@ def _sync_client_owner(db,lead_id,target_id,actor,reason,strict=False):
         raise HTTPException(409,'This client is already assigned to another team member.')
     if strict:
         task_conflict=one(db,"""SELECT id,owner FROM tasks WHERE lead_id=? AND status!='Done' AND historical=0
-          AND owner!='' AND owner NOT IN (?,?) LIMIT 1""",(lead_id,target_id,target.get('name') if target else ''))
+          AND COALESCE(legacy_id,'') NOT LIKE 'conversation-reminder:%' AND owner!='' AND owner NOT IN (?,?) LIMIT 1""",(lead_id,target_id,target.get('name') if target else ''))
         if task_conflict:raise HTTPException(409,'An open follow-up is already assigned to another team member.')
-        inbox_conflict=one(db,"""SELECT c.message_id,c.claimed_by FROM inbox_claims c JOIN messages m ON m.id=c.message_id
-          WHERE m.lead_id=? AND c.resolved_at IS NULL AND c.claimed_by!=? LIMIT 1""",(lead_id,target_id))
-        if inbox_conflict:raise HTTPException(409,'An unanswered client email is already claimed by another team member.')
     db.execute('UPDATE leads SET assigned_to=?,updated_at=? WHERE id=?',(target_id,now(),lead_id))
-    db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND historical=0",(target_id,lead_id))
-    open_mail=rows(db,"""SELECT m.id,c.message_id,c.resolved_at FROM messages m
-      LEFT JOIN inbox_claims c ON c.message_id=m.id
-      WHERE m.lead_id=? AND (lower(m.kind) LIKE '%incoming%' OR lower(m.kind) LIKE '%email%')""",(lead_id,))
-    for message in open_mail:
-        if message.get('resolved_at'):continue
-        if target_id:
-            if message.get('message_id'):
-                db.execute('UPDATE inbox_claims SET claimed_by=?,claimed_at=?,resolved_at=NULL WHERE message_id=?',(target_id,now(),message['id']))
-            else:
-                insert(db,'inbox_claims',dict(message_id=message['id'],claimed_by=target_id,claimed_at=now(),resolved_at=None))
-        elif message.get('message_id'):
-            db.execute('DELETE FROM inbox_claims WHERE message_id=? AND resolved_at IS NULL',(message['id'],))
-    audit(db,actor,reason,'leads',lead_id,{'from':current,'to':target_id,'open_followups_aligned':True,'unanswered_email_aligned':True})
+    db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND historical=0 AND COALESCE(legacy_id,'') NOT LIKE 'conversation-reminder:%'",(target_id,lead_id))
+    audit(db,actor,reason,'leads',lead_id,{'from':current,'to':target_id,'open_followups_aligned':True,'unanswered_email_aligned':False})
     return {'lead_id':lead_id,'assigned_to':target_id,'assigned_name':target.get('name') if target else ''}
 
 def _assign_generic_action(db,ref,target_id,actor,reason,strict=False):
@@ -417,6 +402,9 @@ def register_ux_features(app,path,auth):
         require_role(u,OFFICE)
         with transaction(path) as db:
             ref=_action_reference(db,kind,action_id)
+            if kind=='email':
+                from .conversations import claim_conversation
+                return {'ok':True,**claim_conversation(db,ref['lead_id'],u)}
             if ref.get('lead_id'):
                 return {'ok':True,**_sync_client_owner(db,ref['lead_id'],u['id'],u['id'],'Action claimed',strict=True)}
             return {'ok':True,**_assign_generic_action(db,ref,u['id'],u['id'],'Action claimed',strict=True)}
@@ -427,6 +415,7 @@ def register_ux_features(app,path,auth):
         target_id=str(data.get('user_id') or '').strip()
         with transaction(path) as db:
             ref=_action_reference(db,kind,action_id)
+            if kind=='email':raise HTTPException(409,'Use Inbox to hand over this conversation with a note.')
             if ref.get('lead_id'):
                 return {'ok':True,**_sync_client_owner(db,ref['lead_id'],target_id,u['id'],'Action reassigned')}
             return {'ok':True,**_assign_generic_action(db,ref,target_id,u['id'],'Action reassigned')}
@@ -450,6 +439,7 @@ def register_ux_features(app,path,auth):
         if len(followup_title)>300:raise HTTPException(422,'Keep the follow-up title under 300 characters.')
         with transaction(path) as db:
             ref=_action_reference(db,kind,action_id)
+            if kind=='email':raise HTTPException(409,'Use Inbox to record this conversation outcome.')
             if not ref.get('lead_id'):raise HTTPException(422,'Use the dedicated operational screen for this action.')
             lead=one(db,'SELECT * FROM leads WHERE id=?',(ref['lead_id'],))
             if not lead:raise HTTPException(404,'Client project not found.')
@@ -767,18 +757,14 @@ def register_ux_features(app,path,auth):
         require_role(u,OFFICE)
         with transaction(path) as db:
             ref=_action_reference(db,'email',mid)
-            result=_sync_client_owner(db,ref['lead_id'],u['id'],u['id'],'Client email claimed',strict=True)
+            from .conversations import claim_conversation
+            result=claim_conversation(db,ref['lead_id'],u)
         return {'ok':True,**result}
 
     @app.post('/api/ux/inbox/{mid}/resolve')
     def inbox_resolve(mid:str,u=Depends(auth)):
         require_role(u,OFFICE)
-        with transaction(path) as db:
-            c=one(db,'SELECT * FROM inbox_claims WHERE message_id=?',(mid,))
-            if not c:raise HTTPException(409,'Claim the email before marking it answered.')
-            if c['claimed_by']!=u['id'] and u['role'] not in MANAGERS:raise HTTPException(403,'Only the claimant or a manager can mark this answered.')
-            db.execute('UPDATE inbox_claims SET resolved_at=? WHERE message_id=?',(now(),mid));audit(db,u['id'],'Client email marked answered','messages',mid)
-        return {'ok':True}
+        raise HTTPException(409,'Open Inbox, review the latest updates and mark the conversation resolved.')
 
     @app.get('/api/ux/company-communications')
     def company_comms(u=Depends(auth)):
