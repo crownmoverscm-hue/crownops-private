@@ -40,6 +40,7 @@ class InboxTaskTests(unittest.TestCase):
         self.assertNotIn('Call after lunch',self.f.portal.get('/api/portal/conversation').text)
     def test_call_link_is_reviewed_audited_and_moves_only_its_task(self):
         cid=self.call();t=self.queue(channel='calls')['items'][0]
+        self.assertEqual(t['contact_phone'],'5145550198');self.assertEqual(t['call_status'],'Missed')
         c=self.sales.get('/api/inbox-call/'+cid).json()
         url='/api/inbox-calls/'+cid+'/link';payload={'lead_id':self.lid,'review_token':c['review_token']}
         self.assertEqual(self.sales.post(url,json=payload).status_code,422)

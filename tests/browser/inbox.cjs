@@ -92,7 +92,7 @@ let debugPage;
    assert.ok((await page.locator('.inbox-ownership').innerText()).includes('Needs reply'));
    await portalContext.close();
    await page.locator('[data-inbox-tab="calls"]').click();
-   const callTask=page.locator('.inbox-task-card').filter({hasText:'Internal / unmatched'}).first();
+   const callTask=page.locator('.inbox-task-card').filter({hasText:'Unmatched caller'}).first();
    await callTask.getByRole('button',{name:'Claim',exact:true}).click();
    await callTask.getByRole('button',{name:'Assign',exact:true}).click();
    await page.locator('#inbox-task-assign [name="user_id"]').selectOption('manager');

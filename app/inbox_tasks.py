@@ -90,6 +90,16 @@ def sync_followups(db):
         add('entry:'+e['id'],e['lead_id'],'forms','Reply to client portal message',e['created_at'])
 
 
+def task_contact(t,call_details):
+    meta=obj(t['raw_json']);ids=[k[5:] for k in meta.get('inbox_sources',[]) if k.startswith('call:')]
+    if meta.get('call_id'):ids.append(meta['call_id'])
+    d=next((call_details[cid] for cid in ids if cid in call_details),{})
+    t['contact_phone']=d.get('phone') or t.get('phone') or ''
+    t['call_status']=call_status(d) if d else ''
+    if not t.get('client_name') and d:t['client_name']=d.get('caller') or 'Unmatched caller'
+    return t
+
+
 def task_token(t):
     return hashlib.sha256(dumps([t.get(k) for k in ('id','lead_id','owner','status','due_date','historical','raw_json')]).encode()).hexdigest()
 
@@ -97,6 +107,7 @@ def task_token(t):
 def get_task(db,tid):
     t=one(db,'SELECT t.*,l.client_name,l.email,l.phone,l.move_date,l.lead_type,x.client_id FROM tasks t LEFT JOIN leads l ON l.id=t.lead_id LEFT JOIN client_account_leads x ON x.lead_id=t.lead_id WHERE t.id=?',(tid,))
     if not t:raise HTTPException(404,'Follow-up not found.')
+    task_contact(t,{c['id']:obj(c['payload_json']) for c in rows(db,'SELECT id,payload_json FROM calls')})
     t['channel']=task_channel(t);t['review_token']=task_token(t)
     return t
 
@@ -150,11 +161,13 @@ def register_inbox_tasks(app,path,auth):
             from .sales_crm_v6 import sync_unlinked_clients
             sync_unlinked_clients(db);sync_followups(db)
             people={p['id']:p['name'] for p in rows(db,'SELECT id,name FROM users WHERE active=1')}
+            call_details={c['id']:obj(c['payload_json']) for c in rows(db,'SELECT id,payload_json FROM calls')}
             names={v:k for k,v in people.items()};day=datetime.now(ZoneInfo('America/Toronto')).date().isoformat();items=[]
             for t in rows(db,'SELECT t.*,l.client_name,l.email,l.phone,l.move_date,l.lead_type,x.client_id FROM tasks t LEFT JOIN leads l ON l.id=t.lead_id LEFT JOIN client_account_leads x ON x.lead_id=t.lead_id WHERE t.historical=0 AND COALESCE(l.archived_import,0)=0'):
+                task_contact(t,call_details)
                 t['channel']=task_channel(t);owner=t['owner'] if t['owner'] in people else names.get(t['owner'],t['owner'])
                 if scope=='mine' and owner!=u['id'] or scope=='unclaimed' and owner:continue
-                if q.strip().lower() not in ' '.join(str(t.get(k) or '') for k in ('client_name','email','phone','title')).lower():continue
+                if q.strip().lower() not in ' '.join(str(t.get(k) or '') for k in ('client_name','email','phone','contact_phone','title')).lower():continue
                 t['bucket']='completed' if t['status']=='Done' else 'overdue' if t['due_date'] and t['due_date']<day else 'today' if t['due_date']==day else 'upcoming'
                 t.update(owner_id=owner,owner_name=people.get(owner,t['owner']),review_token=task_token(t))
                 items.append(t)
