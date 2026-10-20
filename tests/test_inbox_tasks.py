@@ -106,5 +106,7 @@ class InboxTaskTests(unittest.TestCase):
         r=self.f.post('entries',{'kind':'call','body':'Reached the client','request_key':'different-task-handler'},self.other)
         self.assertEqual(r.status_code,200,r.text);self.assertEqual(self.f.detail()['conversation']['handler_id'],'sales')
         self.assertEqual(self.f.owner(),'sales')
+        self.assertEqual(self.f.post('status',{'status':'Resolved'},self.other).status_code,403)
+        self.assertEqual(self.f.post('assign',{'handler_id':'sales2','note':'Should not take over'},self.other).status_code,403)
 
 if __name__=='__main__':unittest.main()

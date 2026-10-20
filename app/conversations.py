@@ -284,7 +284,9 @@ def register_conversations(app,path,auth):
         require_role(u,OFFICE);status=data.get('status')
         if status not in STATUSES:raise HTTPException(422,'Choose a conversation status.')
         with transaction(path) as db:
-            c=conversation(db,lid);check_token(c,data);can_handle(c,u);remind=''
+            c=conversation(db,lid);check_token(c,data)
+            if c['handler_id']!=u['id'] and u['role'] not in MANAGERS:raise HTTPException(403,'Update your own follow-up in Tasks. Only the client history handler or a manager can change the overall reply status.')
+            remind=''
             if status=='Waiting on client':
                 try:remind=date.fromisoformat(str(data.get('remind_on',''))).isoformat()
                 except ValueError:raise HTTPException(422,'Choose a reminder date.')
