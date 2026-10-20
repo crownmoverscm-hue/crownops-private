@@ -296,6 +296,7 @@ class ReleaseReadinessTests(EnvMixin, unittest.TestCase):
             self.assertIn("estimate again",workspace.json()["action"]["body"])
             sent=client.post("/api/ux/actions/email/MSG-EMAIL-OUTCOME/outcome",json={"outcome":"quote_sent","note":"Resent estimate manually."})
             self.assertEqual(sent.status_code,409,sent.text)
+            self.assertEqual(client.post('/api/ux/inbox/MSG-EMAIL-OUTCOME/claim').status_code,200)
             current=client.get('/api/inbox/LEAD-EMAIL-OUTCOME').json()['conversation']
             resolved=client.post('/api/inbox/LEAD-EMAIL-OUTCOME/status',json={'review_token':current['review_token'],'status':'Resolved'})
             self.assertEqual(resolved.status_code,200,resolved.text)

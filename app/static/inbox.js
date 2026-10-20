@@ -47,7 +47,7 @@ openLead=async function(lid){await inboxLead(lid);if(['owner','manager','sales',
 const inboxAttention=uxAttentionButton;
 uxAttentionButton=function(a){if(a.type==='email'&&a.lead_id)return `<button class="btn-small" data-inbox-open="${h(a.lead_id)}">Open conversation</button>`;if(a.type==='conversation')return `<button class="btn-small" data-inbox-open="${h(a.id)}">Open conversation</button>`;return inboxAttention(a);};
 const inboxActionWorkspace=uxOpenActionWorkspace;
-uxOpenActionWorkspace=async function(kind,id){if(kind==='email'){const r=await api('/ux/actions/email/'+encodeURIComponent(id)+'/workspace');return inboxOpen(r.client.id);}return inboxActionWorkspace(kind,id);};
+uxOpenActionWorkspace=async function(kind,id){if(kind==='email'){const r=await api('/ux/actions/email/'+encodeURIComponent(id)+'/workspace');return inboxOpen(r.client.id);}if(kind==='task'){const r=await api('/ux/actions/task/'+encodeURIComponent(id)+'/workspace');if(r.action.conversation)return inboxOpen(r.client.id);}return inboxActionWorkspace(kind,id);};
 const inboxToday=dashboard;
 dashboard=async function(){
  let html=await inboxToday();if(!['owner','manager','sales','dispatch'].includes(S.user.role))return html;

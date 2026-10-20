@@ -154,9 +154,9 @@ def _action_reference(db,kind,action_id):
     kind=str(kind or '').strip()
     action_id=str(action_id or '').strip()
     if kind=='task':
-        r=one(db,'SELECT id,lead_id,title FROM tasks WHERE id=?',(action_id,))
+        r=one(db,'SELECT id,lead_id,title,legacy_id FROM tasks WHERE id=?',(action_id,))
         if not r:raise HTTPException(404,'Follow-up not found.')
-        return {'kind':kind,'id':action_id,'lead_id':r.get('lead_id') or '','label':r.get('title') or 'Follow-up'}
+        return {'kind':kind,'id':action_id,'lead_id':r.get('lead_id') or '','label':r.get('title') or 'Follow-up','conversation':str(r.get('legacy_id') or '').startswith('conversation-reminder:')}
     if kind=='email':
         r=one(db,'SELECT id,lead_id,subject FROM messages WHERE id=?',(action_id,))
         if not r:raise HTTPException(404,'Email not found.')
@@ -247,7 +247,7 @@ def _action_workspace_data(db,ref):
         task=one(db,'SELECT * FROM tasks WHERE id=?',(ref['id'],))
         if not task:raise HTTPException(404,'Follow-up not found.')
         meta=_json_dict(task.get('raw_json'))
-        action={'kind':'task','id':task['id'],'title':task['title'],'status':task['status'],
+        action={'kind':'task','id':task['id'],'title':task['title'],'status':task['status'],'conversation':ref.get('conversation',False),
           'due_date':task.get('due_date') or '','created_at':task['created_at'],'detail':'','historical':bool(task['historical'])}
         call_id=str(meta.get('call_id') or '')
         if call_id:
@@ -402,6 +402,7 @@ def register_ux_features(app,path,auth):
         require_role(u,OFFICE)
         with transaction(path) as db:
             ref=_action_reference(db,kind,action_id)
+            if ref.get('conversation'):raise HTTPException(409,'Open the conversation in Inbox to update its reminder or handler.')
             if kind=='email':
                 from .conversations import claim_conversation
                 return {'ok':True,**claim_conversation(db,ref['lead_id'],u)}
@@ -415,6 +416,7 @@ def register_ux_features(app,path,auth):
         target_id=str(data.get('user_id') or '').strip()
         with transaction(path) as db:
             ref=_action_reference(db,kind,action_id)
+            if ref.get('conversation'):raise HTTPException(409,'Open the conversation in Inbox to update its reminder or handler.')
             if kind=='email':raise HTTPException(409,'Use Inbox to hand over this conversation with a note.')
             if ref.get('lead_id'):
                 return {'ok':True,**_sync_client_owner(db,ref['lead_id'],target_id,u['id'],'Action reassigned')}
@@ -439,6 +441,7 @@ def register_ux_features(app,path,auth):
         if len(followup_title)>300:raise HTTPException(422,'Keep the follow-up title under 300 characters.')
         with transaction(path) as db:
             ref=_action_reference(db,kind,action_id)
+            if ref.get('conversation'):raise HTTPException(409,'Open the conversation in Inbox to update its reminder or handler.')
             if kind=='email':raise HTTPException(409,'Use Inbox to record this conversation outcome.')
             if not ref.get('lead_id'):raise HTTPException(422,'Use the dedicated operational screen for this action.')
             lead=one(db,'SELECT * FROM leads WHERE id=?',(ref['lead_id'],))
@@ -480,6 +483,8 @@ def register_ux_features(app,path,auth):
             elif outcome=='quote_sent':
                 db.execute("UPDATE leads SET stage='Quote Sent',updated_at=? WHERE id=?",(now(),lead['id']))
             elif outcome=='lost':
+                from .conversations import conversation,save_state
+                c=conversation(db,lead['id']);save_state(db,c,u['id'],status='Resolved',remind_on='')
                 db.execute("UPDATE leads SET stage='Lost',version=version+1,updated_at=? WHERE id=?",(now(),lead['id']))
                 db.execute("UPDATE tasks SET status='Done' WHERE lead_id=? AND status!='Done' AND historical=0",(lead['id'],))
                 unanswered=rows(db,"""SELECT m.id FROM messages m LEFT JOIN inbox_claims c ON c.message_id=m.id

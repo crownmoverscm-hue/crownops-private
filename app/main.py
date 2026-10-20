@@ -612,6 +612,7 @@ def create_app(database_path=None):
             owner=str(lead.get('assigned_to') or task.get('owner') or '')
             if owner and owner not in (u['id'],u.get('name')) and u['role'] not in ('owner','manager'):
                 raise HTTPException(403,'This client is assigned to another team member.')
+            if str(task.get('legacy_id') or '').startswith('conversation-reminder:'):raise HTTPException(409,'Open this conversation in Inbox to record the outcome.')
             db.execute("UPDATE tasks SET status='Done' WHERE id=?",(tid,));audit(db,u['id'],'Task completed','tasks',tid)
         return {'ok':True}
 

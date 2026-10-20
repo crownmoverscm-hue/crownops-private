@@ -110,3 +110,35 @@ class ConversationTests(unittest.TestCase):
                 if i==2:db.execute("UPDATE outbound_messages SET recipient='other@example.invalid' WHERE id=?",(m['id'],))
         for endpoint in ['/api/portal/project','/api/portal/conversation']:
             r=self.portal.get(endpoint);self.assertEqual(r.status_code,200,r.text);self.assertNotIn('SECRET',r.text)
+
+    def test_waiting_task_cannot_reassign_service_or_be_silently_dismissed(self):
+        self.claim(self.manager)
+        due=(datetime.now(timezone.utc)+timedelta(days=1)).date().isoformat()
+        self.assertEqual(self.post('status',{'status':'Waiting on client','remind_on':due},self.manager).status_code,200)
+        with closing(connect(self.path)) as db:tid=one(db,'SELECT id FROM tasks WHERE legacy_id=?',('conversation-reminder:'+self.lid,))['id']
+        self.assertEqual(self.manager.post('/api/ux/actions/task/'+tid+'/assign',json={'user_id':'manager'}).status_code,409)
+        self.assertEqual(self.manager.post('/api/tasks/'+tid+'/complete',json={}).status_code,409)
+        self.assertEqual(self.owner(),'sales')
+
+    def test_migration_preserves_closed_work_then_new_client_activity_reopens(self):
+        from app.conversations import register_conversations,conversation
+        with transaction(self.path) as db:
+            db.execute('DELETE FROM service_conversations WHERE lead_id=?',(self.lid,))
+            db.execute("UPDATE leads SET stage='Completed' WHERE id=?",(self.lid,))
+            self.assertEqual(conversation(db,self.lid)['status'],'Resolved')
+        # A real restart installs baseline state before accepting traffic.
+        from app.main import create_app
+        create_app(self.path)
+        self.assertEqual(self.detail()['conversation']['status'],'Resolved')
+        self.assertEqual(self.message().status_code,200)
+        self.assertEqual(self.detail()['conversation']['status'],'Needs reply')
+
+    def test_reply_edit_invalidates_send_review_and_rejects_edit_after_send(self):
+        self.claim();r=self.post('email',{'subject':'Draft','body':'First','request_key':'edit-draft-00001'});mid=r.json()['mail_id']
+        m=self.sales.get('/api/inbox/mail/'+mid).json()
+        data={'subject':'Updated draft','body':'Second','review_token':m['review_token']}
+        self.assertEqual(self.sales.put('/api/inbox/mail/'+mid,json=data).status_code,200)
+        self.assertEqual(self.sales.post('/api/inbox/mail/'+mid+'/send',json={'review_token':m['review_token'],'confirmed':True}).status_code,409)
+        with transaction(self.path) as db:db.execute("UPDATE outbound_messages SET status='Sent' WHERE id=?",(mid,))
+        m=self.sales.get('/api/inbox/mail/'+mid).json()
+        self.assertEqual(self.sales.put('/api/inbox/mail/'+mid,json={**data,'review_token':m['review_token']}).status_code,409)

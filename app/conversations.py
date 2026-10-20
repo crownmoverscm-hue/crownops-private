@@ -32,12 +32,15 @@ def conversation(db,lid):
     lead=one(db,'SELECT * FROM leads WHERE id=?',(lid,))
     if not lead:raise HTTPException(404,'Service not found.')
     r=one(db,'SELECT * FROM service_conversations WHERE lead_id=?',(lid,))
+    initial=r is None
     if not r:
         legacy=rows(db,"""SELECT DISTINCT c.claimed_by FROM inbox_claims c JOIN messages m ON m.id=c.message_id
           WHERE m.lead_id=? AND c.resolved_at IS NULL""",(lid,))
         r={'lead_id':lid,'handler_id':legacy[0]['claimed_by'] if len(legacy)==1 else None,'status':'Needs reply',
            'revision':0,'seen_signal':'','remind_on':'','updated_at':lead['created_at']}
     signal=incoming_signal(db,lid)
+    if initial and lead['stage'] in ('Closed','Completed','Lost') and not rows(db,"SELECT m.id FROM messages m LEFT JOIN inbox_claims c ON c.message_id=m.id WHERE m.lead_id=? AND lower(m.kind) LIKE 'incoming%' AND c.resolved_at IS NULL LIMIT 1",(lid,)) and not one(db,"SELECT id FROM client_changes WHERE lead_id=? AND status='Pending' UNION ALL SELECT id FROM client_callbacks WHERE lead_id=? AND status!='Completed' LIMIT 1",(lid,lid)):
+        r['status']='Resolved';r['seen_signal']=signal
     if signal!=r['seen_signal'] and signal:r['status']='Needs reply';r['remind_on']=''
     handler=one(db,'SELECT id,name,active FROM users WHERE id=?',(r['handler_id'],)) if r['handler_id'] else None
     if handler and not handler['active']:r['handler_id']=None;handler=None
@@ -77,7 +80,9 @@ def claim_conversation(db,lid,u):
     require_role(u,OFFICE)
     c=conversation(db,lid)
     if c['handler_id'] and c['handler_id']!=u['id']:raise HTTPException(409,'This conversation is already claimed. Ask for a handover.')
-    if c['handler_id']!=u['id']:save_state(db,c,u['id'],handler_id=u['id'],status='In progress')
+    if c['handler_id']!=u['id']:
+        save_state(db,c,u['id'],handler_id=u['id'],status='In progress',remind_on='')
+        db.execute("UPDATE tasks SET status='Done' WHERE legacy_id=?",('conversation-reminder:'+lid,))
     return conversation(db,lid)
 
 
@@ -116,6 +121,8 @@ def timeline(db,lid,public=False):
     for r in rows(db,'SELECT * FROM client_callbacks WHERE lead_id=?',(lid,)):
         add('callback:'+r['id'],r['created_at'],'callback','Callback requested',r['preferred_time']+('\n'+r['message'] if r['message'] else ''),status=r['status'])
     if not public:
+        for r in rows(db,'SELECT * FROM action_outcomes WHERE lead_id=?',(lid,)):
+            add('outcome:'+r['id'],r['created_at'],'note','Follow-up: '+r['outcome'].replace('_',' '),r['note']+(' · Follow up '+r['followup_date'] if r['followup_date'] else ''),'staff',people.get(r['actor'],r['actor']))
         for r in rows(db,'SELECT * FROM quote_views WHERE lead_id=?',(lid,)):
             add('view:'+r['id'],r['viewed_at'],'estimate','Estimate opened','Opened in the private portal; this does not prove it was read.','staff')
     for r in rows(db,"SELECT * FROM quotes WHERE lead_id=? AND status='Accepted'",(lid,)):
@@ -145,10 +152,22 @@ def request_key(data):
     return key
 
 
+def mail_review_token(m,c):
+    return hashlib.sha256(dumps([m['id'],m['subject'],m['body'],m['recipient'],m['status'],c['review_token']]).encode()).hexdigest()
+
+
 def register_conversations(app,path,auth):
     # New client activity reopens the existing conversation and cancels its stale wait task.
     # Triggers also cover existing email/form/upload ingestion paths atomically.
     with transaction(path) as db:
+        # Preserve existing claimants and closed work on migration. Every subsequent
+        # inquiry starts a conversation, so client updates can reopen it atomically.
+        for lead in rows(db,'SELECT id FROM leads WHERE id NOT IN (SELECT lead_id FROM service_conversations)'):
+            c=conversation(db,lead['id'])
+            insert(db,'service_conversations',{k:c[k] for k in ('lead_id','handler_id','status','remind_on','seen_signal','revision','updated_at')})
+        db.execute("""CREATE TRIGGER IF NOT EXISTS conversation_new_lead AFTER INSERT ON leads BEGIN
+          INSERT INTO service_conversations(lead_id,status,updated_at) VALUES(NEW.id,'Needs reply',NEW.created_at);
+          END""")
         for table,condition in [('messages',"lower(NEW.kind) LIKE 'incoming%'"),
                 ('conversation_entries',"NEW.direction='client'"),('attachments','1'),
                 ('client_changes','1'),('client_callbacks','1'),('calls','1'),('saved_media_links','1')]:
@@ -324,7 +343,7 @@ def register_conversations(app,path,auth):
             if not m:raise HTTPException(404,'Message not found.')
             m['conversation']=conversation(db,m['lead_id'])
             m['can_handle']=m['conversation']['handler_id']==u['id'] or u['role'] in MANAGERS
-            m['review_token']=hashlib.sha256(dumps([m['id'],m['subject'],m['body'],m['recipient'],m['status']]).encode()).hexdigest()
+            m['review_token']=mail_review_token(m,m['conversation'])
             return m
 
     @app.put('/api/inbox/mail/{mid}')
@@ -333,8 +352,8 @@ def register_conversations(app,path,auth):
         with transaction(path) as db:
             m=one(db,'SELECT * FROM outbound_messages WHERE id=?',(mid,))
             if not m:raise HTTPException(404,'Message not found.')
-            can_handle(conversation(db,m['lead_id']),u)
-            expected=hashlib.sha256(dumps([m['id'],m['subject'],m['body'],m['recipient'],m['status']]).encode()).hexdigest()
+            c=conversation(db,m['lead_id']);can_handle(c,u)
+            expected=mail_review_token(m,c)
             if data.get('review_token')!=expected:raise HTTPException(409,'This draft changed. Review the current version.')
             if m['status']!='Draft' or not m['event_key'].startswith('conversation:'):raise HTTPException(409,'Only unsent conversation replies can be edited here.')
             subject=text(data.get('subject',''),'Subject',300);body=text(data.get('body',''),'Message',10000)
@@ -351,7 +370,7 @@ def register_conversations(app,path,auth):
             m=one(db,'SELECT * FROM outbound_messages WHERE id=?',(mid,))
             if not m:raise HTTPException(404,'Message not found.')
             c=conversation(db,m['lead_id']);can_handle(c,u)
-            expected=hashlib.sha256(dumps([m['id'],m['subject'],m['body'],m['recipient'],m['status']]).encode()).hexdigest()
+            expected=mail_review_token(m,c)
             if data.get('review_token')!=expected:raise HTTPException(409,'This email changed. Review the current draft.')
             if m['status'] not in ('Draft','Approved'):raise HTTPException(409,'This message cannot be sent again. Check its delivery status.')
             l=one(db,'SELECT email FROM leads WHERE id=?',(m['lead_id'],))
