@@ -142,7 +142,7 @@ def entry(db,lid,kind,body,subject,actor,key,visibility='staff',direction='staff
     if prior:
         if tuple(prior[k] for k in ('kind','body','subject','actor','visibility','direction'))!=payload:raise HTTPException(409,'This saved request has different content. Refresh before retrying.')
         return prior
-    r=dict(id=uid('CONV'),lead_id=lid,kind=kind,body=body,subject=subject,actor=actor,visibility=visibility,direction=direction,request_key=key,created_at=now())
+    r=dict(id=uid('CONV'),lead_id=lid,kind=kind,body=body,subject=subject,actor=actor,visibility=visibility,direction=direction,request_key=key,created_at=datetime.now(ZoneInfo('UTC')).isoformat())
     insert(db,'conversation_entries',r);return r
 
 

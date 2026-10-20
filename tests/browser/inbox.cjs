@@ -1,12 +1,13 @@
 'use strict';
 const {chromium}=require('playwright'),assert=require('node:assert/strict');
+let debugPage;
 (async()=>{
- const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CROWNOPS_CHROMIUM_PATH||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
  const base='http://127.0.0.1:8095',errors=[];
  for(const [index,role] of ['owner','manager','sales'].entries()){
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
   await context.addCookies([{name:'crownops_session',value:role+'-token',url:base}]);
-  const page=await context.newPage();page.on('pageerror',e=>errors.push(role+': '+e.message));
+  const page=await context.newPage();debugPage=page;page.on('pageerror',e=>{errors.push(role+': '+e.message);console.error('Page error:',e.message);});page.on('response',async r=>{if(r.url().includes('/api/inbox')&&r.status()>=400)console.error('Inbox error:',r.status(),await r.text());});
   await page.goto(base);await page.locator('#content h1').waitFor();
   await page.getByRole('button',{name:'Open navigation',exact:true}).click();
   assert.equal(await page.locator('#sidebar [data-page="followups"]').count(),0);
@@ -30,6 +31,7 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await page.locator('#inbox-compose [name="body"]').fill('Fictional private staff note.');
   await page.getByRole('button',{name:'Save internal note',exact:true}).click();
   await page.locator('.inbox-history').getByText('Fictional private staff note.',{exact:true}).waitFor();
+  if(role==='owner'&&process.env.CROWNOPS_SCREENSHOT_DIR){require('node:fs').mkdirSync(process.env.CROWNOPS_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:process.env.CROWNOPS_SCREENSHOT_DIR+'/inbox-phone.png',fullPage:true});await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:process.env.CROWNOPS_SCREENSHOT_DIR+'/inbox-desktop.png',fullPage:true});await page.setViewportSize({width:390,height:844});}
   await page.locator('#inbox-compose [name="subject"]').fill('Fictional unsent reply');
   await page.locator('#inbox-compose [name="body"]').fill('Fictional message — never sent.');
   await page.getByRole('button',{name:'Review email',exact:true}).click();
@@ -59,12 +61,13 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
    const invite=await page.evaluate(async()=>{const r=await api('/leads/FINISH-L0/portal-invite',{method:'POST',data:{}});return r.url;});
    const portalContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
    const portal=await portalContext.newPage();portal.on('pageerror',e=>errors.push('portal: '+e.message));
-   await portal.goto(invite);await portal.locator('[data-tab="help"]').click();
+   await portal.goto(invite);await portal.locator('.portal-tabs [data-tab="help"]').click();
    await portal.locator('#portal-thread .inbox-event').first().waitFor();
    assert.equal((await portal.locator('#portal-thread').innerText()).includes('Fictional private staff note.'),false);
    await portal.locator('#portal-thread-form [name="body"]').fill('Fictional client: I uploaded my room photos.');
    await portal.locator('#portal-thread-form button[type="submit"]').click();
    await portal.locator('#portal-thread').getByText('Fictional client: I uploaded my room photos.',{exact:true}).waitFor();
+   if(process.env.CROWNOPS_SCREENSHOT_DIR)await portal.screenshot({path:process.env.CROWNOPS_SCREENSHOT_DIR+'/portal-phone.png',fullPage:true});
    for(const width of [390,768,1440]){await portal.setViewportSize({width,height:900});assert.equal(await portal.locator('body').evaluate(x=>x.scrollWidth<=innerWidth+1),true,'portal '+width+' overflow');}
    await page.locator('[data-inbox-open="FINISH-L0"]').first().click();
    await page.locator('.inbox-history').getByText('Fictional client: I uploaded my room photos.',{exact:true}).waitFor();
@@ -75,4 +78,4 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
  }
  assert.deepEqual(errors,[]);console.log(JSON.stringify({staff_roles:3,client_portal:true,widths:[390,768,1440],claim_handoff:true,call_notes:true,draft_edit:true,waiting_reopened:true,emails_sent:0,page_errors:errors}));
  await browser.close();
-})().catch(e=>{console.error(e);process.exit(1)});
+})().catch(async e=>{console.error(e);if(debugPage)console.error(await debugPage.evaluate(()=>({toast:document.getElementById('toast')?.textContent,error:document.getElementById('modal-error')?.textContent,form:document.getElementById('inbox-compose')?.outerHTML})));process.exit(1)});
