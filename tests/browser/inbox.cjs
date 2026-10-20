@@ -15,7 +15,13 @@ let debugPage;
   await page.getByRole('heading',{name:'Inbox',exact:true}).waitFor();
   await page.locator('[data-inbox-open="FINISH-L'+index+'"]').first().click();
   await page.locator('.inbox-detail-head').waitFor();
+  // An owner/manager can already write before claiming; wait for the new
+  // handler display, not for the form that was present before the request.
+  let releaseClaim;const claimGate=new Promise(resolve=>{releaseClaim=resolve;});
+  await page.route('**/api/inbox/*/claim',async route=>{await claimGate;await route.continue();});
   await page.getByRole('button',{name:'Claim conversation',exact:true}).click();
+  try{if(role!=='sales')assert.equal(await page.locator('#inbox-compose [name="body"]').isDisabled(),true);}finally{releaseClaim();}
+  await page.locator('.inbox-ownership').getByText(/^Handled by /).waitFor();
   await page.locator('#inbox-compose').waitFor();
   assert.ok((await page.locator('.inbox-detail').innerText()).includes('Service owner:'));
   for(const width of [390,768,1440]){
