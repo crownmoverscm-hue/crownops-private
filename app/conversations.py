@@ -105,8 +105,10 @@ def timeline(db,lid,public=False):
         add('entry:'+r['id'],r['created_at'],r['kind'],r['subject'],r['body'],r['visibility'],
             'You' if public and r['direction']=='client' else 'Crown Movers' if public else people.get(r['actor'],r['actor']),r['direction'])
     if not public:
+        form_messages={r['message_id'] for r in rows(db,"SELECT json_extract(payload_json,'$.message_id') message_id FROM integration_events WHERE event_type='gmail_quote' AND json_valid(payload_json)")}
         for r in rows(db,'SELECT * FROM messages WHERE lead_id=?',(lid,)):
-            add('message:'+r['id'],r['created_at'],'email' if r['kind'].lower().startswith('incoming') else 'note',r['subject'] or r['kind'],r['body'],'staff',people.get(r['author'],r['author']), 'client' if r['kind'].lower().startswith('incoming') else 'staff')
+            kind='form' if r['id'] in form_messages or 'form' in r['kind'].lower() else 'email' if r['kind'].lower().startswith('incoming') else 'note'
+            add('message:'+r['id'],r['created_at'],kind,r['subject'] or r['kind'],r['body'],'staff',people.get(r['author'],r['author']), 'client' if r['kind'].lower().startswith('incoming') else 'staff')
         for r in rows(db,'SELECT * FROM calls WHERE lead_id=?',(lid,)):
             d=json.loads(r['payload_json']);add('call:'+r['id'],r['created_at'],'call',d.get('disposition') or 'Phone call',d.get('note') or d.get('summary') or d.get('phone') or '', 'staff')
     for r in rows(db,"SELECT * FROM outbound_messages WHERE lead_id=? AND status='Sent'",(lid,)):
@@ -250,7 +252,7 @@ def register_conversations(app,path,auth):
             events=[]
             for l in rows(db,'SELECT lead_id FROM client_account_leads WHERE client_id=?',(cid,)):events+=timeline(db,l['lead_id'])
             if kind not in ('all','emails','forms','calls','notes'):raise HTTPException(422,'Choose an interaction type.')
-            groups={'emails':{'email'},'forms':{'inquiry','details','file','portal'},'calls':{'call','callback'},'notes':{'note','handoff','status'}}
+            groups={'emails':{'email'},'forms':{'inquiry','form','details','file','portal'},'calls':{'call','callback'},'notes':{'note','handoff','status'}}
             if kind!='all':events=[e for e in events if e['kind'] in groups[kind]]
             events.sort(key=lambda r:(r['at'] or '',r['id']),reverse=True);offset=max(0,offset)
             return {'items':events[offset:offset+40],'total':len(events),'offset':offset}

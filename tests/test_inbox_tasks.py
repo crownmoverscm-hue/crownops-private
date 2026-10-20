@@ -72,6 +72,18 @@ class InboxTaskTests(unittest.TestCase):
             insert(db,'integration_events',dict(id='fake-gmail',event_key='fake-event',event_type='gmail_quote',object_id=self.lid,payload_json=dumps({'message_id':'form-email','lead_id':self.lid}),status='Imported',created_at=now()))
         items=self.queue(channel='forms')['items'];self.assertEqual([t['id'] for t in items],['form-task'])
         self.assertEqual(self.queue(channel='emails')['total'],0)
+        cid=self.f.detail()['client_id'];history=self.sales.get('/api/crm/clients/'+cid+'/history?kind=forms').json()
+        self.assertIn('Fictional quote form',str(history['items']))
+    def test_completing_callback_updates_client_visible_status(self):
+        with transaction(self.path) as db:insert(db,'client_callbacks',dict(id='callback-one',lead_id=self.lid,request_key='callback-test-0001',phone='5145550198',created_at=now()))
+        t=self.queue(channel='calls')['items'][0]
+        self.assertEqual(self.change(t,'done',self.manager).status_code,200)
+        events=self.f.portal.get('/api/portal/conversation').json()['items']
+        callback=next(e for e in events if e['id']=='callback:callback-one')
+        self.assertEqual(callback['status'],'Completed')
+        self.assertEqual(self.change(self.get(t['id']),'reopen',self.manager).status_code,200)
+        with closing(connect(self.path)) as db:self.assertEqual(one(db,"SELECT status FROM client_callbacks WHERE id='callback-one'")['status'],'Requested')
+
     def test_due_date_uses_montreal_and_service_assignment_cannot_overwrite_task_handler(self):
         self.call(lid=self.lid)
         with transaction(self.path) as db:db.execute("UPDATE calls SET created_at='2026-10-20T01:00:00+00:00' WHERE id='unmatched'")

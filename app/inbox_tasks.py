@@ -58,7 +58,10 @@ def sync_followups(db):
         if p.get('message_id'):events[p['message_id']]=(e,p)
     states={}
     def add(source,lid,channel,title,at,existing=None,done=False):
-        if source in by_source:return
+        if source in by_source:
+            if done and source.startswith(('callback:','change:')):
+                db.execute("UPDATE tasks SET status='Done' WHERE id=?",(by_source[source]['id'],))
+            return
         t=existing or by_key.get('inbox:'+source)
         if not t:
             if lid not in states:states[lid]=conversation(db,lid)['status'] if lid in leads else 'Needs reply'
@@ -126,6 +129,10 @@ def update_task(db,tid,data,u):
         else:raise HTTPException(422,'Choose a follow-up action.')
     meta=obj(t['raw_json']);meta['inbox_managed']=True
     db.execute('UPDATE tasks SET owner=?,status=?,due_date=?,raw_json=? WHERE id=?',(target,status,due,dumps(meta),tid))
+    if action in ('done','reopen'):
+        for source in meta.get('inbox_sources',[]):
+            kind,source_id=source.split(':',1)
+            if kind=='callback':db.execute('UPDATE client_callbacks SET status=? WHERE id=?',('Completed' if action=='done' else 'Requested',source_id))
     if t['lead_id']:entry(db,t['lead_id'],'note',note,'Follow-up '+{'claim':'claimed','assign':'assigned','done':'completed','reopen':'reopened','schedule':'scheduled'}[action]+': '+t['title'],u['id'],uid('TASKLOG'))
     audit(db,u['id'],'Inbox follow-up '+action,'tasks',tid,{'from':owner,'to':target,'status':status,'note':note})
     return get_task(db,tid)
