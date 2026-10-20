@@ -28,7 +28,7 @@ class LaunchAccessTests(unittest.TestCase):
         self.manager=self.staff('manager')
 
     def test_manager_has_admin_access_and_personal_assignments_without_role_switching(self):
-        for url in ('/api/account-access','/api/hosting-status','/api/schema','/api/platform/settings','/api/ux/employee-directory','/api/expenses'):
+        for url in ('/api/account-access','/api/hosting-status','/api/schema','/api/platform/settings','/api/ux/employee-directory'):
             r=self.manager.get(url);self.assertEqual(r.status_code,200,(url,r.text))
         r=self.manager.put('/api/jobs/J1/plan',json=self.plan(auto_confirm=True))
         self.assertEqual(r.status_code,200,r.text)
@@ -51,6 +51,24 @@ class LaunchAccessTests(unittest.TestCase):
         self.assertEqual(self.manager.get('/api/expenses').status_code,403)
         self.assertEqual(self.manager.get('/api/account-access').status_code,403)
 
+    def test_manager_cannot_access_cost_imports_audit_details_or_full_backups(self):
+        eid=self.owner.post('/api/expenses',json=self.expense()).json()['id']
+        from app.cost_tracking import stage_records
+        with transaction(self.path) as db:
+            stage_records(db,'123','production',[('Purchase',{'Id':'1','TxnDate':'2026-11-15','CurrencyRef':{'value':'CAD'},'TotalAmt':100,'TxnTaxDetail':{'TotalTax':0},'EntityRef':{'name':'Private vendor'}})],'owner')
+        sid=self.owner.get('/api/costs/quickbooks').json()['items'][0]['id']
+        for role in ('manager','sales','dispatch','accounting','crew','lead'):
+            c=self.staff(role)
+            for url in ('/api/costs/margins','/api/costs/quickbooks','/api/owner-backups/example.zip'):
+                self.assertEqual(c.get(url).status_code,403,(role,url))
+            for url in ('/api/costs/quickbooks/fetch','/api/costs/quickbooks/'+sid+'/review','/api/owner-backups'):
+                self.assertEqual(c.post(url,json={}).status_code,403,(role,url))
+        own=self.owner.get('/api/audit').json();manager=self.manager.get('/api/audit').json()
+        self.assertTrue(any(a['object_type']=='expenses' for a in own))
+        self.assertTrue(any(a['object_type']=='expense_sources' for a in own))
+        self.assertFalse(any(a['object_type'] in ('expenses','expense_sources') for a in manager))
+        self.assertEqual(self.owner.get('/api/expenses').json()['total'],1) # fetching does not approve/import
+
     def test_mfa_status_includes_managers(self):
         status=self.owner.get('/api/hosting-status').json()
         check=next(c for c in status['checks'] if c['key']=='mfa')
@@ -63,23 +81,23 @@ class LaunchAccessTests(unittest.TestCase):
         data.update(changes);return data
 
     def test_expenses_create_retry_update_void_and_summary_keep_audit_history(self):
-        r=self.manager.post('/api/expenses',json=self.expense());self.assertEqual(r.status_code,200,r.text)
+        r=self.owner.post('/api/expenses',json=self.expense());self.assertEqual(r.status_code,200,r.text)
         e=r.json();self.assertEqual(e['total_cents'],11498)
-        retry=self.manager.post('/api/expenses',json=self.expense());self.assertEqual(retry.json()['id'],e['id'])
-        self.assertEqual(self.manager.post('/api/expenses',json=self.expense(subtotal='200')).status_code,409)
+        retry=self.owner.post('/api/expenses',json=self.expense());self.assertEqual(retry.json()['id'],e['id'])
+        self.assertEqual(self.owner.post('/api/expenses',json=self.expense(subtotal='200')).status_code,409)
         self.assertEqual(self.owner.get('/api/expenses').json()['total'],1)
         update=self.expense(subtotal='150',version=1);update.pop('request_key')
         self.assertEqual(self.owner.put('/api/expenses/'+e['id'],json=update).status_code,200)
-        self.assertEqual(self.manager.put('/api/expenses/'+e['id'],json=update).status_code,409)
-        self.assertEqual(self.manager.post('/api/expenses/'+e['id']+'/void',json={'version':2,'reason':'Duplicate external receipt'}).status_code,200)
+        self.assertEqual(self.owner.put('/api/expenses/'+e['id'],json=update).status_code,409)
+        self.assertEqual(self.owner.post('/api/expenses/'+e['id']+'/void',json={'version':2,'reason':'Duplicate external receipt'}).status_code,200)
         summary=self.owner.get('/api/expenses').json();self.assertEqual(summary['total'],1);self.assertEqual(summary['total_cents'],0)
         with closing(connect(self.path)) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM audit WHERE object_type='expenses'").fetchone()[0],3)
             self.assertEqual(one(db,'SELECT status FROM expenses WHERE id=?',(e['id'],))['status'],'Voided')
 
-    def test_all_expense_endpoints_reject_every_non_admin_and_signed_out_request(self):
+    def test_all_expense_endpoints_reject_every_non_owner_and_signed_out_request(self):
         eid=self.owner.post('/api/expenses',json=self.expense()).json()['id']
-        for role in ('sales','dispatch','accounting','crew','lead'):
+        for role in ('manager','sales','dispatch','accounting','crew','lead'):
             client=self.staff(role)
             for url in ('/api/expenses','/api/expenses/export.csv','/api/expenses/'+eid):
                 self.assertEqual(client.get(url).status_code,403,(role,url))
@@ -91,14 +109,14 @@ class LaunchAccessTests(unittest.TestCase):
 
     def test_expense_validation_csv_and_paging(self):
         for change in ({'subtotal':'NaN'},{'tax':'1.001'},{'tax':True},{'date':'2026-02-30'},{'receipt_url':'javascript:alert(1)'},{'job_id':'missing'},{'vendor':''},{'extra':'no'}):
-            self.assertEqual(self.manager.post('/api/expenses',json=self.expense(**change)).status_code,422,change)
-        self.manager.post('/api/expenses',json=self.expense(vendor=' =SUM(1,2)'))
-        response=self.manager.get('/api/expenses/export.csv');self.assertEqual(response.status_code,200)
+            self.assertEqual(self.owner.post('/api/expenses',json=self.expense(**change)).status_code,422,change)
+        self.owner.post('/api/expenses',json=self.expense(vendor=' =SUM(1,2)'))
+        response=self.owner.get('/api/expenses/export.csv');self.assertEqual(response.status_code,200)
         self.assertIn("'=SUM",response.text);self.assertIn('114.98',response.text)
         self.assertEqual(response.headers['cache-control'],'no-store')
-        self.assertEqual(self.manager.get('/api/expenses?offset=1&limit=1').json()['items'],[])
-        self.assertEqual(self.manager.get('/api/expenses?limit=1000').status_code,422)
-        self.assertEqual(self.manager.get('/api/expenses?start=bad').status_code,422)
+        self.assertEqual(self.owner.get('/api/expenses?offset=1&limit=1').json()['items'],[])
+        self.assertEqual(self.owner.get('/api/expenses?limit=1000').status_code,422)
+        self.assertEqual(self.owner.get('/api/expenses?start=bad').status_code,422)
 
     def invoice(self):
         from app.invoices import validate_terms
@@ -184,7 +202,7 @@ class LaunchAccessTests(unittest.TestCase):
             read.assert_not_called()
 
     def test_backup_restore_preserves_manager_expense_and_audit_history(self):
-        eid=self.manager.post('/api/expenses',json=self.expense()).json()['id']
+        eid=self.owner.post('/api/expenses',json=self.expense()).json()['id']
         archive=self.path.parent/'launch-backup.zip'
         make_backup(self.path,archive,self.path.parent/'uploads')
         self.assertTrue(verify_backup(archive)['restore_verified'])
