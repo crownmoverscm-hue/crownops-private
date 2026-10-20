@@ -87,7 +87,11 @@ document.addEventListener('click',async e=>{
   if(a==='refresh')return await navigate('communications');
   if(a==='client')return IB.detail.client_id?await crmOpenClient(IB.detail.client_id):await openLead(IB.lid);
   if(a==='files')return await clientFiles(IB.lid);
-  if(a==='claim'){await api('/inbox/'+IB.lid+'/claim',{method:'POST',data:{review_token:c.review_token}});return await navigate('communications');}
+  if(a==='claim'){
+   const controls=[...document.querySelectorAll('.inbox-detail input:not(:disabled),.inbox-detail textarea:not(:disabled),.inbox-detail select:not(:disabled),.inbox-detail button:not(:disabled)')];controls.forEach(x=>x.disabled=true);
+   try{await api('/inbox/'+IB.lid+'/claim',{method:'POST',data:{review_token:c.review_token}});return await navigate('communications');}
+   finally{controls.forEach(x=>{if(x.isConnected)x.disabled=false;});}
+  }
   if(a==='handoff'){
    const staff=(await api('/ux/action-assignees')).filter(u=>u.role!=='accounting');
    return showModal('Hand over conversation',`<p>The service owner remains ${h(c.service_owner||'unassigned')}.</p><form id="inbox-handoff">${select('handler_id','Conversation handler',[['','Return to Unclaimed'],...staff.map(u=>[u.id,u.name])],c.handler_id||'')}${textArea('note','What does the next person need to know?','',3)}</form>`,btn('close','Cancel')+'<button form="inbox-handoff" type="submit" class="btn-primary">Hand over</button>');
