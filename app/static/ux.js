@@ -47,7 +47,7 @@ function uxGroups(){
  ];
  const full=[
    ['TODAY',['dashboard']],
-   ['SALES',['sales','quotes','followups','communications']],
+   ['SALES',['sales','quotes','communications']],
    ['OPERATIONS',['schedule','invoices','payments','timeoff','documents','portalhub','care']],
    ['TEAM',['team','payroll']],
    ['COMPANY',['rates','inventory','fleet','connections','policies','settings','account']]
@@ -362,7 +362,7 @@ X.pageRenderers.followups=async()=>{
    h(uxDateLabel(t.due_date,'No date')),
    t.owner?(t.owner===S.user.id?'<span class="pill blue">You</span>':`<span class="pill gray">${h(ownerNames[t.owner]||t.owner)}</span>`):'<span class="pill orange">Unassigned</span>',
    pill(state(t)==='completed'?'Done':state(t)==='overdue'?'Overdue':state(t)==='today'?'Due today':'Upcoming'),
-   `<div class="row">${t.status!=='Done'&&!t.historical?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.status!=='Done'&&t.lead_id?`<button class="btn-small" data-ux="action-workspace" data-kind="task" data-id="${h(t.id)}">Open</button>`:''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&!t.historical&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}" data-lead="${h(t.lead_id||'')}">Done</button>`:''}${t.status!=='Done'&&uxArchivedCallback(t)&&may(['owner'])?`<button class="btn-soft" data-ux="callback-backlog-restore" data-id="${h(t.id)}">Restore</button>`:''}</div>`
+   String(t.legacy_id||'').startsWith('conversation-reminder:')?`<button class="btn-small" data-inbox-open="${h(t.lead_id)}">Open conversation</button>`:`<div class="row">${t.status!=='Done'&&!t.historical?uxActionAssignmentButtons('task',t.id,t.owner):''}${t.status!=='Done'&&t.lead_id?`<button class="btn-small" data-ux="action-workspace" data-kind="task" data-id="${h(t.id)}">Open</button>`:''}${t.lead_id?`<button class="btn-small" data-ux="open-client" data-id="${h(t.lead_id)}">Client</button>`:''}${t.status!=='Done'&&!t.historical&&may(['owner','sales','dispatch'])?`<button class="btn-small" data-ux="followup-complete" data-id="${h(t.id)}" data-lead="${h(t.lead_id||'')}">Done</button>`:''}${t.status!=='Done'&&uxArchivedCallback(t)&&may(['owner'])?`<button class="btn-soft" data-ux="callback-backlog-restore" data-id="${h(t.id)}">Restore</button>`:''}</div>`
  ]);
  const overview=`<div class="ux-overview-grid">${[
    uxOverviewMetric('Open',counts.open),

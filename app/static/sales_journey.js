@@ -40,6 +40,7 @@ document.addEventListener('submit',async e=>{
  try{
   const d=Object.fromEntries(new FormData(f));d.fields=new FormData(f).getAll('detail_field');
   const r=await api('/leads/'+encodeURIComponent(f.dataset.salesDetails)+'/detail-requests',{method:'POST',data:d});
+  if(typeof inboxMail==='function')return await inboxMail(r.mail_id);
   showModal('Client information request prepared','<div class="callout teal">'+(r.duplicate?'There is already an open request.':'Your request email is ready.')+' Review it in Communications and send when ready.</div><p>Client information stays attached to this service. Submitted changes enter the review queue.</p>','<button data-page="communications" class="btn-primary">Open Communications</button>'+btn('close','Close'));
  }catch(ex){modalError(ex);}finally{if(b.isConnected)b.disabled=false;}
 });

@@ -385,3 +385,19 @@ CREATE TABLE IF NOT EXISTS wix_events (
 );
 CREATE INDEX IF NOT EXISTS wix_events_document ON wix_events(event,document_id);
 CREATE INDEX IF NOT EXISTS wix_events_received ON wix_events(received_at);
+
+-- Shared Inbox: a conversation handler is independent of the service owner.
+CREATE TABLE IF NOT EXISTS service_conversations (
+ lead_id TEXT PRIMARY KEY REFERENCES leads(id),handler_id TEXT REFERENCES users(id),
+ status TEXT NOT NULL DEFAULT 'Needs reply' CHECK(status IN ('Needs reply','In progress','Waiting on client','Resolved')),
+ remind_on TEXT NOT NULL DEFAULT '',seen_signal TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,
+ updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversation_entries (
+ id TEXT PRIMARY KEY,lead_id TEXT NOT NULL REFERENCES leads(id),request_key TEXT NOT NULL,
+ kind TEXT NOT NULL,subject TEXT NOT NULL,body TEXT NOT NULL,actor TEXT NOT NULL,
+ visibility TEXT NOT NULL CHECK(visibility IN ('staff','client')),
+ direction TEXT NOT NULL CHECK(direction IN ('staff','client')),
+ created_at TEXT NOT NULL,UNIQUE(lead_id,request_key)
+);
+CREATE INDEX IF NOT EXISTS conversation_entries_service ON conversation_entries(lead_id,created_at);
