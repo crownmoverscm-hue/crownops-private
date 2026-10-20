@@ -154,9 +154,9 @@ def _action_reference(db,kind,action_id):
     kind=str(kind or '').strip()
     action_id=str(action_id or '').strip()
     if kind=='task':
-        r=one(db,'SELECT id,lead_id,title,legacy_id FROM tasks WHERE id=?',(action_id,))
+        r=one(db,'SELECT id,lead_id,title,legacy_id,raw_json FROM tasks WHERE id=?',(action_id,))
         if not r:raise HTTPException(404,'Follow-up not found.')
-        return {'kind':kind,'id':action_id,'lead_id':r.get('lead_id') or '','label':r.get('title') or 'Follow-up','conversation':str(r.get('legacy_id') or '').startswith('conversation-reminder:')}
+        return {'kind':kind,'id':action_id,'lead_id':r.get('lead_id') or '','label':r.get('title') or 'Follow-up','inbox_managed':bool(json.loads(r.get('raw_json') or '{}').get('inbox_managed')),'conversation':str(r.get('legacy_id') or '').startswith('conversation-reminder:')}
     if kind=='email':
         r=one(db,'SELECT id,lead_id,subject FROM messages WHERE id=?',(action_id,))
         if not r:raise HTTPException(404,'Email not found.')
@@ -203,10 +203,10 @@ def _sync_client_owner(db,lead_id,target_id,actor,reason,strict=False):
         raise HTTPException(409,'This client is already assigned to another team member.')
     if strict:
         task_conflict=one(db,"""SELECT id,owner FROM tasks WHERE lead_id=? AND status!='Done' AND historical=0
-          AND COALESCE(legacy_id,'') NOT LIKE 'conversation-reminder:%' AND owner!='' AND owner NOT IN (?,?) LIMIT 1""",(lead_id,target_id,target.get('name') if target else ''))
+          AND COALESCE(legacy_id,'') NOT LIKE 'conversation-reminder:%' AND COALESCE(json_extract(raw_json,'$.inbox_managed'),0)=0 AND owner!='' AND owner NOT IN (?,?) LIMIT 1""",(lead_id,target_id,target.get('name') if target else ''))
         if task_conflict:raise HTTPException(409,'An open follow-up is already assigned to another team member.')
     db.execute('UPDATE leads SET assigned_to=?,updated_at=? WHERE id=?',(target_id,now(),lead_id))
-    db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND historical=0 AND COALESCE(legacy_id,'') NOT LIKE 'conversation-reminder:%'",(target_id,lead_id))
+    db.execute("UPDATE tasks SET owner=? WHERE lead_id=? AND status!='Done' AND historical=0 AND COALESCE(legacy_id,'') NOT LIKE 'conversation-reminder:%' AND COALESCE(json_extract(raw_json,'$.inbox_managed'),0)=0",(target_id,lead_id))
     audit(db,actor,reason,'leads',lead_id,{'from':current,'to':target_id,'open_followups_aligned':True,'unanswered_email_aligned':False})
     return {'lead_id':lead_id,'assigned_to':target_id,'assigned_name':target.get('name') if target else ''}
 
@@ -402,6 +402,7 @@ def register_ux_features(app,path,auth):
         require_role(u,OFFICE)
         with transaction(path) as db:
             ref=_action_reference(db,kind,action_id)
+            if ref.get('inbox_managed'):raise HTTPException(409,'Open Tasks in Inbox to update this independently assigned follow-up.')
             if ref.get('conversation'):raise HTTPException(409,'Open the conversation in Inbox to update its reminder or handler.')
             if kind=='email':
                 from .conversations import claim_conversation
@@ -416,6 +417,7 @@ def register_ux_features(app,path,auth):
         target_id=str(data.get('user_id') or '').strip()
         with transaction(path) as db:
             ref=_action_reference(db,kind,action_id)
+            if ref.get('inbox_managed'):raise HTTPException(409,'Open Tasks in Inbox to update this independently assigned follow-up.')
             if ref.get('conversation'):raise HTTPException(409,'Open the conversation in Inbox to update its reminder or handler.')
             if kind=='email':raise HTTPException(409,'Use Inbox to hand over this conversation with a note.')
             if ref.get('lead_id'):
@@ -441,6 +443,7 @@ def register_ux_features(app,path,auth):
         if len(followup_title)>300:raise HTTPException(422,'Keep the follow-up title under 300 characters.')
         with transaction(path) as db:
             ref=_action_reference(db,kind,action_id)
+            if ref.get('inbox_managed'):raise HTTPException(409,'Open Tasks in Inbox to update this independently assigned follow-up.')
             if ref.get('conversation'):raise HTTPException(409,'Open the conversation in Inbox to update its reminder or handler.')
             if kind=='email':raise HTTPException(409,'Use Inbox to record this conversation outcome.')
             if not ref.get('lead_id'):raise HTTPException(422,'Use the dedicated operational screen for this action.')

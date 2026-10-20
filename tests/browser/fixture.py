@@ -29,6 +29,7 @@ with transaction(fixture.path) as db:
     insert(db, 'job_invoices', dict(id='FINISH-INV', job_id='J1', number='TEST-WORKSPACE', status='Draft', terms_json=dumps(terms), actual_json='{}',
         terms_approved_by='manager', terms_approved_at=now(), created_by='manager', created_at=now(), updated_at=now()))
 with transaction(fixture.path) as db:
+    insert(db,'calls',dict(id='INBOX-UNMATCHED',lead_id=None,payload_json=dumps({'phone':'5145550198','disposition':'Missed','note':'Fictional unmatched call for Inbox QA'}),created_at=now()))
     insert(db,'integration_events',dict(id='LAYOUT-BAD-QUOTE',event_key='gmail:fictional-invalid',event_type='gmail_quote',object_id='fictional-invalid',payload_json=dumps({'parsed':{'client_name':'Fictional invalid form','email':'invalid-layout@example.invalid'},'origin_label':'Quote Form','body':'Fictional original information retained for office review.','validation_review':{'message':'Review inventory.','original_preserved':True}}),status='Needs review',created_at=now()))
 if os.getenv('CROWNOPS_BROWSER_HOURS_COSTS')=='1':
     from app.cost_tracking import stage_records

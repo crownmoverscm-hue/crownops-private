@@ -13,13 +13,22 @@ let debugPage;
   assert.equal(await page.locator('#sidebar [data-page="followups"]').count(),0);
   await page.locator('#sidebar [data-page="communications"]').click();
   await page.getByRole('heading',{name:'Inbox',exact:true}).waitFor();
-  await page.locator('[data-inbox-open="FINISH-L'+index+'"]').first().click();
+  if(role==='owner'&&process.env.CROWNOPS_SCREENSHOT_DIR){
+   require('node:fs').mkdirSync(process.env.CROWNOPS_SCREENSHOT_DIR,{recursive:true});
+   for(const width of [390,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.locator('body').evaluate(x=>x.scrollWidth<=innerWidth+1),true,'tasks '+width+' overflow');await page.screenshot({path:process.env.CROWNOPS_SCREENSHOT_DIR+'/tasks-'+width+'.png',fullPage:true});}
+   await page.setViewportSize({width:390,height:844});
+  }
+
+  assert.equal(await page.locator('[data-inbox-tab="tasks"].selected').count(),1);
+  assert.equal(await page.locator('[data-inbox-tab="conversations"]').count(),0);
+  await page.locator('.inbox-task-card').filter({has:page.locator('[data-lead-id="FINISH-L'+index+'"]')}).first().getByRole('button',{name:'Open',exact:true}).click();
+  await page.locator('[data-inbox-open="FINISH-L'+index+'"]').click();
   await page.locator('.inbox-detail-head').waitFor();
   // An owner/manager can already write before claiming; wait for the new
   // handler display, not for the form that was present before the request.
   let releaseClaim;const claimGate=new Promise(resolve=>{releaseClaim=resolve;});
   await page.route('**/api/inbox/*/claim',async route=>{await claimGate;await route.continue();});
-  await page.getByRole('button',{name:'Claim conversation',exact:true}).click();
+  await page.getByRole('button',{name:'Claim client follow-up',exact:true}).click();
   try{if(role!=='sales')assert.equal(await page.locator('#inbox-compose [name="body"]').isDisabled(),true);}finally{releaseClaim();}
   await page.locator('.inbox-ownership').getByText(/^Handled by /).waitFor();
   await page.locator('#inbox-compose').waitFor();
@@ -57,12 +66,13 @@ let debugPage;
   await page.locator('#inbox-handoff [name="note"]').fill('Fictional handoff: call client after lunch.');
   await page.locator('button[form="inbox-handoff"]').click();
   await page.getByRole('dialog').waitFor({state:'hidden'});
-  for(const tab of ['calls','tasks','drafts','sent','conversations']){
+  for(const tab of ['calls','tasks','emails','forms']){
    await page.locator('[data-inbox-tab="'+tab+'"]').click();
    await page.locator('[data-inbox-tab="'+tab+'"].selected').waitFor();
    assert.equal(await page.locator('body').evaluate(x=>x.scrollWidth<=innerWidth+1),true,tab+' overflow');
   }
   if(role==='owner'){
+   await page.locator('[data-inbox-tab="tasks"]').click();
    // Use a real scoped invitation against this disposable installation.
    const invite=await page.evaluate(async()=>{const r=await api('/leads/FINISH-L0/portal-invite',{method:'POST',data:{}});return r.url;});
    const portalContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
@@ -75,10 +85,37 @@ let debugPage;
    await portal.locator('#portal-thread').getByText('Fictional client: I uploaded my room photos.',{exact:true}).waitFor();
    if(process.env.CROWNOPS_SCREENSHOT_DIR)await portal.screenshot({path:process.env.CROWNOPS_SCREENSHOT_DIR+'/portal-phone.png',fullPage:true});
    for(const width of [390,768,1440]){await portal.setViewportSize({width,height:900});assert.equal(await portal.locator('body').evaluate(x=>x.scrollWidth<=innerWidth+1),true,'portal '+width+' overflow');}
-   await page.locator('[data-inbox-open="FINISH-L0"]').first().click();
+   await page.locator('[data-inbox-tab="tasks"]').click();
+   await page.locator('.inbox-task-card').filter({has:page.locator('[data-lead-id="FINISH-L0"]')}).first().getByRole('button',{name:'Open',exact:true}).click();
+   await page.locator('[data-inbox-open="FINISH-L0"]').click();
    await page.locator('.inbox-history').getByText('Fictional client: I uploaded my room photos.',{exact:true}).waitFor();
    assert.ok((await page.locator('.inbox-ownership').innerText()).includes('Needs reply'));
    await portalContext.close();
+   await page.locator('[data-inbox-tab="calls"]').click();
+   const callTask=page.locator('.inbox-task-card').filter({hasText:'Internal / unmatched'}).first();
+   await callTask.getByRole('button',{name:'Claim',exact:true}).click();
+   await callTask.getByRole('button',{name:'Assign',exact:true}).click();
+   await page.locator('#inbox-task-assign [name="user_id"]').selectOption('manager');
+   await page.locator('#inbox-task-assign [name="note"]').fill('Fictional callback handover.');
+   await page.getByRole('button',{name:'Save assignment',exact:true}).click();
+   await callTask.getByText(/Test Manager/).waitFor();
+   await page.locator('[data-inbox-view="log"]').click();
+   await page.locator('#inbox-call-status').selectOption('Missed');
+   await page.getByRole('button',{name:'Link client',exact:true}).click();
+   await page.locator('#inbox-call-search [name="q"]').fill('Fictional Samira');
+   await page.getByRole('button',{name:'Search clients',exact:true}).click();
+   await page.locator('[data-inbox-link-choice="FINISH-L0"]').click();
+   await page.getByRole('button',{name:'Link call',exact:true}).click();
+   await page.getByRole('button',{name:'Change client',exact:true}).waitFor();
+   assert.equal(await page.getByRole('button',{name:'Link client',exact:true}).count(),0);
+   await page.locator('[data-inbox-tab="calls"]').click();
+   const linkedTask=page.locator('.inbox-task-card').filter({hasText:'Return missed call'}).first();
+   await linkedTask.getByRole('button',{name:'Done',exact:true}).click();
+   await page.locator('#inbox-task-outcome [name="note"]').fill('Fictional callback completed.');
+   await page.getByRole('button',{name:'Mark done',exact:true}).click();
+   await page.locator('#inbox-status').selectOption('completed');
+   await page.locator('.inbox-task-card').filter({hasText:'Return missed call'}).getByRole('button',{name:'Reopen',exact:true}).waitFor();
+
   }
   await context.close();
  }

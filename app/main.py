@@ -605,6 +605,7 @@ def create_app(database_path=None):
             task=one(db,'SELECT * FROM tasks WHERE id=?',(tid,))
             if not task:raise HTTPException(404,'Follow-up not found.')
             if task['historical']:raise HTTPException(409,'Restore an archived callback before completing it.')
+            if json.loads(task.get('raw_json') or '{}').get('inbox_managed'):raise HTTPException(409,'Open Tasks in Inbox to record this follow-up outcome.')
             if str(task.get('legacy_id') or '').startswith('gmail-match:'):
                 event_key=task['legacy_id'][len('gmail-match:'):]
                 if one(db,"SELECT id FROM integration_events WHERE event_key=? AND status='Needs review'",(event_key,)):raise HTTPException(409,'Resolve the incoming client inquiry in Connections before completing its matching task.')
@@ -1487,5 +1488,7 @@ def create_app(database_path=None):
     register_sales_crm_v6(app,path,auth,public_url)
     from .conversations import register_conversations
     register_conversations(app,path,auth)
+    from .inbox_tasks import register_inbox_tasks
+    register_inbox_tasks(app,path,auth)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app
