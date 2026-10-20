@@ -45,8 +45,10 @@ def conversation(db,lid):
     handler=one(db,'SELECT id,name,active FROM users WHERE id=?',(r['handler_id'],)) if r['handler_id'] else None
     if handler and not handler['active']:r['handler_id']=None;handler=None
     owner=one(db,'SELECT id,name FROM users WHERE id=? OR name=?',(lead['assigned_to'],lead['assigned_to']))
+    task_handlers=[t['owner'] for t in rows(db,"SELECT owner FROM tasks WHERE lead_id=? AND status!='Done' AND historical=0 AND owner!='' AND json_extract(raw_json,'$.inbox_managed')=1 ORDER BY owner",(lid,))]
+    r['task_handlers']=task_handlers
     r.update(handler_name=handler['name'] if handler else '',service_owner=owner['name'] if owner else lead['assigned_to'],
-             signal=signal,review_token=hashlib.sha256(dumps([lid,r['revision'],signal,r['handler_id'],lead['email']]).encode()).hexdigest())
+             signal=signal,review_token=hashlib.sha256(dumps([lid,r['revision'],signal,r['handler_id'],lead['email'],task_handlers]).encode()).hexdigest())
     return r
 
 
@@ -72,7 +74,7 @@ def check_token(c,data):
 
 
 def can_handle(c,u):
-    if c['handler_id']!=u['id'] and u['role'] not in MANAGERS:
+    if c['handler_id']!=u['id'] and u['id'] not in c.get('task_handlers',[]) and u['role'] not in MANAGERS:
         raise HTTPException(403,'Claim this conversation or ask its handler to hand it over.')
 
 
@@ -103,8 +105,10 @@ def timeline(db,lid,public=False):
         add('entry:'+r['id'],r['created_at'],r['kind'],r['subject'],r['body'],r['visibility'],
             'You' if public and r['direction']=='client' else 'Crown Movers' if public else people.get(r['actor'],r['actor']),r['direction'])
     if not public:
+        form_messages={r['message_id'] for r in rows(db,"SELECT json_extract(payload_json,'$.message_id') message_id FROM integration_events WHERE event_type='gmail_quote' AND json_valid(payload_json)")}
         for r in rows(db,'SELECT * FROM messages WHERE lead_id=?',(lid,)):
-            add('message:'+r['id'],r['created_at'],'email' if r['kind'].lower().startswith('incoming') else 'note',r['subject'] or r['kind'],r['body'],'staff',people.get(r['author'],r['author']), 'client' if r['kind'].lower().startswith('incoming') else 'staff')
+            kind='form' if r['id'] in form_messages or 'form' in r['kind'].lower() else 'email' if r['kind'].lower().startswith('incoming') else 'note'
+            add('message:'+r['id'],r['created_at'],kind,r['subject'] or r['kind'],r['body'],'staff',people.get(r['author'],r['author']), 'client' if r['kind'].lower().startswith('incoming') else 'staff')
         for r in rows(db,'SELECT * FROM calls WHERE lead_id=?',(lid,)):
             d=json.loads(r['payload_json']);add('call:'+r['id'],r['created_at'],'call',d.get('disposition') or 'Phone call',d.get('note') or d.get('summary') or d.get('phone') or '', 'staff')
     for r in rows(db,"SELECT * FROM outbound_messages WHERE lead_id=? AND status='Sent'",(lid,)):
@@ -241,12 +245,15 @@ def register_conversations(app,path,auth):
                     'conversation':c,'events':events[offset:offset+40],'total':len(events),'offset':offset,'services':services}
 
     @app.get('/api/crm/clients/{cid}/history')
-    def client_history(cid:str,offset:int=0,u=Depends(auth)):
+    def client_history(cid:str,offset:int=0,kind:str='all',u=Depends(auth)):
         require_role(u,OFFICE)
         with closing(connect(path)) as db:
             if not one(db,'SELECT id FROM client_accounts WHERE id=?',(cid,)):raise HTTPException(404,'Client not found.')
             events=[]
             for l in rows(db,'SELECT lead_id FROM client_account_leads WHERE client_id=?',(cid,)):events+=timeline(db,l['lead_id'])
+            if kind not in ('all','emails','forms','calls','notes'):raise HTTPException(422,'Choose an interaction type.')
+            groups={'emails':{'email'},'forms':{'inquiry','form','details','file','portal'},'calls':{'call','callback'},'notes':{'note','handoff','status'}}
+            if kind!='all':events=[e for e in events if e['kind'] in groups[kind]]
             events.sort(key=lambda r:(r['at'] or '',r['id']),reverse=True);offset=max(0,offset)
             return {'items':events[offset:offset+40],'total':len(events),'offset':offset}
 
@@ -260,7 +267,8 @@ def register_conversations(app,path,auth):
     def assign(lid:str,data:dict,u=Depends(auth)):
         require_role(u,OFFICE)
         with transaction(path) as db:
-            c=conversation(db,lid);check_token(c,data);can_handle(c,u)
+            c=conversation(db,lid);check_token(c,data)
+            if c['handler_id']!=u['id'] and u['role'] not in MANAGERS:raise HTTPException(403,'Only the current handler or a manager can hand over the client history.')
             target=str(data.get('handler_id') or '');note=text(data.get('note',''),'Handoff note',2000)
             if not note:raise HTTPException(422,'Add a short handoff note.')
             if target and not one(db,"SELECT id FROM users WHERE id=? AND active=1 AND role IN ('owner','manager','sales','dispatch')",(target,)):
@@ -276,7 +284,9 @@ def register_conversations(app,path,auth):
         require_role(u,OFFICE);status=data.get('status')
         if status not in STATUSES:raise HTTPException(422,'Choose a conversation status.')
         with transaction(path) as db:
-            c=conversation(db,lid);check_token(c,data);can_handle(c,u);remind=''
+            c=conversation(db,lid);check_token(c,data)
+            if c['handler_id']!=u['id'] and u['role'] not in MANAGERS:raise HTTPException(403,'Update your own follow-up in Tasks. Only the client history handler or a manager can change the overall reply status.')
+            remind=''
             if status=='Waiting on client':
                 try:remind=date.fromisoformat(str(data.get('remind_on',''))).isoformat()
                 except ValueError:raise HTTPException(422,'Choose a reminder date.')
@@ -342,7 +352,7 @@ def register_conversations(app,path,auth):
             m=one(db,'SELECT * FROM outbound_messages WHERE id=?',(mid,))
             if not m:raise HTTPException(404,'Message not found.')
             m['conversation']=conversation(db,m['lead_id'])
-            m['can_handle']=m['conversation']['handler_id']==u['id'] or u['role'] in MANAGERS
+            m['can_handle']=m['conversation']['handler_id']==u['id'] or u['id'] in m['conversation'].get('task_handlers',[]) or u['role'] in MANAGERS
             m['review_token']=mail_review_token(m,m['conversation'])
             return m
 
