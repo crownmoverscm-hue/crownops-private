@@ -1297,7 +1297,8 @@ def create_app(database_path=None):
     def history(u=Depends(auth)):
         require(u,{'owner','manager'})
         with closing(connect(path)) as db:
-            return rows(db,'SELECT a.*,u.name AS actor_name FROM audit a LEFT JOIN users u ON u.id=a.actor ORDER BY a.id DESC LIMIT 200')
+            private_filter=" WHERE a.object_type NOT IN ('expenses','expense_sources')" if u['role']!='owner' else ''
+            return rows(db,'SELECT a.*,u.name AS actor_name FROM audit a LEFT JOIN users u ON u.id=a.actor'+private_filter+' ORDER BY a.id DESC LIMIT 200')
 
     @app.get('/api/integrations')
     def integrations(u=Depends(auth)):

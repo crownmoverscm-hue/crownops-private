@@ -90,7 +90,7 @@ def register_production(app, path, auth, public_url, secure):
 
     @app.post('/api/owner-backups')
     def create_backup(u=Depends(auth)):
-        require_role(u,{'owner','manager'})
+        require_role(u,{'owner'})
         import fcntl
         _, uploads, directory, _ = storage_paths(path)
         if directory.is_relative_to(uploads):
@@ -138,7 +138,7 @@ def register_production(app, path, auth, public_url, secure):
 
     @app.get('/api/owner-backups/{filename}')
     def download_backup(filename:str,u=Depends(auth)):
-        require_role(u,{'owner','manager'})
+        require_role(u,{'owner'})
         record = latest_backup(path)
         if filename!=record.get('filename') or not record['available']:
             raise HTTPException(404,'Verified backup not found. Create a fresh recovery copy.')

@@ -13,7 +13,7 @@ from fastapi.responses import Response
 from .store import connect, transaction, rows, one, insert, uid, now, audit, dumps
 from .platform_common import require_role, text
 
-ADMINS = {'owner', 'manager'}
+ADMINS = {'owner'}
 CATEGORIES = ('Fuel', 'Truck maintenance', 'Equipment', 'Materials', 'Rent', 'Insurance',
               'Software', 'Marketing', 'Travel', 'Subcontractor', 'Other')
 

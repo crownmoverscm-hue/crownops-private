@@ -1,8 +1,8 @@
-/* Company expenses are private to Owners and Managers. */
+/* Company expenses are private to Owners. */
 'use strict';
 (function(){
  const EX={start:'',end:'',category:'',status:'',offset:0,data:null,current:null};
- const admin=()=>['owner','manager'].includes(S.user?.role);
+ const admin=()=>(S.user?.role==='owner');
  ensureNav(['expenses','wallet','Expenses']);
  const previousAllowed=allowedPages;
  allowedPages=function(){const pages=previousAllowed();return admin()?[...new Set([...pages,'expenses'])]:pages.filter(p=>p!=='expenses');};
@@ -10,7 +10,7 @@
  uxGroups=function(){const groups=previousGroups(),company=groups.find(g=>g[0]==='COMPANY');if(admin()&&company&&!company[1].includes('expenses'))company[1].unshift('expenses');return groups;};
  const query=()=>new URLSearchParams({start:EX.start,end:EX.end,category:EX.category,status:EX.status}).toString();
  X.pageRenderers.expenses=async()=>{
-  if(!admin())throw Error('Expenses are private to Owners and Managers.');
+  if(!admin())throw Error('Expenses are private to Owners.');
   const d=await api('/expenses?'+query()+'&offset='+EX.offset);EX.data=d;
   const items=d.items.map(e=>[
    h(dateLabel(e.expense_date)),
@@ -44,7 +44,7 @@
    select('job_id','Related move (optional)',[['','Company expense'],...jobs.map(j=>[j.id,j.title+' · '+localDay(j.start_at)])],e.job_id||'')+
    select('vehicle_id','Related truck (optional)',[['','No truck'],...trucks.map(t=>[t.id,t.name])],e.vehicle_id||'')+
    field('receipt_url','Private receipt link · HTTPS',e.receipt_url||'','url','maxlength="3000"')+textArea('notes','Notes',e.notes||'',3)+
-   '</div><p class="strong" id="expense-total"></p><p class="tiny muted">Keep receipt folders restricted to Owners and Managers. A link retains the external folder’s existing sharing permissions.</p></form>'+
+   '</div><p class="strong" id="expense-total"></p><p class="tiny muted">Keep receipt folders restricted to Owners. A link retains the external folder’s existing sharing permissions.</p></form>'+
    (id?'<p class="tiny muted">Entered '+h(uxTimestampLabel(e.created_at))+' · last updated '+h(uxTimestampLabel(e.updated_at))+'</p>':'')+
    (closed?'<div class="callout orange">Voided: '+h(e.void_reason)+'</div>':'');
   showModal(id?'Company expense':'Add company expense',body,btn('close','Close')+(closed?'':(id?'<button data-expense="void-form" data-id="'+h(id)+'" class="btn-danger">Void expense</button>':'')+'<button type="submit" form="expense-form" class="btn-primary">Save expense</button>'),true);

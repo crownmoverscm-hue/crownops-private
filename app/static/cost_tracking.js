@@ -6,7 +6,7 @@
  const dates=()=>'<form data-cost-dates class="filterbar cost-date-fields">'+field('start','From',CS.start,'date','required')+field('end','To',CS.end,'date','required')+'<button type="submit">'+(CS.tab==='quickbooks'?'Fetch from QuickBooks':'Show margins')+'</button></form>';
  const previous=X.pageRenderers.expenses;
  X.pageRenderers.expenses=async()=>{
-  if(!['owner','manager'].includes(S.user?.role))throw Error('Expenses are private to Owners and Managers.');
+  if(!(S.user?.role==='owner'))throw Error('Expenses are private to Owners.');
   if(CS.tab==='ledger')return tabs()+await previous();
   if(CS.tab==='margins'){
    const d=await api('/costs/margins?'+new URLSearchParams({start:CS.start,end:CS.end}));
@@ -17,7 +17,7 @@
   }
   const d=await api('/costs/quickbooks?offset='+CS.offset);CS.data=d;
   const records=d.items.map(s=>'<article class="panel panel-body"><div class="row wrap"><strong class="grow">'+h(s.data.vendor||'Supplier missing')+'</strong>'+pill(s.state)+'</div><p class="small">'+h(s.data.date||'Date missing')+' · '+h(s.kind==='Bill'?'Supplier bill':'Paid expense')+' · '+h(s.data.reference)+'</p><p><strong>'+ (s.data.total_cents==null?'Amount needs review':money(s.data.total_cents))+'</strong> '+h(s.data.currency||'Currency missing')+'</p>'+(s.data.balance_cents?'<p class="small">Outstanding in QuickBooks: '+money(s.data.balance_cents)+'</p>':'')+'<p class="small muted">'+h(s.data.description)+'</p>'+s.data.problems.map(p=>'<p class="small">'+h(p)+'</p>').join('')+'<p class="tiny muted">'+(s.environment==='sandbox'?'Test record · ':'')+'Checked '+h(uxTimestampLabel(s.checked_at))+'</p><button data-cost-review="'+h(s.id)+'">'+(s.expense_id?'Review linked expense':'Review / match')+'</button></article>').join('');
-  return head('QuickBooks expense review','1. Fetch recorded expenses  ·  2. Match duplicates  ·  3. Assign each cost.')+tabs()+
+  return head('QuickBooks expense review','Owner approval required: fetch, match and approve each cost.')+tabs()+
    (d.connected&&d.environment==='sandbox'?'<div class="callout orange"><strong>QuickBooks is in test mode.</strong> You can preview transactions, but test records cannot enter your real expense ledger.</div>':'')+
    (!d.connected?'<div class="callout orange">Connect QuickBooks to bring in recorded expenses. <button data-cost-connect>Open Connections</button></div>':'')+dates()+
    '<details class="panel panel-body"><summary>How expense importing works</summary><p class="small muted">This reads posted expenses and supplier bills. Connect and review bank transactions inside QuickBooks first. Choose operating costs here; payroll payments, transfers, asset purchases and tax remittances need accounting review. Refresh after changes in QuickBooks; this is not a live bank feed.</p></details><div class="spacer"></div>'+
@@ -38,7 +38,7 @@
    select('job_id','Related service for a new / updated expense',[['','Company expense'],...jobs.map(j=>[j.id,j.title+' · '+localDay(j.start_at)])],s.expense?.job_id||'')+
    '<p class="small muted">Matching keeps the existing expense and its job assignment. Updating replaces its amount and payment status with the fetched snapshot. Bill payments are not imported as a second expense.</p>'+
    (!s.expense_id?'<label class="checkbox-label"><input type="checkbox" name="confirmed_distinct">If I add a new expense, I confirm it is a separate purchase from any same-date, same-amount record.</label>':'')+'</form>';
-  showModal('Review QuickBooks expense',body,btn('close','Cancel')+(!locked||canIgnore?'<button type="submit" form="cost-review-form" class="btn-primary">Save review</button>':''),true);
+  showModal('Review QuickBooks expense',body,btn('close','Cancel')+(!locked||canIgnore?'<button type="submit" form="cost-review-form" class="btn-primary">Approve expense review</button>':''),true);
  }
  document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-cost-tab],[data-cost-page],[data-cost-review],[data-cost-invoice],[data-cost-connect]');if(!b)return;e.preventDefault();
