@@ -290,11 +290,8 @@ def register_operations(app,path,auth):
             if not isinstance(data.get('channels'),list) or not data['channels'] or set(data['channels'])-{'Website','Social posts','Advertising'}:raise HTTPException(422,'Choose permitted promotional channels. Public review incentives are not supported.')
             data['amount_cents']=5000
         if key=='payroll_policy':
-            try:
-                d=date.fromisoformat(data.get('period_anchor',''))
-                if d.weekday()!=3:raise ValueError()
-            except ValueError:raise HTTPException(422,'Choose a Thursday as the approved biweekly period anchor.')
-            data['period_days']=14
+            from .payroll_periods import validate_policy
+            data=validate_policy(data)
         if key=='billing_policy':
             from .invoices import validate_terms
             candidate={**data.get('terms',{}),'customer':{'name':'Policy validation'}}
@@ -545,8 +542,9 @@ def register_operations(app,path,auth):
             r['estimated_pay_cents']=None if r['transport_minutes'] is None else int((Decimal(r['service_minutes']+r['transport_minutes']+r['extra_minutes']-r['break_minutes'])*r['hourly_cents']/60).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
             r['period_start']=None
             if cfg.get('period_anchor'):
-                anchor=date.fromisoformat(cfg['period_anchor']);day=datetime.fromisoformat(r['start_at']).astimezone(ZoneInfo('America/Toronto')).date()
-                r['period_start']=(anchor+timedelta(days=((day-anchor).days//14)*14)).isoformat()
+                from .payroll_periods import period_for
+                day=datetime.fromisoformat(r['start_at']).astimezone(ZoneInfo('America/Toronto')).date()
+                r['period_start']=period_for(cfg,day)['start']
             if not can_view_pay(u,r['employee_id']):r.pop('hourly_cents',None);r.pop('estimated_pay_cents',None)
         return result
 
@@ -596,10 +594,10 @@ def register_operations(app,path,auth):
         with closing(connect(path)) as db:
             cfg=settings(db,'payroll_policy',{})
             if not cfg.get('approved') or not cfg.get('period_anchor'):raise HTTPException(409,'Approve the payroll period anchor first.')
-            anchor=date.fromisoformat(cfg['period_anchor'])
-            if (start-anchor).days%14:raise HTTPException(422,'Date is not the start of the configured biweekly period.')
+            from .payroll_periods import period_range
+            end=period_range(cfg,start)
             records=rows(db,"SELECT p.*,e.name,j.start_at FROM payroll_drafts p JOIN jobs j ON j.id=p.job_id JOIN employees e ON e.id=p.employee_id WHERE p.status IN ('Approved','Locked')")
-        end=start+timedelta(days=13);buf=io.StringIO();w=csv.writer(buf);w.writerow(['Period start','Period end','Employee','Job ID','Service hours','Travel hours','Break hours','Extra hours','Hourly rate CAD','Straight time estimate CAD','Warning'])
+        buf=io.StringIO();w=csv.writer(buf);w.writerow(['Period start','Period end','Employee','Job ID','Service hours','Travel hours','Break hours','Extra hours','Hourly rate CAD','Straight time estimate CAD','Warning'])
         for r in records:
             day=datetime.fromisoformat(r['start_at']).astimezone(ZoneInfo('America/Toronto')).date()
             if not start<=day<=end:continue

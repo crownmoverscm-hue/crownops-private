@@ -56,6 +56,11 @@ jobs:
         env:
           NODE_PATH: /tmp/crownops-browser/node_modules
         run: python tests/browser/run_mobile.py inbox
+      - name: Test configurable payroll periods and private hours
+        env:
+          NODE_PATH: /tmp/crownops-browser/node_modules
+          CROWNOPS_BROWSER_HOURS_COSTS: "1"
+        run: python tests/browser/run_mobile.py payroll_periods
       - name: Smoke-create application
         env:
           CROWNOPS_ENV: test

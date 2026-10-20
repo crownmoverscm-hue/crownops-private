@@ -59,8 +59,16 @@ def approve_entry(db, tid, actor):
     return True
 
 
+def resolve_range(db,start='',end=''):
+    if not start and not end:
+        from .payroll_periods import default_range
+        selected=default_range(db)
+        if selected:start,end=selected['start'],selected['end']
+    return date_range(start,end)
+
+
 def summary(db, user, start='', end=''):
-    start, end = date_range(start, end)
+    start,end=resolve_range(db,start,end)
     employees = rows(db, 'SELECT * FROM employees ORDER BY name')
     entries = rows(db, """SELECT t.*,j.title,j.start_at,j.status job_status FROM times t
         JOIN jobs j ON j.id=t.job_id WHERE j.status!='Cancelled' ORDER BY j.start_at,t.id""")

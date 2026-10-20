@@ -706,14 +706,15 @@ def register_ux_features(app,path,auth):
 
     @app.get('/api/ux/payroll-hours/export.csv')
     def payroll_hours_export(start:str='',end:str='',u=Depends(auth)):
-        start,end=worked_hours.date_range(start,end)
-        with transaction(path) as db:return worked_hours.export_csv(db,u,start,end)
+        with transaction(path) as db:
+            start,end=worked_hours.resolve_range(db,start,end)
+            return worked_hours.export_csv(db,u,start,end)
 
     @app.post('/api/ux/payroll-summary/approve')
     def payroll_approve(data:dict,u=Depends(auth)):
         if u['role'] not in {'owner','manager','accounting'}:raise HTTPException(403,'Only payroll managers can approve hours.')
-        start,end=worked_hours.date_range(data.get('start'),data.get('end'))
         with transaction(path) as db:
+            start,end=worked_hours.resolve_range(db,data.get('start'),data.get('end'))
             before=worked_hours.summary(db,u,start,end)
             if data.get('review_token') is not None and data['review_token']!=before['review_token']:raise HTTPException(409,'Hours or assignments changed. Reload payroll and review them before approving.')
             items=rows(db,"SELECT t.id,j.start_at FROM times t JOIN jobs j ON j.id=t.job_id WHERE (t.status!='Approved' OR t.approved_hourly_cents IS NULL) AND j.status='Completed'")

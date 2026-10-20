@@ -1490,5 +1490,7 @@ def create_app(database_path=None):
     register_conversations(app,path,auth)
     from .inbox_tasks import register_inbox_tasks
     register_inbox_tasks(app,path,auth)
+    from .payroll_periods import register_payroll_periods
+    register_payroll_periods(app,path,auth)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app

@@ -61,8 +61,8 @@ def register_payroll_adjustments(app,path,auth):
         with closing(connect(path)) as db:
             cfg=settings(db,'payroll_policy',{})
             if not cfg.get('approved') or not cfg.get('period_anchor'):raise HTTPException(409,'Approve a payroll period first.')
-            if (start-date.fromisoformat(cfg['period_anchor'])).days%14:raise HTTPException(422,'Choose a configured biweekly period start.')
-            end=start+timedelta(days=13)
+            from .payroll_periods import period_range
+            end=period_range(cfg,start)
             rr=rows(db,'SELECT a.*,e.name FROM payroll_adjustments a JOIN employees e ON e.id=a.employee_id WHERE effective_date BETWEEN ? AND ? ORDER BY effective_date',(str(start),str(end)))
         buf=io.StringIO();w=csv.writer(buf);w.writerow(['Adjustment ID','Employee','Job','Effective date','Service delta hours','Transport delta hours','Break delta hours','Extra delta hours','Gross pay delta CAD','Note'])
         for r in rr:
