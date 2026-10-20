@@ -13,9 +13,44 @@ let debugPage;
   assert.equal(await page.locator('#sidebar [data-page="followups"]').count(),0);
   await page.locator('#sidebar [data-page="communications"]').click();
   await page.getByRole('heading',{name:'Inbox',exact:true}).waitFor();
+  assert.equal(await page.locator('#inbox-status').inputValue(),'all');
+  assert.equal(await page.locator('#inbox-order').inputValue(),'newest');
+  const checkOrder=async order=>{
+   const tasks=await page.evaluate(()=>Object.values(IB.tasks).map(t=>[t.received_at,t.id]));
+   const sorted=[...tasks].sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:a[1]<b[1]?-1:a[1]>b[1]?1:0);
+   assert.deepEqual(tasks,order==='newest'?sorted.reverse():sorted);
+  };
+  await checkOrder('newest');
+  const answered=page.locator('[data-task-id="INBOX-ANSWERED-TASK"]');
+  await answered.locator('.inbox-tone-answered').waitFor();
+  assert.equal(await answered.locator('.inbox-tone-overdue').count(),0);
+  assert.equal((await answered.innerText()).includes('Follow-up due'),false);
+  await page.locator('#inbox-order').selectOption('oldest');
+  await page.locator('.inbox-order-note').getByText(/^Oldest/).waitFor();
+  await checkOrder('oldest');
+  assert.equal(await page.locator('.inbox-task-card').first().getAttribute('data-task-id'),'INBOX-ANSWERED-TASK');
+  await page.reload();await page.locator('#content h1').waitFor();
+  // The sort preference survives a relaunch on this device.
+  await page.evaluate(()=>navigate('communications'));await answered.waitFor();
+  assert.equal(await page.locator('#inbox-order').inputValue(),'oldest');
+  await page.locator('#inbox-status').selectOption('open');
+  await page.waitForFunction(()=>!IB.tasks['INBOX-ANSWERED-TASK']);
+  assert.equal(await answered.count(),0);
+  assert.ok(await page.locator('.inbox-tone-overdue').count());
+  await page.locator('#inbox-status').selectOption('all');await answered.waitFor();
+  await page.locator('#inbox-order').selectOption('newest');
+  await page.locator('.inbox-order-note').getByText(/^Newest/).waitFor();
+  assert.ok(await page.locator('.inbox-tone-email').count());
+  assert.ok(await page.locator('.inbox-tone-voicemail').count());
+  assert.ok(await page.locator('.inbox-task-facts dt').getByText('Move / service',{exact:true}).count());
+  for(const width of [320,390,768,1440]){
+   await page.setViewportSize({width,height:900});
+   assert.equal(await page.locator('body').evaluate(x=>x.scrollWidth<=innerWidth+1),true,'tasks '+width+' overflow');
+  }
+  await page.setViewportSize({width:390,height:844});
   if(role==='owner'&&process.env.CROWNOPS_SCREENSHOT_DIR){
    require('node:fs').mkdirSync(process.env.CROWNOPS_SCREENSHOT_DIR,{recursive:true});
-   for(const width of [390,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.locator('body').evaluate(x=>x.scrollWidth<=innerWidth+1),true,'tasks '+width+' overflow');await page.screenshot({path:process.env.CROWNOPS_SCREENSHOT_DIR+'/tasks-'+width+'.png',fullPage:true});}
+   for(const width of [320,390,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.locator('body').evaluate(x=>x.scrollWidth<=innerWidth+1),true,'tasks '+width+' overflow');await page.screenshot({path:process.env.CROWNOPS_SCREENSHOT_DIR+'/tasks-'+width+'.png',fullPage:true});}
    await page.setViewportSize({width:390,height:844});
   }
 
@@ -117,8 +152,20 @@ let debugPage;
    await page.locator('.inbox-task-card').filter({hasText:'Return missed call'}).getByRole('button',{name:'Reopen',exact:true}).waitFor();
 
   }
+  if(role==='sales'){
+   await page.locator('[data-inbox-tab="tasks"]').click();
+   const answered=page.locator('[data-task-id="INBOX-ANSWERED-TASK"]');
+   await answered.getByRole('button',{name:'Add follow-up',exact:true}).click();
+   await page.locator('#inbox-task-outcome [name="due_date"]').fill('2099-12-31');
+   await page.locator('#inbox-task-outcome [name="note"]').fill('Fictional promised callback.');
+   await page.getByRole('dialog').getByRole('button',{name:'Add follow-up',exact:true}).click();
+   await answered.getByText('Follow up after answered call',{exact:false}).waitFor();
+   assert.equal(await answered.locator('.inbox-tone-answered').count(),1);
+   assert.equal(await answered.locator('.inbox-tone-overdue').count(),0);
+   assert.ok((await answered.innerText()).includes('Dec 31, 2099'));
+  }
   await context.close();
  }
- assert.deepEqual(errors,[]);console.log(JSON.stringify({staff_roles:3,client_portal:true,widths:[390,768,1440],claim_handoff:true,call_notes:true,draft_edit:true,waiting_reopened:true,emails_sent:0,page_errors:errors}));
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({staff_roles:3,client_portal:true,widths:[320,390,768,1440],activity_sort:true,answered_callback:true,claim_handoff:true,call_notes:true,draft_edit:true,waiting_reopened:true,emails_sent:0,page_errors:errors}));
  await browser.close();
 })().catch(async e=>{console.error(e);if(debugPage)console.error(await debugPage.evaluate(()=>({toast:document.getElementById('toast')?.textContent,error:document.getElementById('modal-error')?.textContent,form:document.getElementById('inbox-compose')?.outerHTML})));process.exit(1)});

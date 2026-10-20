@@ -5,3 +5,33 @@
 .inbox-history{max-height:520px;overflow-y:auto;padding-right:4px;overscroll-behavior:contain}.inbox-history:focus-visible{outline:2px solid #b94719;outline-offset:4px}@media(max-width:800px){.inbox-toolbar-detail{display:none}.inbox-history{max-height:380px}}
 .inbox-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:18px;gap:8px}.inbox-summary button{border:0;border-right:1px solid #e8e1d9;background:transparent;display:flex;flex-direction:column;gap:6px;border-radius:0;min-width:0}.inbox-summary button:last-child{border-right:0}.inbox-summary strong{font-size:30px;color:#201f1d}.inbox-summary span{font-size:15px;color:#655f59}.inbox-channel-counts,.inbox-subtabs{margin:16px 0}.inbox-subtabs .selected{border-color:#b94719;background:#fff3eb}.inbox-task-card{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:22px;border:1px solid #dedbd7;border-radius:14px;background:white;margin:12px 0;overflow-wrap:anywhere}.inbox-task-card>div{min-width:0}.inbox-task-card h3{font-size:21px;margin:12px 0 8px}.inbox-task-card p{margin:6px 0;line-height:1.5}.inbox-task-actions{justify-content:flex-end;max-width:420px}.inbox-detail>.inbox-back{display:block}.inbox-client-matches button{display:block;width:100%;white-space:normal;text-align:left;margin:10px 0;padding:14px}.inbox-task-card .row{gap:8px}@media(max-width:650px){.inbox-task-card{display:block;padding:17px}.inbox-task-actions{justify-content:flex-start;max-width:none;margin-top:16px}.inbox-task-actions button{flex:1;min-width:80px}.inbox-summary{grid-template-columns:repeat(2,minmax(0,1fr));padding:12px}.inbox-summary button{border:0;padding:14px}.inbox-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.inbox-tabs button{padding:10px 5px;font-size:15px}.inbox-task-card>.row{margin-top:14px}}
 .payroll-calendar{margin:18px 0}.payroll-calendar>div>p{margin:8px 0 16px;line-height:1.5}.payroll-calendar .row{gap:8px}.payroll-calendar button{min-height:44px}#payroll-period-form label{display:block;margin-bottom:18px}#payroll-period-form select,#payroll-period-form input{width:100%;font-size:16px}#payroll-period-preview{line-height:1.6}@media(max-width:650px){.payroll-calendar .row button{flex:1;min-width:125px}}
+
+/* Channel colours identify the source; red belongs to a late follow-up only. */
+.inbox-badge{display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:5px 10px;border-radius:8px;font-size:13px;font-weight:700;line-height:1.4;border:1px solid transparent}
+.inbox-badge .icon{width:16px;height:16px;flex-shrink:0}
+.inbox-tone-call{background:#e7f5f3;color:#135e59;border-color:#c9e6e2}
+.inbox-tone-email{background:#f1edfc;color:#60419a;border-color:#dfd5f5}
+.inbox-tone-form,.inbox-tone-completed{background:#eaf5ec;color:#28623c;border-color:#cee5d3}
+.inbox-tone-missed,.inbox-tone-today{background:#fff3d9;color:#80510b;border-color:#f1d9a9}
+.inbox-tone-voicemail{background:#f7edfa;color:#7b3c8b;border-color:#e9d5ee}
+.inbox-tone-answered{background:#eaf2ff;color:#215ba2;border-color:#cddff7}
+.inbox-tone-overdue{background:#fff0f0;color:#a32a2a;border-color:#f2caca}
+.inbox-tone-neutral{background:#f3f2f0;color:#59544f;border-color:#e5e1db}
+.inbox-task-card{border-left-width:4px;align-items:flex-start;gap:24px}
+.inbox-accent-call{border-left-color:#268178}.inbox-accent-email{border-left-color:#9471c6}.inbox-accent-form{border-left-color:#57976a}.inbox-accent-missed{border-left-color:#cc9934}.inbox-accent-voicemail{border-left-color:#ac72ba}.inbox-accent-neutral{border-left-color:#b4aea5}
+.inbox-task-content{flex:1}.inbox-task-actions{flex:0 1 280px;align-self:center}
+.inbox-task-card h3{line-height:1.35;margin-top:14px}
+.inbox-task-card .inbox-next-step{margin:14px 0;font-size:16px;font-weight:600}
+.inbox-next-step>span{display:block;font-size:12px;color:#655f59;font-weight:600;margin-bottom:4px}
+.inbox-task-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 24px;margin:16px 0 0;padding-top:14px;border-top:1px solid #efebe5;max-width:720px}
+.inbox-task-facts>div{min-width:0}.inbox-task-facts dt{font-size:12px;font-weight:600;color:#655f59;margin-bottom:4px}.inbox-task-facts dd{margin:0;font-size:15px;line-height:1.5;color:#302d29}
+.inbox-task-facts .inbox-deadline-overdue dd{color:#a32a2a;font-weight:650}
+.inbox-toolbar{align-items:flex-end;margin-top:20px}.inbox-toolbar .inbox-filter{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:650;color:#59544f;min-width:130px}
+.inbox-search-group{display:flex;align-items:flex-end;gap:8px;flex:1 1 280px;min-width:0}.inbox-toolbar .inbox-search-field{flex:1;min-width:0}.inbox-toolbar .inbox-filter input,.inbox-toolbar .inbox-filter select{width:100%;min-height:44px;margin:0;font-size:16px;font-weight:400}
+.inbox-order-note{font-size:13px;color:#655f59;line-height:1.6;margin:0 0 12px}
+.inbox-summary .inbox-summary-overdue{background:#fff4f4;border-radius:10px}.inbox-summary .inbox-summary-overdue strong,.inbox-summary .inbox-summary-overdue span{color:#a32a2a}
+.inbox-summary button[aria-pressed="true"]{box-shadow:inset 0 0 0 2px #8c5d3b;border-radius:10px}
+.inbox-toolbar select:focus-visible,.inbox-summary button:focus-visible{outline:3px solid #215ba2;outline-offset:3px}
+@media(max-width:800px){.inbox-search-group{flex-basis:100%}.inbox-toolbar .inbox-filter{flex:1 1 140px}.inbox-toolbar .inbox-search-field{flex:1;min-width:0}.inbox-toolbar .inbox-filter input{min-width:0}.inbox-task-actions{flex-basis:180px}}
+@media(max-width:650px){.inbox-task-card{padding:17px 15px}.inbox-task-actions{padding-top:14px;border-top:1px solid #efebe5}.inbox-task-facts{gap:12px 14px}.inbox-task-facts dd{font-size:14px}.inbox-task-card h3{font-size:21px}.inbox-order-note{font-size:12px}.inbox-badge{font-size:12px}.inbox-summary span{font-size:13px}}
+@media(max-width:360px){.inbox-task-facts{grid-template-columns:1fr}}

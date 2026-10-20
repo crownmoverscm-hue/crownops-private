@@ -55,6 +55,64 @@ class InboxTaskTests(unittest.TestCase):
         for s in ('Answered','Missed','Voicemail','Recorded'):
             r=self.sales.get('/api/inbox-calls',params={'status':s});self.assertEqual(r.status_code,200,r.text);self.assertEqual(r.json()['total'],1)
         self.assertEqual(self.queue(channel='calls')['total'],3)
+
+    def test_activity_order_uses_source_time_before_pagination_not_deadline_or_claim(self):
+        with transaction(self.path) as db:
+            for n in range(33):
+                insert(db,'messages',dict(id=f'ordered-{n:02}',lead_id=self.lid,kind='Incoming email',subject=f'Email {n}',body='Fictional',author='test',created_at=f'2026-10-20T12:{n:02}:00+00:00'))
+            # Imported after the emails, but the actual call occurred before them.
+            insert(db,'calls',dict(id='earlier-call',lead_id=self.lid,payload_json=dumps({'disposition':'Answered','occurred_at':'2026-10-20T07:59:00-04:00'}),created_at='2026-10-21T12:00:00+00:00'))
+        newest=self.queue(status='all');oldest=self.queue(status='all',order='oldest')
+        self.assertEqual(newest['items'][0]['title'],'Reply to email: Email 32')
+        self.assertEqual(oldest['items'][0]['call_status'],'Answered')
+        all_ids=[t['id'] for t in newest['items']+self.queue(status='all',offset=30)['items']]
+        self.assertEqual(len(all_ids),34);self.assertEqual(len(set(all_ids)),34)
+        t=newest['items'][-1]
+        self.assertEqual(self.change(t,'claim').status_code,200)
+        self.assertEqual(self.change(self.get(t['id']),'schedule',due_date='2099-12-31').status_code,200)
+        self.assertEqual([t['id'] for t in self.queue(status='all')['items']],all_ids[:30])
+        self.assertEqual(self.sales.get('/api/inbox-tasks?order=invalid').status_code,422)
+        log=self.sales.get('/api/inbox-calls?order=oldest').json()['items'][0]
+        self.assertEqual(log['received_at'],'2026-10-20T11:59:00+00:00')
+
+    def test_answered_legacy_task_stays_visible_without_overdue_and_explicit_followup_survives(self):
+        cid=self.call(lid=self.lid,status='Answered')
+        with transaction(self.path) as db:
+            insert(db,'tasks',dict(id='answered-legacy',lead_id=self.lid,title='Return / review client call',due_date='2000-01-01',owner='',raw_json=dumps({'call_id':cid}),created_at=now()))
+        t=self.queue(status='all')['items'][0]
+        self.assertEqual(t['call_status'],'Answered');self.assertEqual(t['bucket'],'completed')
+        self.assertEqual(self.queue(status='overdue')['total'],0)
+        self.assertEqual(self.change(t,'schedule',self.manager,due_date='2099-12-31',note='Promised a callback').status_code,200)
+        t=self.queue()['items'][0];self.assertEqual(t['call_status'],'Answered');self.assertEqual(t['bucket'],'upcoming')
+        with transaction(self.path) as db:db.execute("UPDATE tasks SET due_date='2000-01-01' WHERE id=?",(t['id'],))
+        overdue=self.queue(status='overdue')['items'][0];self.assertEqual(overdue['id'],t['id'])
+        self.assertEqual(self.change(overdue,'done',self.manager).status_code,200)
+        self.assertEqual(self.queue()['total'],0)
+
+    def test_answered_call_preserves_followup_scheduled_before_this_release(self):
+        cid=self.call(lid=self.lid,status='Answered')
+        from app.store import audit
+        with transaction(self.path) as db:
+            insert(db,'tasks',dict(id='scheduled-legacy',lead_id=self.lid,title='Call again',due_date='2000-01-01',owner='manager',raw_json=dumps({'call_id':cid,'inbox_managed':True}),created_at=now()))
+            audit(db,'manager','Inbox follow-up schedule','tasks','scheduled-legacy',{'status':'Open'})
+        t=self.queue(status='overdue')['items'][0];self.assertEqual(t['id'],'scheduled-legacy')
+        self.assertEqual(t['call_status'],'Answered')
+
+    def test_sales_can_claim_answered_activity_by_adding_a_callback(self):
+        self.call(lid=self.lid,status='Answered')
+        t=self.queue(status='all')['items'][0]
+        self.assertEqual(self.change(t,'schedule',due_date='2099-12-31',note='Call after client checks access').status_code,200)
+        self.assertEqual(self.change(t,'schedule',self.other,due_date='2099-12-31').status_code,409)
+        active=self.queue()['items'][0]
+        self.assertEqual(active['owner_id'],'sales');self.assertEqual(active['due_date'],'2099-12-31')
+        self.assertEqual(self.f.owner(),'sales')
+
+    def test_recorded_staff_call_is_activity_without_automatic_followup(self):
+        self.f.claim(self.manager)
+        self.assertEqual(self.f.post('entries',{'kind':'call','body':'Reached client','request_key':'staff-call-activity'},self.manager).status_code,200)
+        t=self.queue(channel='calls',status='all')['items'][0]
+        self.assertEqual(t['call_status'],'Recorded');self.assertEqual(t['bucket'],'completed')
+        self.assertEqual(self.queue(channel='calls')['total'],0)
     def test_completed_and_archived_sources_do_not_reappear(self):
         cid=self.call(lid=self.lid)
         with transaction(self.path) as db:insert(db,'tasks',dict(id='old-call',lead_id=self.lid,title='Return missed call',status='Done',historical=1,raw_json=dumps({'call_id':cid}),created_at=now()))

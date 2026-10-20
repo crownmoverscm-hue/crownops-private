@@ -4,6 +4,7 @@ Install Playwright separately; no browser dependency is added to production.
 Set NODE_PATH if Playwright is installed outside this repository.
 """
 import argparse
+import os
 from pathlib import Path
 import runpy
 import socket
@@ -17,6 +18,7 @@ def main():
     parser.add_argument('suite', choices=['mobile_smoke', 'navigation_audit', 'dialog_audit', 'schedule_import', 'app_relaunch', 'connection_continuity', 'document_browser', 'hours_costs', 'wix_sync', 'inbox', 'payroll_periods'],
                         default='mobile_smoke', nargs='?')
     args = parser.parse_args()
+    if args.suite=='inbox':os.environ['CROWNOPS_BROWSER_INBOX']='1'
     here = Path(__file__).resolve().parent
     threading.Thread(target=lambda: runpy.run_path(str(here / 'fixture.py'), run_name='__main__'),
                      daemon=True).start()

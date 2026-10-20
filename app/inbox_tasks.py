@@ -1,6 +1,6 @@
 """Channel follow-ups reuse tasks, preserving source IDs and independent handlers."""
 from contextlib import closing
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import hashlib
 import json
 from zoneinfo import ZoneInfo
@@ -15,6 +15,15 @@ def obj(raw):
         value=json.loads(raw or '{}')
         return value if isinstance(value,dict) else {}
     except (ValueError,TypeError):return {}
+
+
+def activity_time(value):
+    """Normalize source timestamps so offsets and import times cannot reorder activity."""
+    try:
+        stamp=datetime.fromisoformat(str(value or '').replace('Z','+00:00'))
+        if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=ZoneInfo('America/Toronto'))
+        return stamp.astimezone(timezone.utc).isoformat()
+    except (ValueError,TypeError,OverflowError):return ''
 
 
 def call_status(d):
@@ -58,21 +67,38 @@ def sync_followups(db):
         if p.get('message_id'):events[p['message_id']]=(e,p)
     states={}
     def add(source,lid,channel,title,at,existing=None,done=False):
-        if source in by_source:
-            if done and source.startswith(('callback:','change:')):
-                db.execute("UPDATE tasks SET status='Done' WHERE id=?",(by_source[source]['id'],))
-            return
-        t=existing or by_key.get('inbox:'+source)
+        t=by_source.get(source) or existing or by_key.get('inbox:'+source)
         if not t:
             if lid not in states:states[lid]=conversation(db,lid)['status'] if lid in leads else 'Needs reply'
             done=done or states[lid]=='Resolved'
             t=dict(id=uid('TASK'),legacy_id='inbox:'+source,lead_id=lid,title=title[:300],due_date=business_day(at or now()),owner='',status='Done' if done else 'Open',historical=0,raw_json='{}',created_at=at or now())
             insert(db,'tasks',t);by_key[t['legacy_id']]=t
+        if done and source.startswith(('callback:','change:')):
+            db.execute("UPDATE tasks SET status='Done' WHERE id=?",(t['id'],));t['status']='Done'
         meta=obj(t['raw_json']);meta['inbox_sources']=list(dict.fromkeys(meta.get('inbox_sources',[])+[source]));meta['inbox_channel']=channel
-        db.execute('UPDATE tasks SET raw_json=? WHERE id=?',(dumps(meta),t['id']));t['raw_json']=dumps(meta);by_source[source]=t
+        # Keep actual receipt time separate from task creation, assignment and deadline.
+        received=activity_time(at)
+        if received:meta['inbox_received_at']=max(meta.get('inbox_received_at',''),received)
+        raw=dumps(meta)
+        if raw!=t['raw_json']:db.execute('UPDATE tasks SET raw_json=? WHERE id=?',(raw,t['id']))
+        t['raw_json']=raw;by_source[source]=t
+        return t
+    scheduled={r['object_id'] for r in rows(db,"SELECT DISTINCT object_id FROM audit WHERE object_type='tasks' AND action IN ('Inbox follow-up schedule','Inbox follow-up reopen')")}
     for c in rows(db,'SELECT * FROM calls'):
         d=obj(c['payload_json']);status=call_status(d)
-        add('call:'+c['id'],c['lead_id'],'calls',{'Missed':'Return missed call','Voicemail':'Review voicemail','Answered':'Answered call','Recorded':'Review call record'}[status],c['created_at'],by_call.get(c['id']) or by_key.get('call:'+str(d.get('event_id') or c.get('legacy_id') or '')),done=status=='Answered')
+        t=add('call:'+c['id'],c['lead_id'],'calls',{'Missed':'Return missed call','Voicemail':'Review voicemail','Answered':'Answered call','Recorded':'Review call record'}[status],activity_time(d.get('occurred_at')) or c['created_at'],by_call.get(c['id']) or by_key.get('call:'+str(d.get('event_id') or c.get('legacy_id') or '')),done=status=='Answered')
+        meta=obj(t['raw_json'])
+        # An answered call is activity, not an overdue task. Preserve a callback
+        # explicitly scheduled/reopened by staff, including before this release.
+        explicit=meta.get('inbox_followup_required',t['id'] in scheduled)
+        if status=='Answered' and not explicit and not t['historical']:
+            if t['status']!='Done':
+                db.execute("UPDATE tasks SET status='Done' WHERE id=?",(t['id'],));t['status']='Done'
+            if meta.get('inbox_followup_required') is not False:meta['inbox_answered_complete']=True
+        elif status!='Answered' and meta.get('inbox_answered_complete') and not t['historical']:
+            db.execute("UPDATE tasks SET status='Open' WHERE id=?",(t['id'],));t['status']='Open';meta.pop('inbox_answered_complete',None)
+        raw=dumps(meta)
+        if raw!=t['raw_json']:db.execute('UPDATE tasks SET raw_json=? WHERE id=?',(raw,t['id']));t['raw_json']=raw
     for m in rows(db,"SELECT m.*,c.resolved_at FROM messages m LEFT JOIN inbox_claims c ON c.message_id=m.id WHERE lower(m.kind) LIKE 'incoming%' AND lower(m.kind) NOT LIKE '%call%'"):
         channel='forms' if 'form' in m['kind'].lower() else 'emails';existing=None
         e,p=events.get(m['id'],({},{}));lid=m['lead_id']
@@ -86,8 +112,9 @@ def sync_followups(db):
         add('change:'+c['id'],c['lead_id'],'forms','Review updated moving details',c['created_at'],by_key.get(c['id']),done=c['status']!='Pending')
     for c in rows(db,'SELECT * FROM client_callbacks'):
         add('callback:'+c['id'],c['lead_id'],'calls','Client requested a callback',c['created_at'],by_key.get('callback:'+c['id']),done=c['status']=='Completed')
-    for e in rows(db,"SELECT * FROM conversation_entries WHERE direction='client'"):
-        add('entry:'+e['id'],e['lead_id'],'forms','Reply to client portal message',e['created_at'])
+    for e in rows(db,"SELECT * FROM conversation_entries WHERE direction='client' OR kind='call'"):
+        recorded=e['kind']=='call' and e['direction']!='client'
+        add('entry:'+e['id'],e['lead_id'],'calls' if recorded else 'forms','Call outcome recorded' if recorded else 'Reply to client portal message',e['created_at'],done=recorded)
 
 
 def task_contact(t,call_details):
@@ -96,6 +123,8 @@ def task_contact(t,call_details):
     d=next((call_details[cid] for cid in ids if cid in call_details),{})
     t['contact_phone']=d.get('phone') or t.get('phone') or ''
     t['call_status']=call_status(d) if d else ''
+    if not d and t['title']=='Call outcome recorded':t['call_status']='Recorded'
+    t['received_at']=meta.get('inbox_received_at') or activity_time(t.get('created_at'))
     if not t.get('client_name') and d:t['client_name']=d.get('caller') or 'Unmatched caller'
     return t
 
@@ -108,6 +137,8 @@ def get_task(db,tid):
     t=one(db,'SELECT t.*,l.client_name,l.email,l.phone,l.move_date,l.lead_type,x.client_id FROM tasks t LEFT JOIN leads l ON l.id=t.lead_id LEFT JOIN client_account_leads x ON x.lead_id=t.lead_id WHERE t.id=?',(tid,))
     if not t:raise HTTPException(404,'Follow-up not found.')
     task_contact(t,{c['id']:obj(c['payload_json']) for c in rows(db,'SELECT id,payload_json FROM calls')})
+    person=one(db,'SELECT name FROM users WHERE id=? OR name=?',(t['owner'],t['owner']))
+    t['owner_name']=person['name'] if person else t['owner']
     t['channel']=task_channel(t);t['review_token']=task_token(t)
     return t
 
@@ -124,7 +155,9 @@ def update_task(db,tid,data,u):
         if status=='Done':raise HTTPException(409,'Reopen this follow-up before claiming it.')
         target=u['id']
     else:
-        if owner!=u['id'] and u['role'] not in MANAGERS:raise HTTPException(403,'Claim this follow-up first or ask its handler to update it.')
+        new_callback=not owner and status=='Done' and t['call_status'] in ('Answered','Recorded') and action in ('schedule','reopen')
+        if owner!=u['id'] and u['role'] not in MANAGERS and not new_callback:raise HTTPException(403,'Claim this follow-up first or ask its handler to update it.')
+        if new_callback:target=u['id']
         if action=='assign':
             target=str(data.get('user_id') or '')
             if target and not one(db,"SELECT id FROM users WHERE id=? AND active=1 AND role IN ('owner','manager','sales','dispatch')",(target,)):raise HTTPException(422,'Choose an active office team member.')
@@ -139,6 +172,8 @@ def update_task(db,tid,data,u):
                 if due<datetime.now(ZoneInfo('America/Toronto')).date().isoformat():raise HTTPException(422,'Choose today or a future date.')
         else:raise HTTPException(422,'Choose a follow-up action.')
     meta=obj(t['raw_json']);meta['inbox_managed']=True
+    if action in ('schedule','reopen','done'):
+        meta['inbox_followup_required']=action!='done';meta.pop('inbox_answered_complete',None)
     db.execute('UPDATE tasks SET owner=?,status=?,due_date=?,raw_json=? WHERE id=?',(target,status,due,dumps(meta),tid))
     if action in ('done','reopen'):
         for source in meta.get('inbox_sources',[]):
@@ -154,9 +189,9 @@ def call_token(c):return hashlib.sha256(dumps([c['id'],c['lead_id'],c['payload_j
 
 def register_inbox_tasks(app,path,auth):
     @app.get('/api/inbox-tasks')
-    def list_tasks(channel:str='tasks',scope:str='team',status:str='open',q:str='',offset:int=0,u=Depends(auth)):
+    def list_tasks(channel:str='tasks',scope:str='team',status:str='open',q:str='',offset:int=0,order:str='newest',u=Depends(auth)):
         require_role(u,OFFICE)
-        if channel not in ('tasks','calls','emails','forms') or scope not in ('team','mine','unclaimed') or status not in ('open','today','overdue','upcoming','completed','all'):raise HTTPException(422,'Choose a valid Inbox filter.')
+        if channel not in ('tasks','calls','emails','forms') or scope not in ('team','mine','unclaimed') or status not in ('open','today','overdue','upcoming','completed','all') or order not in ('newest','oldest'):raise HTTPException(422,'Choose a valid Inbox filter.')
         with transaction(path) as db:
             from .sales_crm_v6 import sync_unlinked_clients
             sync_unlinked_clients(db);sync_followups(db)
@@ -175,8 +210,8 @@ def register_inbox_tasks(app,path,auth):
             selected=[t for t in items if channel=='tasks' or t['channel']==channel]
             summary={k:sum(t['bucket']==k for t in selected) for k in ('today','overdue','upcoming','completed')};summary['open']=sum(t['bucket']!='completed' for t in selected)
             selected=[t for t in selected if status=='all' or status=='open' and t['bucket']!='completed' or t['bucket']==status]
-            selected.sort(key=lambda t:(t['bucket']=='completed',t['due_date'] or '9999',t['created_at'],t['id']));offset=max(0,offset)
-            return {'items':selected[offset:offset+30],'total':len(selected),'offset':offset,'counts':counts,'summary':summary}
+            selected.sort(key=lambda t:(t['received_at'],t['id']),reverse=order=='newest');offset=max(0,offset)
+            return {'items':selected[offset:offset+30],'total':len(selected),'offset':offset,'order':order,'counts':counts,'summary':summary}
 
     @app.get('/api/inbox-tasks/{tid}')
     def task_detail(tid:str,u=Depends(auth)):
@@ -195,20 +230,22 @@ def register_inbox_tasks(app,path,auth):
         with transaction(path) as db:return update_task(db,tid,data,u)
 
     @app.get('/api/inbox-calls')
-    def call_log(q:str='',status:str='all',offset:int=0,u=Depends(auth)):
+    def call_log(q:str='',status:str='all',offset:int=0,order:str='newest',u=Depends(auth)):
         require_role(u,OFFICE)
-        if status not in ('all','Answered','Missed','Voicemail','Recorded'):raise HTTPException(422,'Choose a call status.')
+        if status not in ('all','Answered','Missed','Voicemail','Recorded') or order not in ('newest','oldest'):raise HTTPException(422,'Choose a call status and sort order.')
         with transaction(path) as db:
             sync_followups(db);items=[]
             for c in rows(db,'SELECT c.*,l.client_name,l.move_date,x.client_id FROM calls c LEFT JOIN leads l ON l.id=c.lead_id LEFT JOIN client_account_leads x ON x.lead_id=c.lead_id'):
                 d=obj(c['payload_json']);s=call_status(d)
                 if status!='all' and s!=status:continue
                 item=dict(id=c['id'],lead_id=c['lead_id'],client_id=c['client_id'],client_name=c['client_name'] or d.get('caller') or 'Unmatched caller',move_date=c['move_date'],status=s,phone=d.get('phone') or '',body=d.get('note') or d.get('summary') or '',created_at=c['created_at'],review_token=call_token(c),linkable=True)
+                item['received_at']=activity_time(d.get('occurred_at')) or activity_time(c['created_at'])
                 if q.lower() in ' '.join(str(item.get(k) or '') for k in ('client_name','phone','body')).lower():items.append(item)
             if status in ('all','Recorded'):
                 for e in rows(db,"SELECT e.*,l.client_name,l.move_date FROM conversation_entries e JOIN leads l ON l.id=e.lead_id WHERE kind='call'"):
                     if q.lower() in (e['client_name']+' '+e['body']).lower():items.append(dict(id=e['id'],lead_id=e['lead_id'],client_name=e['client_name'],move_date=e['move_date'],status='Recorded',phone='',body=e['body'],created_at=e['created_at'],linkable=False))
-            items.sort(key=lambda x:(x['created_at'],x['id']),reverse=True);offset=max(0,offset)
+            for item in items:item.setdefault('received_at',activity_time(item['created_at']))
+            items.sort(key=lambda x:(x['received_at'],x['id']),reverse=order=='newest');offset=max(0,offset)
             return {'items':items[offset:offset+30],'total':len(items),'offset':offset}
 
     @app.get('/api/inbox-call/{cid}')

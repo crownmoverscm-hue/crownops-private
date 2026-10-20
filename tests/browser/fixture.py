@@ -36,6 +36,12 @@ if os.getenv('CROWNOPS_BROWSER_HOURS_COSTS')=='1':
     with transaction(fixture.path) as db:
         db.execute("UPDATE jobs SET status='Completed' WHERE id='J1'")
         stage_records(db,'fictional-company','production',[('Purchase',dict(Id='fictional-1',TxnDate='2026-11-15',CurrencyRef={'value':'CAD'},TotalAmt=114.98,TxnTaxDetail={'TotalTax':14.98},EntityRef={'name':'Fictional fuel supplier'},Line=[{'Description':'Fuel for the fictional service'}]))],'owner')
+if os.getenv('CROWNOPS_BROWSER_INBOX')=='1':
+    with transaction(fixture.path) as db:
+        insert(db,'calls',dict(id='INBOX-ANSWERED',lead_id='FINISH-L2',payload_json=dumps({'phone':'5145550152','disposition':'Answered','note':'Fictional answered call with no callback promised.'}),created_at='2020-10-20T13:30:00+00:00'))
+        insert(db,'tasks',dict(id='INBOX-ANSWERED-TASK',lead_id='FINISH-L2',title='Return / review client call',due_date='2020-10-20',owner='',raw_json=dumps({'call_id':'INBOX-ANSWERED'}),created_at=now()))
+        insert(db,'calls',dict(id='INBOX-VOICEMAIL',lead_id='FINISH-L1',payload_json=dumps({'phone':'5145550151','disposition':'Voicemail','note':'Fictional voicemail: moving date already on service.'}),created_at='2020-10-21T13:30:00+00:00'))
+        insert(db,'messages',dict(id='INBOX-EMAIL',lead_id='FINISH-L0',kind='Incoming email',subject='Packing supplies question',body='Fictional packing question',author='test',created_at=now()))
 if os.getenv('CROWNOPS_BROWSER_WIX')=='1':
     import hashlib
     os.environ['CROWNOPS_WIX_KEY_SHA256']=hashlib.sha256(b'fictional-browser-wix-key-only-123456').hexdigest()
