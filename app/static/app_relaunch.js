@@ -2,6 +2,8 @@
 'use strict';
 (function(){
  const loadedRevision=document.querySelector('meta[name="crownops-release"]')?.content||'';
+ const loadedVersion=document.querySelector('meta[name="crownops-version"]')?.content||'';
+ const releaseDetails=()=>`<p class="app-release-details">CrownOps ${h(loadedVersion)}<br><span>Build ${h(loadedRevision)}</span></p>`;
  const resumeKey='crownops-relaunch-resume';
  let latestRevision='',checking=null,relaunching=false,lastCheck=0,writes=0;
  const previousApi=api;
@@ -18,6 +20,7 @@
  function paint(){
   if(!S.user)return;
   const foot=document.querySelector('.sidebar-foot');
+  if(foot&&!foot.querySelector('.app-release-details'))foot.insertAdjacentHTML('beforeend',releaseDetails());
   if(foot&&!foot.querySelector('[data-app-relaunch]'))foot.insertAdjacentHTML('afterbegin',updateButton('nav-button app-relaunch-menu'));
   const main=document.querySelector('main');
   if(main&&!document.getElementById('app-update-notice')){
@@ -81,10 +84,12 @@
  }
  const previousShell=shell;
  shell=function(){const result=previousShell();paint();return result;};
+ const previousLogin=loginScreen;
+ loginScreen=function(){const result=previousLogin();const panel=document.querySelector('.login-form');if(panel&&!panel.querySelector('.app-release-details'))panel.insertAdjacentHTML('beforeend',releaseDetails());return result;};
  const previousHelp=X.pageRenderers.help;
  X.pageRenderers.help=async function(){
   const html=await previousHelp();
-  return `<section class="panel app-relaunch-panel"><div class="panel-body"><h2>Keep CrownOps up to date</h2><p data-app-update-status>${h(statusText())}</p><p>Save or close any open form, then tap Update &amp; relaunch. Your saved company records stay in CrownOps. Each person updates their own device.</p>${updateButton('btn-primary')}</div></section><div class="spacer"></div>`+html;
+  return `<section class="panel app-relaunch-panel"><div class="panel-body"><h2>Keep CrownOps up to date</h2><p data-app-update-status>${h(statusText())}</p>${releaseDetails()}<p>Save or close any open form, then tap Update &amp; relaunch. Your saved company records stay in CrownOps. Each person updates their own device.</p>${updateButton('btn-primary')}</div></section><div class="spacer"></div>`+html;
  };
  const previousBootstrap=bootstrap;
  bootstrap=async function(){
