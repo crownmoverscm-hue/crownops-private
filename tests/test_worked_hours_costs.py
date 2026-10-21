@@ -40,13 +40,18 @@ class WorkedHoursCostsTests(unittest.TestCase):
     def review(self,s,action='create',**extra):
         return self.owner.post('/api/costs/quickbooks/'+s['id']+'/review',json=dict(version=s['version'],action=action,category='Fuel',job_id='J1',**extra))
 
-    def test_crew_can_record_only_own_hours_and_lead_can_record_team(self):
+    def test_crew_and_lead_submit_new_hours_but_corrections_require_management(self):
         self.team('In progress');crew=self.staff('crew')
         d=crew.get('/api/ux/jobs/J1/crew-hours').json();self.assertTrue(d['own_only']);self.assertEqual([e['id'] for e in d['employees']],['E1'])
         self.assertEqual(self.submit(client=crew).status_code,403)
         self.assertEqual(self.submit(('E1',),client=crew).status_code,200)
         lead=self.staff('lead');self.assertFalse(lead.get('/api/ux/jobs/J1/crew-hours').json()['own_only'])
-        self.assertEqual(self.submit(client=lead,hours=4).status_code,200)
+        self.assertEqual(self.submit(client=lead,hours=4).status_code,409)
+        with closing(connect(self.path)) as db:
+            self.assertEqual(one(db,"SELECT service_minutes+transport_minutes n FROM times WHERE employee_id='E1'")['n'],180)
+            self.assertIsNone(one(db,"SELECT id FROM times WHERE employee_id='E2'"))
+        self.assertEqual(self.submit(('E2',),client=lead,hours=4).status_code,200)
+        self.assertEqual(self.submit(client=self.owner,hours=4).status_code,200)
         self.assertEqual(self.submit(client=self.staff('sales')).status_code,403)
 
     def test_missing_and_inactive_hours_remain_visible_without_invoice(self):
