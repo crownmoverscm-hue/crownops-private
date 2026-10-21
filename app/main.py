@@ -1493,5 +1493,7 @@ def create_app(database_path=None):
     register_inbox_tasks(app,path,auth)
     from .payroll_periods import register_payroll_periods
     register_payroll_periods(app,path,auth)
+    from .staff_portal import register_staff_portal
+    register_staff_portal(app,path,auth)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app

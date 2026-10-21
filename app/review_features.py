@@ -143,20 +143,27 @@ def register_review_features(app,path,auth,public_url):
         with transaction(path) as db:
             r=one(db,'SELECT * FROM time_off_requests WHERE id=?',(rid,))
             if not r or r['status']!='Pending': raise HTTPException(409,'Only a pending request can be reviewed.')
+            from .staff_records import schedule_identity
+            if schedule_identity(db,u)['id']==r['employee_id']:
+                raise HTTPException(403,'Another manager or owner must review this request.')
             db.execute('UPDATE time_off_requests SET status=?,reviewed_by=?,reviewed_at=?,review_note=? WHERE id=?',(decision,u['id'],now(),note,rid))
             emp=_employee_name(db,r['employee_id'])
             if decision=='Approved':
                 # Detect existing assignments using Montreal service dates so approval never silently conflicts with a job.
                 from zoneinfo import ZoneInfo
-                assigned_jobs=rows(db,"""SELECT j.id,j.title,j.start_at FROM assignments a JOIN jobs j ON j.id=a.job_id
+                assigned_jobs=rows(db,"""SELECT j.id,j.title,j.start_at,j.end_at FROM assignments a JOIN jobs j ON j.id=a.job_id
                     WHERE a.resource_type='employee' AND a.resource_id=? AND j.status!='Cancelled'""",(r['employee_id'],))
                 conflicts=[]
                 for job in assigned_jobs:
-                    day=datetime.fromisoformat(job['start_at']).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
-                    if r['start_date']<=day<=r['end_date']:conflicts.append(job)
+                    from .staff_portal import instant
+                    first=instant(job['start_at']).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+                    last=(instant(job['end_at'])-timedelta(microseconds=1)).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+                    if first<=r['end_date'] and last>=r['start_date']:conflicts.append(job)
                 if conflicts:
                     raise HTTPException(409,'This employee is already assigned during the requested dates. Reassign those jobs before approving OFF.')
             audit(db,u['id'],'Time off '+decision.lower(),'time_off_requests',rid,{'employee_id':r['employee_id'],'note':note})
+            from .staff_portal import notify, employee_users
+            notify(db,employee_users(db,r['employee_id']), 'Time off '+decision.lower(), 'time_off', rid)
         return {'ok':True,'status':decision}
 
     @app.post('/api/time-off/{rid}/cancel')

@@ -401,3 +401,38 @@ CREATE TABLE IF NOT EXISTS conversation_entries (
  created_at TEXT NOT NULL,UNIQUE(lead_id,request_key)
 );
 CREATE INDEX IF NOT EXISTS conversation_entries_service ON conversation_entries(lead_id,created_at);
+-- Staff self-service records. Existing jobs, time entries and identities remain authoritative.
+CREATE TABLE IF NOT EXISTS staff_availability (
+ employee_id TEXT PRIMARY KEY REFERENCES employees(id), payload_json TEXT NOT NULL,
+ version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS staff_cover_requests (
+ id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), job_version INTEGER NOT NULL,
+ source_employee TEXT NOT NULL REFERENCES employees(id), target_employee TEXT REFERENCES employees(id),
+ requested_by TEXT NOT NULL REFERENCES users(id), message TEXT NOT NULL DEFAULT '',
+ status TEXT NOT NULL DEFAULT 'Awaiting coworker', created_at TEXT NOT NULL,
+ reviewed_by TEXT REFERENCES users(id), reviewed_at TEXT, review_note TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS staff_one_open_cover ON staff_cover_requests(job_id,source_employee)
+ WHERE status IN ('Awaiting coworker','Awaiting manager');
+CREATE TABLE IF NOT EXISTS staff_cover_recipients (
+ request_id TEXT NOT NULL REFERENCES staff_cover_requests(id), employee_id TEXT NOT NULL REFERENCES employees(id),
+ PRIMARY KEY(request_id,employee_id)
+);
+CREATE TABLE IF NOT EXISTS staff_documents (
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', filename TEXT NOT NULL DEFAULT '',
+ content BLOB, requires_ack INTEGER NOT NULL DEFAULT 1, created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS staff_document_recipients (
+ document_id TEXT NOT NULL REFERENCES staff_documents(id), user_id TEXT NOT NULL REFERENCES users(id),
+ read_at TEXT, ack_at TEXT, PRIMARY KEY(document_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS staff_portal_notifications (
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL,
+ kind TEXT NOT NULL, object_id TEXT NOT NULL, created_at TEXT NOT NULL, read_at TEXT
+);
+CREATE INDEX IF NOT EXISTS staff_notice_user ON staff_portal_notifications(user_id,read_at);
+CREATE TABLE IF NOT EXISTS staff_help_requests (
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), subject TEXT NOT NULL, body TEXT NOT NULL,
+ reply TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, replied_at TEXT, replied_by TEXT REFERENCES users(id)
+);
