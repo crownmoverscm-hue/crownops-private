@@ -436,3 +436,35 @@ CREATE TABLE IF NOT EXISTS staff_help_requests (
  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), subject TEXT NOT NULL, body TEXT NOT NULL,
  reply TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, replied_at TEXT, replied_by TEXT REFERENCES users(id)
 );
+-- Optional in-service participation. Public reviews never qualify a reward.
+CREATE TABLE IF NOT EXISTS service_participation (
+ job_id TEXT PRIMARY KEY REFERENCES jobs(id), opened_by TEXT NOT NULL, opened_at TEXT NOT NULL,
+ review_profile TEXT NOT NULL DEFAULT '', crew_json TEXT NOT NULL DEFAULT '[]',
+ attachment_id TEXT REFERENCES attachments(id), release_id TEXT REFERENCES media_releases(id)
+);
+CREATE TABLE IF NOT EXISTS participation_access (
+ token_hash TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES service_participation(job_id),
+ expires_at TEXT NOT NULL, created_by TEXT NOT NULL, used_at TEXT, session_hash TEXT, csrf TEXT
+);
+CREATE TABLE IF NOT EXISTS attachment_media (
+ attachment_id TEXT PRIMARY KEY REFERENCES attachments(id), duration_seconds REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS client_draws (
+ id TEXT PRIMARY KEY, start_date TEXT NOT NULL, end_date TEXT NOT NULL, draw_date TEXT NOT NULL,
+ prize_cents INTEGER NOT NULL DEFAULT 50000 CHECK(prize_cents=50000),
+ rules_en TEXT NOT NULL, rules_fr TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Open',
+ created_by TEXT NOT NULL, created_at TEXT NOT NULL, winner_id TEXT,
+ selected_at TEXT, roster_hash TEXT, candidate_count INTEGER, paid_at TEXT, payment_reference TEXT
+);
+CREATE TABLE IF NOT EXISTS client_draw_entries (
+ id TEXT PRIMARY KEY, draw_id TEXT NOT NULL REFERENCES client_draws(id), name TEXT NOT NULL,
+ email TEXT NOT NULL, job_id TEXT REFERENCES jobs(id), created_at TEXT NOT NULL,
+ rules_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Pending verification',
+ reviewed_by TEXT, reviewed_at TEXT, review_note TEXT NOT NULL DEFAULT '',
+ UNIQUE(draw_id,email)
+);
+CREATE TABLE IF NOT EXISTS service_review_records (
+ id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), review_url TEXT NOT NULL UNIQUE,
+ rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5), reviewed_by TEXT NOT NULL,
+ reviewed_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', crew_json TEXT NOT NULL
+);

@@ -286,6 +286,8 @@ def register_operations(app,path,auth):
             field='release_text' if key=='media_program' else 'text'
             if len(text(data.get(field,''),'Approved terms',20000))<50:raise HTTPException(422,'Supply reviewed terms before activation.')
         if key=='media_program':
+            require_role(u,{'owner'})
+            if data.get('approved') and len(text(data.get('release_text_fr',''),'French permission',20000))<50:raise HTTPException(422,'Supply reviewed French permission before activation.')
             if data.get('credit_mode') not in ('before_tax','after_tax'):raise HTTPException(422,'Choose whether the $50 credit is before or after taxes.')
             if not isinstance(data.get('channels'),list) or not data['channels'] or set(data['channels'])-{'Website','Social posts','Advertising'}:raise HTTPException(422,'Choose permitted promotional channels. Public review incentives are not supported.')
             data['amount_cents']=5000
@@ -298,6 +300,7 @@ def register_operations(app,path,auth):
             try:validate_terms(candidate)
             except (ValueError,KeyError,TypeError) as ex:raise HTTPException(422,str(ex))
         if key=='automation_policy':
+            data['review_request']=False
             allowed={'preparation','invoice_followup','review_request','fleet_tasks'}
             if set(data)-allowed-{'review_url','enabled'}:raise HTTPException(422,'Unknown automation setting.')
             if data.get('review_url') and not str(data['review_url']).startswith('https://'):raise HTTPException(422,'Use a secure review URL.')
@@ -610,7 +613,7 @@ def register_operations(app,path,auth):
     @app.get('/api/testimonials')
     def releases(u=Depends(auth)):
         with closing(connect(path)) as db:
-            records=rows(db,'SELECT r.*,l.client_name,a.original_name,a.scan_status,c.invoice_id,c.amount_cents AS applied_cents FROM media_releases r JOIN leads l ON l.id=r.lead_id JOIN attachments a ON a.id=r.attachment_id LEFT JOIN project_credits c ON c.release_id=r.id ORDER BY signed_at DESC')
+            records=rows(db,'SELECT r.*,l.client_name,a.original_name,a.scan_status,c.invoice_id,c.amount_cents AS applied_cents,s.job_id AS participation_job_id FROM media_releases r JOIN leads l ON l.id=r.lead_id JOIN attachments a ON a.id=r.attachment_id LEFT JOIN project_credits c ON c.release_id=r.id LEFT JOIN service_participation s ON s.release_id=r.id ORDER BY signed_at DESC')
             if u['role']=='crew':
                 lids={x['lead_id'] for x in rows(db,"SELECT j.lead_id FROM jobs j JOIN assignments a ON a.job_id=j.id WHERE a.resource_type='employee' AND a.resource_id=?",(u.get('employee_id'),))};records=[r for r in records if r['lead_id'] in lids]
             return records
@@ -622,21 +625,28 @@ def register_operations(app,path,auth):
             r=one(db,'SELECT * FROM media_releases WHERE id=?',(rid,))
             if not r:raise HTTPException(404,'Release not found.')
             inv,calc=invoice_current(db,data.get('invoice_id'))
-            j=assigned(db,inv['job_id'],u)
+            j=invoice_job(db,inv['job_id'],u)
+            offer=one(db,'SELECT * FROM service_participation WHERE release_id=?',(rid,))
+            if offer and (offer['job_id']!=j['id'] or data.get('version')!=inv['version']):raise HTTPException(409,'Reopen this service’s current draft invoice before applying the credit.')
             if j['lead_id']!=r['lead_id']:raise HTTPException(422,'Video and invoice must belong to the same move project.')
             old=one(db,"SELECT * FROM project_credits WHERE lead_id=? AND program='testimonial'",(r['lead_id'],))
             if old:return {'ok':True,'already_applied':True,'invoice_id':old['invoice_id']}
             cfg=settings(db,'media_program',{})
             if not cfg.get('approved') or cfg.get('credit_mode') not in ('before_tax','after_tax'):raise HTTPException(409,'Management must approve the program and tax treatment first.')
             a=one(db,'SELECT * FROM attachments WHERE id=? AND deleted_at IS NULL',(r['attachment_id'],))
-            if r['status']=='Withdrawn' or not a or a['scan_status']!='Clean':raise HTTPException(409,'A valid consent and safety-cleared video are required.')
+            if r['status']=='Withdrawn' or not a or a['scan_status'] not in ('Clean','Video checked'):raise HTTPException(409,'A valid consent and checked video are required.')
             if inv['status']!='Draft' or j['status']!='Completed':raise HTTPException(409,'Apply the credit to a draft invoice after service completion.')
+            if offer:
+                from .client_participation import video_window
+                if not video_window(db,j):raise HTTPException(409,'Apply the credit before issuing or collecting the final invoice.')
             terms=json.loads(inv['terms_json']);terms['testimonial_credit_cents']=5000;terms['testimonial_credit_mode']=json.loads(one(db,'SELECT snapshot_json FROM media_release_terms WHERE release_id=?',(rid,))['snapshot_json'])['credit_mode']
             if calculate_invoice(terms,json.loads(inv['actual_json']),verified_allocated(db,inv['id']))['balance_cents']<0:raise HTTPException(409,'This credit would require a refund. Ask management to reconcile it first.')
             rec=dict(id=uid('CREDIT'),lead_id=r['lead_id'],program='testimonial',release_id=rid,invoice_id=inv['id'],amount_cents=5000,state='Applied',author=u['id'],created_at=now());insert(db,'project_credits',rec)
             db.execute('UPDATE job_invoices SET terms_json=?,version=version+1,updated_at=? WHERE id=?',(dumps(terms),now(),inv['id']))
             audit(db,u['id'],'Optional testimonial participation credit applied','job_invoices',inv['id'],{'amount_cents':5000,'mode':cfg['credit_mode'],'release_id':rid,'not_a_public_review_incentive':True})
         return {'ok':True,'credit_cents':5000,'published':False}
+
+    app.state.apply_testimonial_credit=credit
 
     @app.post('/api/testimonials/{rid}/publication-review')
     def publication(rid:str,data:dict,u=Depends(auth)):
@@ -646,6 +656,6 @@ def register_operations(app,path,auth):
             r=one(db,'SELECT * FROM media_releases WHERE id=?',(rid,))
             if not r or r['status']=='Withdrawn':raise HTTPException(409,'Consent not available.')
             a=one(db,'SELECT * FROM attachments WHERE id=? AND deleted_at IS NULL',(r['attachment_id'],))
-            if not a or a['scan_status']!='Clean':raise HTTPException(409,'File must pass safety review.')
+            if not a or a['scan_status'] not in ('Clean','Video checked'):raise HTTPException(409,'File must pass safety review.')
             db.execute("UPDATE media_releases SET status='Approved for specified channels',reviewed_by=?,reviewed_at=? WHERE id=?",(u['id'],now(),rid));audit(db,u['id'],'Promotional publication approved; nothing posted','media_releases',rid)
         return {'ok':True,'published':False,'required_disclosure':'Customer received a $50 moving discount for participating in this testimonial.'}

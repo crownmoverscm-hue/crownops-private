@@ -70,6 +70,10 @@ jobs:
         env:
           NODE_PATH: /tmp/crownops-browser/node_modules
         run: python tests/browser/run_mobile.py staff_portal
+      - name: Test manual client video, review sharing and independent free entry
+        env:
+          NODE_PATH: /tmp/crownops-browser/node_modules
+        run: python tests/browser/run_mobile.py client_participation
       - name: Smoke-create application
         env:
           CROWNOPS_ENV: test
