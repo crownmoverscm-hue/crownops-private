@@ -124,6 +124,13 @@ class ClientParticipationTests(unittest.TestCase):
     def test_draw_is_free_private_unique_owner_controlled_and_one_winner(self):
         did=self.draw();self.assertEqual(self.enter(did).status_code,200);self.assertEqual(self.enter(did).status_code,200)
         entries=self.owner.get('/api/participation/draws/'+did+'/entries').json();self.assertEqual(len(entries),1)
+        controls='/api/participation/draws/'+did+'/status'
+        pause={'status':'Paused','note':'Pause for an owner administrative review.'}
+        self.assertEqual(self.manager.post(controls,json=pause).status_code,403)
+        self.assertEqual(self.owner.post(controls,json=pause).status_code,200)
+        self.assertEqual(self.enter(did,'paused@example.invalid').status_code,409)
+        self.assertEqual(len(self.owner.get('/api/participation/draws/'+did+'/entries').json()),1)
+        self.assertEqual(self.owner.post(controls,json={**pause,'status':'Open'}).status_code,200)
         self.assertNotIn('email',self.public.get('/api/giveaways/'+did).text)
         pick='/api/participation/draws/'+did+'/select-winner'
         self.assertEqual(self.owner.post(pick,json={'confirm':True}).status_code,409)

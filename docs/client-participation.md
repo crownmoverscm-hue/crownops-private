@@ -37,7 +37,7 @@ Google Business Profile review ingestion is not connected by this release. Match
 
 ## Six-month draw administration
 
-Each period is opened explicitly. An owner reviews entries against the published rules, including duplicate-person and eligibility checks; email uniqueness alone does not prove a unique eligible person. Entry addresses are private to owners and are not added to marketing lists. Entry submission does not send an email or claim verification.
+Each period is opened explicitly. Owners can pause or resume entries from Manage entries, with an audit reason; existing entries and published dates/rules are preserved. An owner reviews entries against the published rules, including duplicate-person and eligibility checks; email uniqueness alone does not prove a unique eligible person. Entry addresses are private to owners and are not added to marketing lists. Entry submission does not send an email or claim verification.
 
 On or after the draw date, every entry must be marked Eligible or Ineligible with evidence. **Select one random winner** selects a provisional winner from the eligible roster and records the roster hash and candidate count. It cannot be rerun or silently edited. Verify the claim and any skill-testing requirement before paying the prize externally. **Record qualified winner’s payment** records that payment reference; it never transfers money. If a selected entrant cannot qualify or claim, the owner must resolve that situation under the reviewed rules; alternate-winner automation is not implemented.
 

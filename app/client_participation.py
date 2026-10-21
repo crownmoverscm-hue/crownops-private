@@ -320,6 +320,17 @@ def register_client_participation(app,path,auth,public_url,secure):
         require_role(u,{'owner'})
         with closing(connect(path)) as db:return rows(db,'SELECT * FROM client_draw_entries WHERE draw_id=? ORDER BY created_at,id',(did,))
 
+    @app.post('/api/participation/draws/{did}/status')
+    def draw_status(did:str,data:dict,u=Depends(auth)):
+        require_role(u,{'owner'});status=data.get('status');note=text(data.get('note',''),'Reason',2000)
+        if status not in ('Open','Paused') or len(note)<10:raise HTTPException(422,'Choose Open or Paused and record the reason.')
+        with transaction(path) as db:
+            d=one(db,'SELECT * FROM client_draws WHERE id=?',(did,))
+            if not d or d['winner_id']:raise HTTPException(409,'Entry controls are locked after winner selection.')
+            db.execute('UPDATE client_draws SET status=? WHERE id=?',(status,did))
+            audit(db,u['id'],'Changed giveaway entry availability','client_draws',did,{'status':status,'reason':note})
+        return {'ok':True,'status':status,'existing_entries_preserved':True}
+
     @app.post('/api/participation/draws/{did}/entries/{eid}/review')
     def eligibility(did:str,eid:str,data:dict,u=Depends(auth)):
         require_role(u,{'owner'});status=data.get('status');note=text(data.get('note',''),'Eligibility evidence',2000)
@@ -341,6 +352,7 @@ def register_client_participation(app,path,auth,public_url,secure):
             d=one(db,'SELECT * FROM client_draws WHERE id=?',(did,))
             if not d or business_day()<d['draw_date']:raise HTTPException(409,'Wait until the published draw date.')
             if d['winner_id']:raise HTTPException(409,'A provisional winner has already been selected. This draw cannot be rerun.')
+            if d['status']=='Paused':raise HTTPException(409,'Resolve the pause and resume this draw before selecting a winner. Its published entry dates still apply.')
             if one(db,"SELECT id FROM client_draw_entries WHERE draw_id=? AND status='Pending verification'",(did,)):raise HTTPException(409,'Review every entry’s eligibility before drawing.')
             eligible=rows(db,"SELECT id FROM client_draw_entries WHERE draw_id=? AND status='Eligible' ORDER BY id",(did,))
             if not eligible:raise HTTPException(409,'There are no verified eligible entries.')
