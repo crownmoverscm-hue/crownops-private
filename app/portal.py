@@ -169,7 +169,7 @@ def register_portal(app,path,auth,public_url,secure):
                 'attachments':[safe_attachment(r) for r in rows(db,'SELECT * FROM attachments WHERE lead_id=? AND deleted_at IS NULL ORDER BY created_at DESC',(c['lead_id'],))],
                 'messages':[{**m,'body':safe_public_body(m['body'])} for m in rows(db,"SELECT id,subject,body,created_at FROM outbound_messages WHERE lead_id=? AND status='Sent' AND lower(trim(recipient))=lower(trim(?)) AND event_key NOT LIKE 'client-access:%' ORDER BY created_at DESC LIMIT 30",(c['lead_id'],l['email']))],
                 'payment_links':rows(db,"SELECT p.invoice_id,p.url,p.amount_cents FROM payment_links p JOIN job_invoices i ON i.id=p.invoice_id JOIN jobs j ON j.id=i.job_id WHERE j.lead_id=? AND p.status='Active' AND p.revision=i.revision AND i.status='Issued'",(c['lead_id'],)),
-                'media_program':{'approved':cfg.get('approved',False),'release_version':cfg.get('version',''),'release_text':cfg.get('release_text',''),'channels':cfg.get('channels',[]),'amount_cents':5000},
+                'media_program':{'approved':False,'release_version':cfg.get('version',''),'release_text':cfg.get('release_text',''),'channels':cfg.get('channels',[]),'amount_cents':5000},
                 'terms':{k:terms.get(k) for k in ('approved','version','text')} if terms.get('approved') else {'approved':False},
                 'deposit_policy':public_deposit,'card_deposit_available':card_deposit_available,
                 'releases':rows(db,'SELECT id,status,signed_at,withdrawn_at FROM media_releases WHERE lead_id=?',(c['lead_id'],))}
@@ -274,11 +274,11 @@ def register_portal(app,path,auth,public_url,secure):
             if u['role']=='crew' and not can_plan_jobs(db,u) and r['job_id']:assigned(db,r['job_id'],u)
         return r
 
-    async def upload_one(file,lid,jid,category,actor,staff_user=None,client_session=None):
+    async def upload_one(file,lid,jid,category,actor,staff_user=None,client_session=None,participant=None):
         async with upload_lock:
-            return await save_upload(file,lid,jid,category,actor,staff_user,client_session)
+            return await save_upload(file,lid,jid,category,actor,staff_user,client_session,participant)
 
-    async def save_upload(file,lid,jid,category,actor,staff_user,client_session):
+    async def save_upload(file,lid,jid,category,actor,staff_user,client_session,participant=None):
         policy=upload_policy()
         if not policy['enabled']:raise HTTPException(503,policy['message'])
         if category not in ('Move photos','Inventory','Access','Testimonial','Incident'):raise HTTPException(422,'Unsupported file category.')
@@ -297,9 +297,10 @@ def register_portal(app,path,auth,public_url,secure):
                     if not head:head=chunk[:32]
                     digest.update(chunk);out.write(chunk)
             if n==0:raise HTTPException(422,'File is empty.')
-            mime=detect(head,name);status='Quarantined'
-            if photo_mode():
-                if mime.startswith('video/') and not policy.get('videos_enabled'):raise HTTPException(503,'Video processing is unavailable. Paste a shared video-folder link instead.')
+            mime=detect(head,name);status='Quarantined';processed={}
+            if category=='Testimonial' and not mime.startswith('video/'):raise HTTPException(422,'Upload a video for a testimonial.')
+            if photo_mode() or participant:
+                if mime.startswith('video/') and not participant and not policy.get('videos_enabled'):raise HTTPException(503,'Video processing is unavailable. Paste a shared video-folder link instead.')
                 if not mime.startswith(('image/','video/')):raise HTTPException(422,'Choose a photo or short video, or paste a shared folder link.')
                 if mime.startswith('image/') and n>policy['max_photo_mb']*1024*1024:raise HTTPException(413,'This photo is over 30 MB. Use a smaller photo or share a folder link.')
                 from starlette.concurrency import run_in_threadpool
@@ -309,6 +310,7 @@ def register_portal(app,path,auth,public_url,secure):
                 processed=await run_in_threadpool(process_video if is_video else process_photo,temp,dest)
                 n=processed['size'];digest_value=processed['sha256'];mime='video/mp4' if is_video else 'image/jpeg';status='Video checked' if is_video else 'Photo checked'
                 name=Path(name).stem+suffix
+                if participant and processed.get('duration_seconds',0)<30:raise HTTPException(422,'Please record at least 30 seconds. A simple 30–60 second video is enough.')
             else:
                 if category=='Testimonial' and not mime.startswith('video/'):raise HTTPException(422,'Upload a video for a testimonial.')
                 command=os.getenv('CROWNOPS_SCAN_COMMAND','').strip()
@@ -324,10 +326,13 @@ def register_portal(app,path,auth,public_url,secure):
             with transaction(path) as db:
                 # Recheck access after processing in case an assignment or private link was revoked.
                 if staff_user:project_write(db,lid,jid or '',staff_user)
+                if participant:
+                    from .client_participation import check_participant
+                    check_participant(db,participant,video=True)
                 if client_session and not one(db,'SELECT token_hash FROM portal_sessions WHERE token_hash=? AND expires_at>?',(client_session['token_hash'],now())):
                     raise HTTPException(401,'Your private session expired. Ask Crown for a new link.')
                 if photo_mode():
-                    existing=one(db,'SELECT * FROM attachments WHERE lead_id=? AND job_id IS ? AND sha256=? AND deleted_at IS NULL',(lid,jid,digest_value))
+                    existing=one(db,'SELECT * FROM attachments WHERE lead_id=? AND job_id IS ? AND sha256=? AND category=? AND deleted_at IS NULL',(lid,jid,digest_value,category))
                     if existing:return safe_attachment(existing)
                 total=db.execute('SELECT coalesce(sum(size),0) FROM attachments WHERE lead_id=? AND deleted_at IS NULL',(lid,)).fetchone()[0]
                 if total+n>int(os.getenv('CROWNOPS_PROJECT_UPLOAD_MB','128' if photo_mode() else '1000'))*1024*1024:
@@ -336,13 +341,18 @@ def register_portal(app,path,auth,public_url,secure):
                 if photo_mode() and global_total+n>int(os.getenv('CROWNOPS_PHOTO_STORAGE_MB','128'))*1024*1024:
                     raise HTTPException(507,'Company photo storage has reached its limit. Contact the owner to increase storage.')
                 r=dict(id=key,lead_id=lid,job_id=jid,category=category,original_name=name,stored_name=dest.name,mime=mime,size=n,sha256=digest_value,scan_status=status,author=actor,created_at=now())
-                insert(db,'attachments',r);audit(db,actor,'Private file uploaded','attachments',key,{'bytes':n,'scan_status':status,'protection':'photo-reencode' if photo_mode() else 'scanner'})
+                insert(db,'attachments',r)
+                if processed.get('duration_seconds'):
+                    insert(db,'attachment_media',{'attachment_id':key,'duration_seconds':processed['duration_seconds']})
+                audit(db,actor,'Private file uploaded','attachments',key,{'bytes':n,'scan_status':status,'protection':'photo-reencode' if photo_mode() else 'scanner'})
                 add_task(db,lid,'Review uploaded '+category.lower(),key='upload:'+key)
             committed=True
             return safe_attachment({**r,'deleted_at':None})
         finally:
             temp.unlink(missing_ok=True)
             if dest and not committed:dest.unlink(missing_ok=True)
+
+    app.state.participation_upload=upload_one
 
     @app.post('/api/portal/uploads')
     async def client_upload(file:UploadFile=File(...),category:str=Form('Move photos'),c=Depends(client_auth)):
@@ -389,22 +399,7 @@ def register_portal(app,path,auth,public_url,secure):
 
     @app.post('/api/portal/consent')
     def media_consent(data:dict,c=Depends(client_auth)):
-        with transaction(path) as db:
-            cfg=settings(db,'media_program',{})
-            if not cfg.get('approved') or data.get('version')!=cfg.get('version'):raise HTTPException(409,'The optional video program is not activated or its terms changed.')
-            if data.get('agree') is not True or data.get('adult_and_authorized') is not True:raise HTTPException(422,'Confirm recording/publication permission and authority to participate.')
-            channels=data.get('channels',[])
-            if not isinstance(channels,list) or not channels or set(channels)-set(cfg.get('channels',[])):raise HTTPException(422,'Choose the publication channels you authorize.')
-            r=get_file(db,text(data.get('attachment_id',''),'File',100),lid=c['lead_id'])
-            if r['category']!='Testimonial' or not r['mime'].startswith('video/'):raise HTTPException(422,'Choose your uploaded testimonial video.')
-            if one(db,"SELECT id FROM media_releases WHERE attachment_id=? AND status!='Withdrawn'",(r['id'],)):raise HTTPException(409,'Consent is already recorded for this video.')
-            name=text(data.get('signed_name',''),'Signed name',200)
-            if not name:raise HTTPException(422,'Enter your name.')
-            release=dict(id=uid('CONSENT'),lead_id=c['lead_id'],attachment_id=r['id'],customer_name=name,email=c['email'],release_version=cfg['version'],release_text=cfg['release_text'],channels_json=dumps(channels),signed_at=now())
-            insert(db,'media_releases',release);insert(db,'media_release_terms',{'release_id':release['id'],'snapshot_json':dumps({'credit_mode':cfg['credit_mode'],'amount_cents':5000,'version':cfg['version'],'channels':channels})});audit(db,'client:'+c['email'],'Optional testimonial consent recorded','media_releases',release['id'])
-            add_task(db,c['lead_id'],'Review video consent and one-time $50 eligibility',key='consent:'+release['id'])
-        return {'ok':True,'published':False,'credit_applied':False}
-
+        raise HTTPException(409,'Use the private participation link shared during your service to upload and sign for the optional video offer.')
     @app.post('/api/portal/consent/{rid}/withdraw')
     def withdraw(rid:str,c=Depends(client_auth)):
         with transaction(path) as db:

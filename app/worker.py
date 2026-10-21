@@ -5,7 +5,7 @@ from datetime import datetime,timezone,timedelta
 from contextlib import closing
 import json, time
 from .store import connect,transaction,rows,one,now,dumps,uid,insert
-from .platform_common import settings,queue_message,add_task,invoice_current,pending_received
+from .platform_common import settings,queue_message,add_task,invoice_current,pending_received,business_day
 
 
 def tick(path):
@@ -21,6 +21,8 @@ def tick(path):
         if t-datetime.fromisoformat(inv['issued_at'])>=timedelta(days=7):payment_checks[inv['id']]=collection_payment_check(path,inv['id'])
     with transaction(path) as db:
         cfg=settings(db,'automation_policy',{})
+        # Retire legacy automatic review drafts even if automation is disabled.
+        db.execute("UPDATE outbound_messages SET status='Cancelled',error='Review outreach is now manual only' WHERE category='Review request' AND created_by='automation' AND status IN ('Draft','Approved')")
         if not cfg.get('enabled'):return {'drafts_created':0,'enabled':False}
         if cfg.get('preparation'):
             jobs=rows(db,"SELECT j.*,l.client_name,l.email,l.language,l.notifications_suppressed FROM jobs j JOIN leads l ON l.id=j.lead_id WHERE j.status='Confirmed'")
@@ -36,15 +38,6 @@ def tick(path):
                 window=booking_details(j,quote)['arrival_window'] if quote else None
                 body=preparation_body(lead,j,portal_link(db,lead,'automation',tab='details'),window)
                 queue_message(db,j['lead_id'],'Move preparation | Preparation du demenagement',body,'Preparation','automation',key,j['id'],j['version']);made+=1
-        if cfg.get('review_request') and cfg.get('review_url'):
-            for j in rows(db,"SELECT j.*,l.email,l.client_name,l.language,l.notifications_suppressed FROM jobs j JOIN leads l ON l.id=j.lead_id WHERE j.status='Completed'"):
-                if j['notifications_suppressed'] or not j['email']:continue
-                key='neutral-review:'+j['id']
-                if one(db,'SELECT id FROM outbound_messages WHERE event_key=?',(key,)):continue
-                # No sentiment filter and no testimonial/credit eligibility filter.
-                body=f"Hi {j['client_name']},\n\nThank you for choosing Crown Movers. You're welcome to share an honest review of your experience here: {cfg['review_url']}\n\nLeaving a review is optional. No discount or benefit depends on a public review.\n\nThank you,\nCrown Movers"
-                if j['language'].lower().startswith('fr'):body=f"Bonjour {j['client_name']},\n\nMerci d'avoir choisi Crown Movers. Vous pouvez partager votre experience honnete ici : {cfg['review_url']}\n\nL'avis est facultatif. Aucun rabais ni avantage ne depend d'un avis public.\n\nMerci,\nCrown Movers"
-                queue_message(db,j['lead_id'],'Thank you | Merci',body,'Review request','automation',key,j['id']);made+=1
         if cfg.get('invoice_followup'):
             invoices=rows(db,"SELECT i.*,j.lead_id,l.client_name,l.email,l.language,l.notifications_suppressed,r.issued_at FROM job_invoices i JOIN jobs j ON j.id=i.job_id JOIN leads l ON l.id=j.lead_id JOIN invoice_revisions r ON r.invoice_id=i.id AND r.revision=i.revision WHERE i.status='Issued'")
             for inv in invoices:

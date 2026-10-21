@@ -76,4 +76,4 @@ def process_video(source,target):
         target.unlink(missing_ok=True)
         raise HTTPException(422,'This video could not be processed. Use a short MP4, MOV or WebM (up to 100 MB / 3 minutes), or paste a Drive/video-folder link.')
     target.chmod(0o600)
-    return {'size':target.stat().st_size,'sha256':hashlib.sha256(target.read_bytes()).hexdigest()}
+    return {'size':target.stat().st_size,'sha256':hashlib.sha256(target.read_bytes()).hexdigest(),'duration_seconds':duration}

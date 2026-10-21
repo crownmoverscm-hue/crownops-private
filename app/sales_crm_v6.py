@@ -986,7 +986,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
         require_role(u,{"owner",'manager'});url=str(data.get("review_url") or "").strip()
         if url and not url.startswith("https://"):raise HTTPException(422,"Use the full https:// public review URL.")
         with transaction(path) as db:
-            cfg=settings(db,"automation_policy",{}) or {};cfg.update({"enabled":bool(data.get("enabled",True)),"review_request":bool(data.get("review_request",True)),"review_url":url});put_setting(db,"automation_policy",cfg);audit(db,u["id"],"Review-request settings updated","settings","automation_policy",{"has_url":bool(url)})
+            cfg=settings(db,"automation_policy",{}) or {};cfg.update({"enabled":bool(data.get("enabled",True)),"review_request":False,"review_url":url});put_setting(db,"automation_policy",cfg);audit(db,u["id"],"Review-request settings updated","settings","automation_policy",{"has_url":bool(url)})
         return {"ok":True}
 
     @app.post("/api/crm/jobs/{jid}/review-request")

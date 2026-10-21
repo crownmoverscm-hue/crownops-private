@@ -217,7 +217,7 @@ def create_app(database_path=None):
         upload_limit=110_000_000
         length=request.headers.get('content-length','0')
         try:
-            if int(length)>(upload_limit if request.url.path.endswith('/uploads') else 13_000_000):
+            if int(length)>(upload_limit if request.url.path.endswith('/uploads') or request.url.path=='/api/participation/video' else 13_000_000):
                 return JSONResponse({'detail':'Request too large.'},413)
         except ValueError:
             return JSONResponse({'detail':'Invalid request length.'},400)
@@ -1297,7 +1297,7 @@ def create_app(database_path=None):
     def history(u=Depends(auth)):
         require(u,{'owner','manager'})
         with closing(connect(path)) as db:
-            private_filter=" WHERE a.object_type NOT IN ('expenses','expense_sources')" if u['role']!='owner' else ''
+            private_filter=" WHERE a.object_type NOT IN ('expenses','expense_sources','client_draws','client_draw_entries')" if u['role']!='owner' else ''
             return rows(db,'SELECT a.*,u.name AS actor_name FROM audit a LEFT JOIN users u ON u.id=a.actor'+private_filter+' ORDER BY a.id DESC LIMIT 200')
 
     @app.get('/api/integrations')
@@ -1435,6 +1435,8 @@ def create_app(database_path=None):
     from .security import register_security, validate_deployment
     validate_deployment(public_url,secure)
     register_portal(app,path,auth,public_url,secure)
+    from .client_participation import register_client_participation
+    register_client_participation(app,path,auth,public_url,secure)
     register_operations(app,path,auth)
     from .job_handoff import register_job_handoff
     register_job_handoff(app,path,auth)
