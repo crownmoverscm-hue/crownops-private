@@ -15,14 +15,15 @@ import time
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('suite', choices=['mobile_smoke', 'navigation_audit', 'dialog_audit', 'schedule_import', 'app_relaunch', 'connection_continuity', 'document_browser', 'hours_costs', 'wix_sync', 'inbox', 'payroll_periods'],
+    parser.add_argument('suite', choices=['mobile_smoke', 'navigation_audit', 'dialog_audit', 'schedule_import', 'app_relaunch', 'connection_continuity', 'document_browser', 'hours_costs', 'wix_sync', 'inbox', 'payroll_periods', 'staff_portal'],
                         default='mobile_smoke', nargs='?')
     args = parser.parse_args()
     if args.suite=='inbox':os.environ['CROWNOPS_BROWSER_INBOX']='1'
     here = Path(__file__).resolve().parent
-    threading.Thread(target=lambda: runpy.run_path(str(here / 'fixture.py'), run_name='__main__'),
+    fixture_file='staff_portal_fixture.py' if args.suite=='staff_portal' else 'fixture.py'
+    threading.Thread(target=lambda: runpy.run_path(str(here / fixture_file), run_name='__main__'),
                      daemon=True).start()
-    for _ in range(100):
+    for _ in range(600):
         try:
             with socket.create_connection(('127.0.0.1', 8095), timeout=.1):
                 break

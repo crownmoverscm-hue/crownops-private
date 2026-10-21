@@ -591,8 +591,8 @@ def register_ux_features(app,path,auth):
                 existing=one(db,'SELECT * FROM times WHERE job_id=? AND employee_id=?',(jid,eid))
                 if versions is not None and versions.get(eid)!=(existing['version'] if existing else None):raise HTTPException(409,'These hours changed. Reopen the form before saving.')
                 individual_note=text((exceptions.get(eid) or {}).get('note',''),'Optional adjustment note',1000) or note or (existing['note'] if existing else '')
-                if existing and existing['status']=='Approved' and not manager:
-                    if minutes!=existing['service_minutes']+existing['transport_minutes'] or individual_note!=existing['note']:raise HTTPException(409,'Approved payroll hours can only be corrected by a payroll manager.')
+                if existing and not manager:
+                    if minutes!=existing['service_minutes']+existing['transport_minutes'] or individual_note!=existing['note']:raise HTTPException(409,'Recorded hours are read-only for employees. Contact a manager for corrections.')
                     continue
                 if existing:
                     if existing['service_minutes']+existing['transport_minutes']!=minutes or existing['note']!=individual_note:
