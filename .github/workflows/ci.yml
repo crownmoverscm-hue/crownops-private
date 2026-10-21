@@ -74,6 +74,10 @@ jobs:
         env:
           NODE_PATH: /tmp/crownops-browser/node_modules
         run: python tests/browser/run_mobile.py client_participation
+      - name: Test friendly recovery and visible release identity
+        env:
+          NODE_PATH: /tmp/crownops-browser/node_modules
+        run: python tests/browser/run_mobile.py browser_recovery
       - name: Smoke-create application
         env:
           CROWNOPS_ENV: test

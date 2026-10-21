@@ -21,7 +21,7 @@ def release_snapshot(root):
 def register_app_release(app, root):
     revision, html = release_snapshot(root)
     app.state.ui_revision = revision
-    app.state.ui_index = html
+    app.state.ui_index = html.replace('__CROWNOPS_VERSION__', app.version)
 
     @app.get('/api/app-release')
     def current_release():

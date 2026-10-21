@@ -196,7 +196,9 @@ def create_app(database_path=None):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.12.6-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.12.6-rc2',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    from .error_pages import register_error_pages
+    register_error_pages(app)
     from .app_release import register_app_release
     register_app_release(app,ROOT)
     app.state.db_path=path
@@ -274,7 +276,7 @@ def create_app(database_path=None):
         with closing(connect(path)) as db:
             setup=not bool(db.execute('SELECT 1 FROM users LIMIT 1').fetchone())
         from .photo_safety import photo_mode,upload_policy
-        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':'0.12.6-rc1',
+        return {'ok':True,'mode':os.getenv('CROWNOPS_ENV','test'),'setup_required':setup,'version':app.version,
                 'private_photos_available':photo_mode() and upload_policy()['enabled']}
 
     @app.post('/api/setup-owner')
