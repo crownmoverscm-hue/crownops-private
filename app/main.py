@@ -182,11 +182,23 @@ def create_app(database_path=None):
                     import logging
                     logging.getLogger('crownops').error('Connection maintenance will retry. Saved authorizations retained.')
                 await asyncio.sleep(900)
+        async def estimate_worker():
+            from .estimate_delivery import poll_estimates
+            while True:
+                try:await asyncio.to_thread(poll_estimates,path)
+                except Exception:
+                    import logging
+                    logging.getLogger('crownops').error('Estimate status check could not finish. No automatic email was attempted.')
+                await asyncio.sleep(120)
+        estimate_task=asyncio.create_task(estimate_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
         connection_task=asyncio.create_task(connection_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
         intake_task=asyncio.create_task(inquiry_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
         task=asyncio.create_task(review_worker()) if os.getenv('CROWNOPS_RUN_WORKER')=='1' else None
         try:yield
         finally:
+            if estimate_task:
+                estimate_task.cancel()
+                with suppress(asyncio.CancelledError):await estimate_task
             if connection_task:
                 connection_task.cancel()
                 with suppress(asyncio.CancelledError):await connection_task
@@ -196,7 +208,7 @@ def create_app(database_path=None):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.12.6-rc2',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.12.7-rc1',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     from .error_pages import register_error_pages
     register_error_pages(app)
     from .app_release import register_app_release
@@ -1453,6 +1465,8 @@ def create_app(database_path=None):
     register_production(app,path,auth,public_url,secure)
     from .extensions import register_extensions
     register_extensions(app,path,auth,public_url)
+    from .estimate_delivery import register_estimate_delivery
+    register_estimate_delivery(app,path,auth)
     from .invoice_payments import register_invoice_reconciliation
     register_invoice_reconciliation(app,path,auth)
     from .invoice_access import register_invoice_access

@@ -838,6 +838,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
     def finalize(qid:str,data:dict,u=Depends(auth)):
         require_role(u,SALES);invite_url="";mid=None
         with transaction(path) as db:
+            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):
+                raise HTTPException(409,'This estimate uses QuickBooks delivery. Open that action to review, send or check acceptance.')
             q=one(db,"SELECT * FROM quotes WHERE id=?",(qid,))
             if not q or q["status"] not in ("Draft","Approved"):raise HTTPException(409,"Only a draft or approved estimate can be finalized.")
             l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],))

@@ -18,6 +18,8 @@ def qbo_work(path,kind,obj,rev,actor,action):
     """Reserve one write; failures of uncertain completion require human reconciliation."""
     key='qbo:'+kind+':'+obj+':'+str(rev)
     with transaction(path) as db:
+        if kind=='Estimate' and one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(obj,)):
+            raise HTTPException(409,'This estimate already uses QuickBooks delivery. Open that workflow instead.')
         old=one(db,'SELECT * FROM provider_operations WHERE id=?',(key,))
         if old:
             if old['status']=='Completed':return {**json.loads(old['result_json']),'duplicate':True}
@@ -46,6 +48,8 @@ def register_extensions(app,path,auth,public_url):
         if data.get('confirm') is not True:raise HTTPException(422,'Confirm draft-only export.')
         with closing(connect(path)) as db:
             q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
+            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):
+                raise HTTPException(409,'This estimate already uses the QuickBooks delivery flow. Open QuickBooks delivery to review it.')
             if not q or q['status'] not in ('Approved','Accepted'):raise HTTPException(409,'Approve this estimate before export.')
             l=one(db,'SELECT * FROM leads WHERE id=?',(q['lead_id'],))
             if l['notifications_suppressed'] or not quote_scope_current(db,q,l):raise HTTPException(409,'Activate and review the current client project first.')

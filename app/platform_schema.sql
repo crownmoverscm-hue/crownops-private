@@ -468,3 +468,12 @@ CREATE TABLE IF NOT EXISTS service_review_records (
  rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5), reviewed_by TEXT NOT NULL,
  reviewed_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', crew_json TEXT NOT NULL
 );
+-- A reviewed QuickBooks delivery is scoped to the company/environment and quote.
+CREATE TABLE IF NOT EXISTS qbo_estimate_deliveries (
+ quote_id TEXT PRIMARY KEY REFERENCES quotes(id), environment TEXT NOT NULL,
+ realm_id TEXT NOT NULL, external_id TEXT, basis TEXT NOT NULL,
+ state TEXT NOT NULL, source_hash TEXT NOT NULL, payload_json TEXT NOT NULL,
+ remote_json TEXT NOT NULL DEFAULT '{}', recipient TEXT NOT NULL,
+ error TEXT NOT NULL DEFAULT '', sent_at TEXT, checked_at TEXT,
+ created_by TEXT NOT NULL, created_at TEXT NOT NULL
+);

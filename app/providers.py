@@ -99,6 +99,17 @@ def qbo_read(path,resource,params=None):
 def qbo_query(path,statement):
     return qbo_read(path,'query',{'query':statement}).get('QueryResponse',{})
 
+def qbo_send_estimate(path,estimate_id,recipient):
+    """Intuit's explicit email endpoint; never automatically retry this operation."""
+    quickbooks_gate()
+    if not str(estimate_id).isdigit():raise ValueError('Invalid QuickBooks estimate ID.')
+    t,realm,host=_qbo_connection(path)
+    response=requests.post(host+'/v3/company/'+realm+'/estimate/'+str(estimate_id)+'/send',
+        params={'minorversion':os.getenv('QBO_MINOR_VERSION','75'),'sendTo':recipient},data=b'',
+        headers={'Authorization':'Bearer '+t['access_token'],'Accept':'application/json','Content-Type':'application/octet-stream'},timeout=30)
+    if not response.ok:raise RuntimeError('QuickBooks did not confirm estimate email sending.')
+    return response.json()
+
 def qbo_mapping(path,key):
     env_key={'service_item_id':'QBO_SERVICE_ITEM_ID','tax_code_id':'QBO_TAX_CODE_ID','discount_account_id':'QBO_DISCOUNT_ACCOUNT_ID','deposit_account_id':'QBO_DEPOSIT_ACCOUNT_ID'}[key]
     mapping_key='quickbooks_mappings_'+quickbooks_environment()
@@ -225,6 +236,8 @@ def process_mail(path,mid):
         if m['recipient'].strip().lower() not in recipients:raise HTTPException(409,'Client or approved billing email changed. Prepare a new message.')
         if m['event_key'].startswith('quote-delivery:'):
             _,qid,revision=m['event_key'].split(':')
+            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):
+                raise HTTPException(409,'This estimate uses QuickBooks delivery. Review its status before sending another email.')
             q=one(db,'SELECT * FROM quotes WHERE id=? AND lead_id=?',(qid,l['id']))
             from .client_communications import quote_scope_current,pending_scope_changes
             if not q or q['status'] not in ('Approved','Accepted') or q['revision']!=int(revision) or not quote_scope_current(db,q,l) or pending_scope_changes(db,l['id']):

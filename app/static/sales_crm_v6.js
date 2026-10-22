@@ -263,7 +263,8 @@ async function crmOpenQuote(qid){
  const depositRequired=Math.round(Number(q.inputs?.deposit_required||0)*100);const due=Math.max(0,depositRequired-Number(d.verified_deposit_cents||0));
  const status='<div class="row wrap">'+pill(q.status)+(d.job?pill(d.job.status):'')+(depositRequired?'<span class="pill '+(due<=0?'teal':'orange')+'">Deposit '+(due<=0?'received':crmCash(due)+' due')+'</span>':'')+'</div>';
  const actions=[];
- if(q.status==='Draft'||q.status==='Approved')actions.push('<button class="btn-primary" data-crm="quote-finalize" data-id="'+h(q.id)+'">Finalize & send</button>');
+ if(q.status==='Draft'||q.status==='Approved')actions.push('<button class="btn-soft" data-crm="quote-finalize" data-id="'+h(q.id)+'">Send with CrownOps</button>');
+ if(['Draft','Approved','Accepted'].includes(q.status))actions.push('<button class="btn-primary" data-qbo-delivery="open" data-id="'+h(q.id)+'">QuickBooks delivery</button>');
  if(q.status==='Draft')actions.push('<button class="btn-soft" data-editor="edit" data-id="'+h(q.id)+'">Edit draft</button>');
  if(['Approved','Accepted'].includes(q.status))actions.push('<button class="btn-soft" data-v4="qbo-estimate" data-id="'+h(q.id)+'">QuickBooks draft</button>');
  if(q.status==='Accepted'&&due>0){actions.push('<button class="btn-soft" data-crm="deposit-remind" data-id="'+h(q.id)+'">Deposit reminder</button>');actions.push('<button class="btn-primary" data-crm="deposit-record" data-id="'+h(q.id)+'">Record / approve deposit</button>');}

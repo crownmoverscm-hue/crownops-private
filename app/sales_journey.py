@@ -42,9 +42,14 @@ def submitted_details(db,lid):
 
 def quote_delivery(db,q):
     message=one(db,'SELECT status,sent_at,error FROM outbound_messages WHERE event_key=?',('quote-delivery:'+q['id']+':'+str(q['revision']),))
+    qbo=one(db,'SELECT state,sent_at,error FROM qbo_estimate_deliveries WHERE quote_id=?',(q['id'],))
+    if qbo:
+        message={'status':'Sent' if qbo['sent_at'] else qbo['state'],'sent_at':qbo['sent_at'],'error':qbo['error']}
     views=one(db,'SELECT count(*) opens,min(viewed_at) first_viewed_at,max(viewed_at) last_viewed_at FROM quote_views WHERE quote_id=?',(q['id'],))
     state='Accepted' if q['status']=='Accepted' else 'Sent' if q['status']=='Approved' and message and message['status']=='Sent' else 'Ready' if q['status']=='Approved' else q['status']
-    return {'state':state,'email_status':message['status'] if message else None,'sent_at':message['sent_at'] if message else None,**views}
+    if qbo and qbo['state']=='Rejected' and q['status']!='Accepted':state='Declined'
+    return {'state':state,'email_status':message['status'] if message else None,'sent_at':message['sent_at'] if message else None,
+            'delivery_provider':'QuickBooks' if qbo else 'CrownOps','delivery_error':qbo['error'] if qbo else '',**views}
 
 
 def register_sales_journey(app,path,auth,public_url):

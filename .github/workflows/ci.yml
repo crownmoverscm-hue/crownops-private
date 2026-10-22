@@ -78,6 +78,10 @@ jobs:
         env:
           NODE_PATH: /tmp/crownops-browser/node_modules
         run: python tests/browser/run_mobile.py browser_recovery
+      - name: Test reviewed QuickBooks estimate delivery interface
+        env:
+          NODE_PATH: /tmp/crownops-browser/node_modules
+        run: python tests/browser/run_mobile.py estimate_delivery
       - name: Smoke-create application
         env:
           CROWNOPS_ENV: test
