@@ -14,11 +14,18 @@
     const toolbar=undated?`<div class="row wrap" style="margin-top:20px"><button type="button" data-schedule-import="undated">${undated} service${undated===1?' needs':'s need'} a date</button></div>`:'';
     if(S.jobScope==='mine')return html;
     const template=document.createElement('template');template.innerHTML=html;
-    const days=weekDays().map(dateIso);
-    template.content.querySelectorAll('.weekly-day-column').forEach((column,i)=>{
-      const matches=current.filter(e=>e.date===days[i]);
+    template.content.querySelectorAll('[data-schedule-date]').forEach(column=>{
+      const matches=current.filter(e=>e.date===column.dataset.scheduleDate);
       if(!matches.length)return;
       column.querySelector('.weekly-day-jobs')?.insertAdjacentHTML('beforeend',matches.map(card).join(''));
+      column.querySelector('.schedule-day-empty')?.remove();
+      const count=column.querySelector('[data-schedule-count]');
+      if(count){
+        const total=Number(count.dataset.scheduleCount)+matches.length;
+        count.dataset.scheduleCount=String(total);count.textContent=total+' services';
+        column.querySelector('.schedule-month-events')?.insertAdjacentHTML('beforeend',matches.slice(0,2).map(e=>'<button type="button" class="schedule-month-event" data-action="open-imported-job" data-id="'+h(e.id)+'"><strong>'+h(e.client_name)+'</strong><span>Planning needed</span></button>').join(''));
+        const more=column.querySelector('.schedule-month-more');if(more)more.textContent='View all '+total+' services';
+      }
       column.querySelectorAll('.weekly-open-slot').forEach(el=>el.remove());
     });
     return template.innerHTML+toolbar;
