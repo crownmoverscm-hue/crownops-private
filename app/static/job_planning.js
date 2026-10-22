@@ -11,7 +11,7 @@ function jpTarget(issue){
  return 'timing';
 }
 function jpResourceList(kind,selected){
- const resources=JP.data.resources[kind].slice().sort((a,b)=>Number(selected.includes(b.id))-Number(selected.includes(a.id))||a.name.localeCompare(b.name)),name=kind==='crew'?'crew_ids':'truck_ids';
+ const resources=JP.data.resources[kind].slice().sort((a,b)=>kind==='trucks'?CrownSchedule.compareTrucks(a,b):Number(selected.includes(b.id))-Number(selected.includes(a.id))||a.name.localeCompare(b.name)),name=kind==='crew'?'crew_ids':'truck_ids';
  return resources.length?resources.map(r=>{
   const checked=selected.includes(r.id),disabled=!r.available&&!checked;
   return '<label class="jp-resource '+(!r.available?'jp-unavailable':'')+'" data-jp-resource="'+h(kind)+'"><input type="checkbox" name="'+name+'" value="'+h(r.id)+'" '+(checked?'checked ':'')+(disabled?'disabled ':'')+'><span class="grow"><strong>'+h(r.name)+'</strong><span class="tiny muted">'+h(r.reasons.join(' · ')||(r.driver_verified?'Available · verified driver':'Available'))+'</span></span>'+(checked?'<span class="pill blue">Selected</span>':'')+'</label>';
@@ -27,7 +27,7 @@ function jpHistory(){
  }).join(''):'<p class="small muted">No changes recorded yet.</p>')+'</details>';
 }
 function jpSelected(kind,ids){
- const selected=JP.data.resources[kind].filter(r=>ids.includes(r.id));
+ const selected=JP.data.resources[kind].filter(r=>ids.includes(r.id)).slice();if(kind==='trucks')selected.sort(CrownSchedule.compareTrucks);
  return selected.length?selected.map(r=>'<span class="pill blue">'+h(r.name)+'</span>').join(''):'<span class="tiny muted">None selected yet</span>';
 }
 async function openJobPlan(id,focus=''){
