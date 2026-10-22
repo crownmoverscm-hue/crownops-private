@@ -18,6 +18,7 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   });
   await page.route('**/api/vehicles',r=>r.fulfill({json:trucks}));
   await page.route('**/api/fleet',r=>r.fulfill({json:trucks}));
+  await page.route('**/api/company/fleet',r=>r.fulfill({json:{editable:true,trucks:trucks.map(t=>({...t,reference:{},maintenance:[],documents:[],history:[]}))}}));
   await page.route('**/api/time-off',r=>r.fulfill({json:[]}));
   await page.route('**/api/schedule-identity',r=>r.fulfill({json:{id:'E1',matched:true}}));
   await page.route('**/api/schedule/availability?*',r=>{
@@ -72,8 +73,8 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   }
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal page overflow '+width+'/'+role);
   if(role==='owner'){
-   await page.evaluate(()=>navigate('fleet'));await page.locator('.truck-management-card').first().waitFor();
-   assert.deepEqual(await page.locator('.truck-card-title h2').allTextContents(),['alpha','Bravo','Truck 2','Truck 10','Zulu']);
+   await page.evaluate(()=>navigate('fleet'));await page.locator('.company-truck-card').first().waitFor();
+   assert.deepEqual(await page.locator('.company-truck-card h2').allTextContents(),['alpha','Bravo','Truck 2','Truck 10','Zulu']);
   }
   await context.close();
  }
