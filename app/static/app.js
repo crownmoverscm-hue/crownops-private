@@ -255,4 +255,4 @@ window.addEventListener('online',()=>toast('Connection restored. Refresh to load
 
 // Startup is performed by platform.js after unified screens are registered.
 
-document.addEventListener('change',e=>{if(e.target.id==='calendar-jump'&&e.target.value){const d=new Date(e.target.value+'T12:00:00');S.week=mondayOfWeek(d);S.scheduleView='week';navigate('schedule');}});
+document.addEventListener('change',e=>{if(e.target.id==='calendar-jump'&&e.target.value){const d=new Date(e.target.value+'T12:00:00');if(Number.isNaN(d.getTime()))return;S.calendarDate=dateIso(d);S.week=mondayOfWeek(d);navigate('schedule');}});
