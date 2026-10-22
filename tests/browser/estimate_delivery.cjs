@@ -21,6 +21,20 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await route.fulfill({json:result});
  });
  page.on('dialog',dialog=>dialog.accept());
+ let invoiceState='Ready',invoiceSends=0,accountVerified=false;
+ await page.route('**/api/invoices/TEST-QBO-INVOICE/quickbooks-email**',async route=>{
+  if(route.request().url().endsWith('/send')){invoiceSends++;invoiceState='Sent';return route.fulfill({json:{sent:true}});}
+  return route.fulfill({json:{state:invoiceState,can_send:invoiceState==='Ready',recipient:'fictional@example.invalid',total_cents:73124,balance_cents:43124,
+   memo:'Thank you for choosing Crown Movers. Your deposit has been applied.',lines:[{description:'Actual moving service',amount_cents:54000}],
+   message:'TEST — MUSE fixture. No email or payment requested.',review_hash:'invoice-fixture'}});
+ });
+ await page.route('**/api/connections',async route=>{
+  const response=await route.fetch(),data=await response.json();
+  data.quickbooks={...data.quickbooks,authorized_at:'2026-10-21',state:accountVerified?'Account verified':'Authorization saved — account not checked',
+   company_name:accountVerified?'TEST — MUSE Company':'',environment:'sandbox',writes_enabled:true,mappings_complete:true,estimate_email_enabled:true,invoice_email_enabled:true};
+  await route.fulfill({json:data});
+ });
+ await page.route('**/api/quickbooks/test-connection',route=>{accountVerified=true;return route.fulfill({json:{ok:true,company_name:'TEST — MUSE Company'}});});
  await page.goto('http://127.0.0.1:8095');await page.locator('#content h1').waitFor();
  for(const width of [320,390,768,1440]){
   state='Not prepared';await page.setViewportSize({width,height:900});
@@ -37,7 +51,20 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await page.getByRole('heading',{name:'QuickBooks estimate · Accepted',exact:true}).waitFor();
   assert.equal(await page.locator('#modal').getByRole('button',{name:'Open schedule',exact:true}).count(),1);
   await page.getByRole('button',{name:'Close',exact:true}).last().click();
+  invoiceState='Ready';await page.evaluate(()=>openQuickBooksInvoice('TEST-QBO-INVOICE'));
+  await page.getByRole('button',{name:'Send through QuickBooks',exact:true}).waitFor();
+  assert.match(await page.locator('#modal').innerText(),/Current balance/);
+  assert(await page.locator('#modal').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'invoice modal overflow '+width);
+  await page.getByRole('button',{name:'Send through QuickBooks',exact:true}).click();
+  await page.getByRole('heading',{name:'QuickBooks invoice · Sent',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Send through QuickBooks',exact:true}).count(),0);
+  await page.locator('#modal [data-action="close"]').first().click();
+  accountVerified=false;await page.evaluate(()=>navigate('connections'));
+  await page.getByRole('heading',{name:'QuickBooks — company connection',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Check QuickBooks connection',exact:true}).click();
+  await page.getByText('Account verified',{exact:true}).waitFor();
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'connection page overflow '+width);
  }
- assert.equal(sends,4);assert.deepEqual(errors,[]);await browser.close();
- console.log('PASS: mocked QuickBooks preview, explicit send, acceptance and schedule handoff at four widths. No real provider or email.');
+ assert.equal(sends,4);assert.equal(invoiceSends,4);assert.deepEqual(errors,[]);await browser.close();
+ console.log('PASS: mocked quote send/acceptance, invoice email and company verification at four widths. No real provider, email or payment.');
 })().catch(error=>{console.error(error);process.exit(1);});

@@ -23,11 +23,13 @@ def invoice_tracking(db, inv, calculation):
     overdue = bool(issued and balance > 0 and due and due < business_day())
     state = ('Correction draft' if issued else 'Draft') if inv['status'] == 'Draft' else 'Paid' if balance == 0 else 'Overdue' if overdue else 'Partial' if credits > 0 else 'Balance due'
     message = one(db, "SELECT status,sent_at FROM outbound_messages WHERE event_key IN (?,?) ORDER BY CASE WHEN status='Sent' THEN 0 ELSE 1 END,created_at DESC LIMIT 1", ('invoice-delivery:'+inv['id']+':'+str(inv['revision']), 'invoice-mail:'+inv['id']+':'+str(inv['revision'])))
+    native=one(db,'SELECT status,updated_at FROM provider_operations WHERE id=?',('qbo:InvoiceEmail:'+inv['id']+':'+str(inv['revision']),))
+    if native:message={'status':'Sent' if native['status']=='Completed' else 'Sending' if native['status']=='Running' else 'Unknown','sent_at':native['updated_at'] if native['status']=='Completed' else None}
     return dict(created_at=inv['created_at'], issued_at=saved['issued_at'] if saved else None,
                 due_date=due, display_state=state, overdue=overdue, has_issued_revision=issued,
                 billing_total_cents=total, verified_paid_cents=credits if issued else 0,
                 outstanding_cents=balance if issued else 0,
-                email_status=message['status'] if message else 'Not sent', sent_at=message['sent_at'] if message else None)
+                delivery_provider='QuickBooks' if native else 'CrownOps',email_status=message['status'] if message else 'Not sent', sent_at=message['sent_at'] if message else None)
 
 
 def print_controls(html):

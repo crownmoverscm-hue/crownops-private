@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from fastapi import Depends, HTTPException
 from fastapi.responses import JSONResponse
 from .store import connect, transaction, one, rows, insert, uid, now, dumps, audit
-from .platform_common import invoice_current, invoice_job, pending_received, quickbooks_environment,require_role,MANAGERS,text
+from .platform_common import invoice_current, invoice_job, pending_received, quickbooks_environment,require_role,MANAGERS,text,settings,put_setting
 
 
 def _amount(value):
@@ -170,7 +170,7 @@ def quickbooks_payment_state(path,iid,*,actor='quickbooks-reconciliation',reconc
         remote=found[0];balance=_amount(remote['Balance']);currency_context={}
         if str(remote.get('Id'))!=remote_id or not _cad_currency(path,remote,currency_context) or str(remote.get('CustomerRef',{}).get('value'))!=str(snapshot['customer']) or _amount(remote['TotalAmt'])!=calc['total_cents'] or balance>calc['total_cents']:
             raise ValueError('QuickBooks invoice identity, customer, currency or total differs. Management must reconcile it.')
-        state.update(verified=True,remote_balance_cents=balance,status='Paid' if balance==0 else 'Partial' if balance<calc['total_cents'] else 'Unpaid')
+        state.update(verified=True,remote_balance_cents=balance,provider_email_status=remote.get('EmailStatus'),status='Paid' if balance==0 else 'Partial' if balance<calc['total_cents'] else 'Unpaid')
         if snapshot['pending'] or snapshot['checkout']:raise ValueError('Reconcile the recorded receipt or existing checkout before requesting another payment.')
         if balance>calc['balance_cents']:raise ValueError('QuickBooks shows a larger balance. Review an unposted receipt, refund or payment reversal.')
         evidence=_receipt_evidence(path,remote,snapshot['customer'],currency_context)
@@ -256,6 +256,34 @@ def match_quickbooks_receipt(path,iid,local_payment_id,remote_payment_id,*,user,
     except (ValueError,KeyError,TypeError,ArithmeticError) as ex:
         raise HTTPException(409,str(ex) if isinstance(ex,ValueError) else 'QuickBooks returned incomplete payment evidence. No receipt was matched.')
     except Exception:raise HTTPException(502,'QuickBooks could not confirm this match. No receipt was matched; check the connection and try again.')
+
+
+def poll_quickbooks_receipts(path):
+    """Import proven invoice receipts only; never charge, refund or write to QBO."""
+    import os
+    if os.getenv('CROWNOPS_ALLOW_QBO_RECEIPT_SYNC')!='1':return {'enabled':False}
+    from .providers import _qbo_connection
+    _,realm,_=_qbo_connection(path);env=quickbooks_environment()
+    with closing(connect(path)) as db:
+        cursor=settings(db,'quickbooks_receipt_cursor','') or ''
+        candidates=rows(db,"SELECT i.id,o.result_json FROM job_invoices i JOIN provider_operations o ON o.id=('qbo:invoice:'||i.id||':'||i.revision) WHERE i.status='Issued' AND o.status='Completed' ORDER BY i.id")
+    scoped=[]
+    for row in candidates:
+        scope=json.loads(row['result_json'])
+        if scope.get('realm_id')==realm and scope.get('environment')==env:scoped.append(row)
+    ordered=[r for r in scoped if r['id']>cursor]+[r for r in scoped if r['id']<=cursor]
+    selected=ordered[:25];errors=0;imported=0
+    for row in selected:
+        try:
+            result=quickbooks_payment_state(path,row['id'],reconcile=True,actor='quickbooks-receipt-sync')
+            imported+=result['reconciled_receipts']
+            errors+=int(result['status'] in ('Unavailable','Review required'))
+        except Exception:errors+=1
+    state={'enabled':True,'environment':env,'realm_id':realm,'checked_at':now(),'checked_invoices':len(selected),'needs_review':errors,'imported_receipts':imported}
+    with transaction(path) as db:
+        if selected:put_setting(db,'quickbooks_receipt_cursor',selected[-1]['id'])
+        put_setting(db,'quickbooks_receipt_sync_status',state)
+    return state
 
 
 def register_invoice_reconciliation(app,path,auth):
