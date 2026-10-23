@@ -37,9 +37,9 @@ function crmActivityBadge(a){
  return '<span class="pill '+cl+'">'+h(label)+'</span>';
 }
 async function crmClientBrowser(){
- const [clients,intake,callbacks,overview]=await Promise.all([crmSearchClients(CRM.clientSearch),api('/intake/status').catch(()=>null),api('/callbacks').catch(()=>[]),api('/sales/overview').catch(()=>null)]);
+ const [clients,intake,overview]=await Promise.all([crmSearchClients(CRM.clientSearch),api('/intake/status').catch(()=>null),api('/sales/overview').catch(()=>null)]);
  const sync=intake?'<div class="intake-status"><div><strong>'+h(intake.settings?.enabled===false?'Automatic inquiry import is paused':(intake.error||intake.summary?.errors?.length)?'Inquiry import needs attention':'Automatic inquiry import is on')+'</strong><div class="small muted">'+h(intake.error||[...new Set(intake.summary?.errors?.map(x=>x.error)||[])].join(' · ')||(intake.last_success?'Last successful check: '+crmActivityTime(intake.last_success):'Checks Gmail quote forms, missed calls and voicemail every 2 minutes when Gmail is connected.'))+'</div></div><button data-intake="sync" class="btn-soft">Check inquiries now</button>'+(intake.can_manage?'<button data-intake="toggle" data-enabled="'+(intake.settings?.enabled===false?'true':'false')+'">'+(intake.settings?.enabled===false?'Resume':'Pause')+'</button>':'')+'</div>':'';
- const callbackPanel=callbacks.some(c=>c.status==='Requested')?panel('Client callback requests',callbacks.filter(c=>c.status==='Requested').map(c=>'<div class="activity-row"><div class="grow"><strong>'+h(c.client_name)+'</strong><div><a href="tel:'+h(c.phone.replace(/[^+0-9]/g,''))+'">'+h(c.phone)+'</a></div><div class="small">'+h(c.preferred_time||'No preferred time')+'</div><p>'+h(c.message)+'</p></div><button data-intake="callback-complete" data-id="'+h(c.id)+'">Mark completed</button></div>').join('')):'';
+
 
  const rows=clients.map(c=>{
    const a=c.latest_activity||{};
@@ -53,17 +53,17 @@ async function crmClientBrowser(){
     activity,
     latest.id?(h(uxDateLabel(latest.move_date,'Date needed'))+'<div class="tiny muted">'+h(latest.pickup||'Address needed')+'</div>'):'No service yet',
     pill(latest.stage||'Client')+(latest.intake_status?'<div class="tiny muted">'+h(latest.intake_status)+'</div>':'')+(follow?'<div class="tiny" style="margin-top:5px"><strong>'+h(follow)+'</strong> open follow-up'+(follow===1?'':'s')+'</div>':''),
-    h(overview?.owners?.[latest.id]||'Unassigned')+(overview?.next_actions?.[latest.id]?'<div class="tiny strong">'+h(overview.next_actions[latest.id].title)+'</div><div class="tiny muted">Due '+h(overview.next_actions[latest.id].due_date||'date needed')+' · '+h(overview.next_actions[latest.id].owner)+'</div>':'<div class="tiny muted">No scheduled next action</div>'),
+    h(overview?.owners?.[latest.id]||'Unassigned')+(overview?.next_actions?.[latest.id]?'<div class="tiny strong">'+h(overview.next_actions[latest.id].title)+'</div><div class="tiny muted">Due '+h(overview.next_actions[latest.id].due_date||'date needed')+' · '+h(overview.next_actions[latest.id].owner)+'</div>':'<div class="tiny muted">No open follow-up</div>'),
     '<button class="btn-small" data-crm="client-open" data-id="'+h(c.id)+'">Open</button>'
    ];
  });
- return head('Sales & clients','Your newest quote requests, missed calls, voicemails and client messages appear first. Search any client without losing their service history.',
+ return head('Clients','Find client details and service history. Use Inbox to handle calls, forms, emails and follow-ups.',
    '<button class="btn-primary" data-crm="client-new">'+icon('plus')+'New client</button>'+
    '<button class="btn-soft" data-action="new-lead">'+icon('plus')+'New inquiry</button>')+
-   sync+callbackPanel+(overview?crownSalesPriorities(overview):'')+'<div class="filterbar"><div class="searchbox" style="min-width:min(360px,100%)">'+icon('search')+
+   sync+'<div class="filterbar"><div class="searchbox" style="min-width:min(360px,100%)">'+icon('search')+
    '<input id="crm-client-search" value="'+h(CRM.clientSearch)+'" placeholder="Search name, email, phone or address..." aria-label="Search clients"></div>'+
-   '<span class="tiny muted">'+clients.length+' client matches · newest inquiry first</span></div>'+
-   '<div class="panel"><div class="panel-head"><h2>Inquiry inbox</h2><span class="tiny muted">Forms, calls, voicemails and emails are ranked by the actual inquiry time</span></div>'+
+   '<span class="tiny muted">'+clients.length+' client matches · latest contact first</span></div>'+
+   '<div class="panel"><div class="panel-head"><h2>Client database</h2><button data-page="communications" class="btn-soft">Open Inbox</button></div>'+
    '<div class="panel-body flush sales-inquiry-table">'+(rows.length?crownInquiryTable(rows):empty('No clients found','Search another email, phone or name, or create a new client.'))+'</div></div>';
 }
 X.pageRenderers.sales=crmClientBrowser;

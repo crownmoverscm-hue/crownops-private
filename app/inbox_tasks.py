@@ -117,7 +117,7 @@ def sync_followups(db):
         add('entry:'+e['id'],e['lead_id'],'calls' if recorded else 'forms','Call outcome recorded' if recorded else 'Reply to client portal message',e['created_at'],done=recorded)
 
 
-def task_contact(t,call_details):
+def task_contact(t,call_details,unmatched=None):
     meta=obj(t['raw_json']);ids=[k[5:] for k in meta.get('inbox_sources',[]) if k.startswith('call:')]
     if meta.get('call_id'):ids.append(meta['call_id'])
     d=next((call_details[cid] for cid in ids if cid in call_details),{})
@@ -126,6 +126,14 @@ def task_contact(t,call_details):
     if not d and t['title']=='Call outcome recorded':t['call_status']='Recorded'
     t['received_at']=meta.get('inbox_received_at') or activity_time(t.get('created_at'))
     if not t.get('client_name') and d:t['client_name']=d.get('caller') or 'Unmatched caller'
+    key=str(t.get('legacy_id') or '')
+    if not t.get('lead_id') and key.startswith('gmail-match:'):
+        p=(unmatched or {}).get(key[12:],{});parsed=p.get('parsed') or {}
+        for field in ('client_name','email','phone','move_date'):
+            if not t.get(field) and isinstance(parsed.get(field),str):t[field]=parsed[field]
+        t['contact_phone']=t.get('contact_phone') or t.get('phone') or ''
+        t['received_at']=activity_time(p.get('received_at')) or t['received_at']
+        t['matching_required']=True
     return t
 
 
@@ -136,7 +144,8 @@ def task_token(t):
 def get_task(db,tid):
     t=one(db,'SELECT t.*,l.client_name,l.email,l.phone,l.move_date,l.lead_type,x.client_id FROM tasks t LEFT JOIN leads l ON l.id=t.lead_id LEFT JOIN client_account_leads x ON x.lead_id=t.lead_id WHERE t.id=?',(tid,))
     if not t:raise HTTPException(404,'Follow-up not found.')
-    task_contact(t,{c['id']:obj(c['payload_json']) for c in rows(db,'SELECT id,payload_json FROM calls')})
+    event=one(db,'SELECT event_key,payload_json FROM integration_events WHERE event_key=?',(str(t.get('legacy_id') or '')[12:],)) if str(t.get('legacy_id') or '').startswith('gmail-match:') else None
+    task_contact(t,{c['id']:obj(c['payload_json']) for c in rows(db,'SELECT id,payload_json FROM calls')},{event['event_key']:obj(event['payload_json'])} if event else {})
     person=one(db,'SELECT name FROM users WHERE id=? OR name=?',(t['owner'],t['owner']))
     t['owner_name']=person['name'] if person else t['owner']
     t['channel']=task_channel(t);t['review_token']=task_token(t)
@@ -189,7 +198,7 @@ def call_token(c):return hashlib.sha256(dumps([c['id'],c['lead_id'],c['payload_j
 
 def register_inbox_tasks(app,path,auth):
     @app.get('/api/inbox-tasks')
-    def list_tasks(channel:str='tasks',scope:str='team',status:str='open',q:str='',offset:int=0,order:str='newest',u=Depends(auth)):
+    def list_tasks(channel:str='tasks',scope:str='team',status:str='open',q:str='',offset:int=0,order:str='newest',activity_only:bool=False,u=Depends(auth)):
         require_role(u,OFFICE)
         if channel not in ('tasks','calls','emails','forms') or scope not in ('team','mine','unclaimed') or status not in ('open','today','overdue','upcoming','completed','all') or order not in ('newest','oldest'):raise HTTPException(422,'Choose a valid Inbox filter.')
         with transaction(path) as db:
@@ -197,21 +206,28 @@ def register_inbox_tasks(app,path,auth):
             sync_unlinked_clients(db);sync_followups(db)
             people={p['id']:p['name'] for p in rows(db,'SELECT id,name FROM users WHERE active=1')}
             call_details={c['id']:obj(c['payload_json']) for c in rows(db,'SELECT id,payload_json FROM calls')}
+            unmatched={e['event_key']:obj(e['payload_json']) for e in rows(db,"SELECT event_key,payload_json FROM integration_events WHERE event_type IN ('gmail_quote','gmail_email','gmail_missed_call','gmail_voicemail')")}
             names={v:k for k,v in people.items()};day=datetime.now(ZoneInfo('America/Toronto')).date().isoformat();items=[]
             for t in rows(db,'SELECT t.*,l.client_name,l.email,l.phone,l.move_date,l.lead_type,x.client_id FROM tasks t LEFT JOIN leads l ON l.id=t.lead_id LEFT JOIN client_account_leads x ON x.lead_id=t.lead_id WHERE t.historical=0 AND COALESCE(l.archived_import,0)=0'):
-                task_contact(t,call_details)
+                task_contact(t,call_details,unmatched)
                 t['channel']=task_channel(t);owner=t['owner'] if t['owner'] in people else names.get(t['owner'],t['owner'])
-                if scope=='mine' and owner!=u['id'] or scope=='unclaimed' and owner:continue
                 if q.strip().lower() not in ' '.join(str(t.get(k) or '') for k in ('client_name','email','phone','contact_phone','title')).lower():continue
                 t['bucket']='completed' if t['status']=='Done' else 'overdue' if t['due_date'] and t['due_date']<day else 'today' if t['due_date']==day else 'upcoming'
                 t.update(owner_id=owner,owner_name=people.get(owner,t['owner']),review_token=task_token(t))
                 items.append(t)
+            def in_scope(t,scope):
+                return scope=='team' or scope=='mine' and t['owner_id']==u['id'] or scope=='unclaimed' and not t['owner_id']
+            def in_status(t):
+                return status=='all' or status=='open' and t['bucket']!='completed' or t['bucket']==status
+            if activity_only:items=[t for t in items if t['channel'] in ('calls','emails','forms')]
+            scope_counts={s:sum(in_scope(t,s) and in_status(t) for t in items if channel=='tasks' or t['channel']==channel) for s in ('team','mine','unclaimed')}
+            items=[t for t in items if in_scope(t,scope)]
             counts={k:sum(t['channel']==k and t['bucket']!='completed' for t in items) for k in ('calls','emails','forms')};counts['tasks']=sum(t['bucket']!='completed' for t in items)
             selected=[t for t in items if channel=='tasks' or t['channel']==channel]
             summary={k:sum(t['bucket']==k for t in selected) for k in ('today','overdue','upcoming','completed')};summary['open']=sum(t['bucket']!='completed' for t in selected)
             selected=[t for t in selected if status=='all' or status=='open' and t['bucket']!='completed' or t['bucket']==status]
             selected.sort(key=lambda t:(t['received_at'],t['id']),reverse=order=='newest');offset=max(0,offset)
-            return {'items':selected[offset:offset+30],'total':len(selected),'offset':offset,'order':order,'counts':counts,'summary':summary}
+            return {'items':selected[offset:offset+30],'total':len(selected),'offset':offset,'order':order,'counts':counts,'summary':summary,'scope_counts':scope_counts}
 
     @app.get('/api/inbox-tasks/{tid}')
     def task_detail(tid:str,u=Depends(auth)):

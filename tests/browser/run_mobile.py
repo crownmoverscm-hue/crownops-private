@@ -15,7 +15,7 @@ import time
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('suite', choices=['mobile_schedule', 'browser_recovery', 'mobile_smoke', 'navigation_audit', 'dialog_audit', 'schedule_import', 'app_relaunch', 'connection_continuity', 'document_browser', 'hours_costs', 'wix_sync', 'inbox', 'payroll_periods', 'staff_portal', 'client_participation'],
+    parser.add_argument('suite', choices=['today_workspace', 'mobile_schedule', 'browser_recovery', 'mobile_smoke', 'navigation_audit', 'dialog_audit', 'schedule_import', 'app_relaunch', 'connection_continuity', 'document_browser', 'hours_costs', 'wix_sync', 'inbox', 'payroll_periods', 'staff_portal', 'client_participation'],
                         default='mobile_smoke', nargs='?')
     args = parser.parse_args()
     if args.suite=='inbox':os.environ['CROWNOPS_BROWSER_INBOX']='1'

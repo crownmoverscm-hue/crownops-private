@@ -1,0 +1,32 @@
+.today-workspace{display:flex;flex-direction:column;gap:24px}
+.today-workspace .page-head{margin-bottom:0}
+.today-workspace .page-head h1{font-size:clamp(27px,3vw,38px);line-height:1.2}
+.today-workspace .panel-head{flex-wrap:wrap;gap:14px}
+.today-workspace .panel-head p{margin:8px 0 0}
+.today-workspace h3{font-size:19px;line-height:1.4;margin:8px 0}
+.today-workspace p{line-height:1.55}
+.today-activity{display:flex;align-items:center;gap:20px;padding:20px 24px;border-bottom:1px solid #ebe6df;border-left:5px solid #b5a99b;overflow-wrap:anywhere}
+.today-activity p{margin:7px 0}
+.today-activity.inbox-accent-form{border-left-color:#55966e}
+.today-activity.inbox-accent-email{border-left-color:#b48b2a}
+.today-activity.inbox-accent-call{border-left-color:#5b84ad}
+.today-activity.inbox-accent-missed{border-left-color:#c86b6b}
+.today-activity.inbox-accent-voicemail{border-left-color:#8c73ae}
+.today-order{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600}
+.today-order select{min-height:44px;font-size:16px;min-width:155px}
+.today-workspace .today-job{gap:16px;text-align:left;width:100%}
+.today-workspace .today-job p{margin:5px 0}
+.today-task-list .inbox-task-card:last-child{margin-bottom:0}
+.today-office-tasks{margin-top:24px;padding-top:20px;border-top:1px solid #e6dfd6}
+.today-workspace .ux-browser-toolbar{margin:0 0 20px}
+@media(max-width:650px){
+ .today-workspace{gap:18px}
+ .today-workspace .panel-head,.today-activity{padding:17px 15px}
+ .today-activity{flex-wrap:wrap;gap:8px}
+ .today-activity>.grow{flex-basis:100%;min-width:0}
+ .today-activity>.row{width:100%;justify-content:flex-end}
+ .today-workspace .today-job{flex-wrap:wrap}
+ .today-order{width:100%}
+ .today-order select{width:100%}
+ .today-workspace .page-head .page-actions{flex-wrap:wrap}
+}

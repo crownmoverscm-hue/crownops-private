@@ -196,7 +196,7 @@ def create_app(database_path=None):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.12.6-rc2',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version='0.12.6-rc3',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     from .error_pages import register_error_pages
     register_error_pages(app)
     from .app_release import register_app_release
