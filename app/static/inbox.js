@@ -80,20 +80,6 @@ const inboxAttention=uxAttentionButton;
 uxAttentionButton=function(a){if(a.type==='email'&&a.lead_id)return `<button class="btn-small" data-inbox-open="${h(a.lead_id)}">Open history</button>`;if(a.type==='conversation')return `<button class="btn-small" data-inbox-open="${h(a.id)}">Open history</button>`;return inboxAttention(a);};
 const inboxActionWorkspace=uxOpenActionWorkspace;
 uxOpenActionWorkspace=async function(kind,id){if(kind==='email'){const r=await api('/ux/actions/email/'+encodeURIComponent(id)+'/workspace');return inboxOpen(r.client.id);}if(kind==='task')return inboxTaskOpen(id);return inboxActionWorkspace(kind,id);};
-const inboxToday=dashboard;
-dashboard=async function(){
- let html=await inboxToday();if(!['owner','manager','sales','dispatch'].includes(S.user.role))return html;
- const d=await api('/inbox?scope='+encodeURIComponent(UX.todayView||'team')+'&status=Needs%20reply');
- const day=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',weekday:'long',month:'long',day:'numeric'}).format(new Date());
- // Retain existing operational exceptions, remove the duplicate job-list dashboard.
- const template=document.createElement('template');template.innerHTML=html;
- for(const row of [...template.content.querySelectorAll('.attention-row')])if(row.querySelector('[data-inbox-open]'))row.remove();
- const jobPanel=[...template.content.querySelectorAll('.panel')].find(p=>p.querySelector('h2')?.textContent==="Today's jobs");if(jobPanel)jobPanel.remove();
- template.content.querySelector('.split')?.classList.add('inbox-today-single');
- const heading=template.content.querySelector('.page-head');heading?.insertAdjacentHTML('afterbegin','<div class="inbox-date">'+h(day)+'</div>');
- heading?.insertAdjacentHTML('afterend',`<section class="panel inbox-today"><div class="panel-head"><h2>Client updates needing review</h2><button data-page="communications">Open Inbox · ${d.total}</button></div><div class="panel-body">${d.items.slice(0,4).map(l=>`<div class="inbox-activity"><div><strong>${h(l.client_name)}</strong><p>Move: ${h(uxDateLabel(l.move_date,'Date to confirm'))} · ${h(l.handler_name||'Unclaimed')}</p></div><button data-inbox-open="${h(l.id)}">Review update</button></div>`).join('')||'<p>No client updates need review in this view.</p>'}</div></section>`);
- return template.innerHTML;
-};
 document.addEventListener('change',e=>{
  if(e.target.id==='inbox-order'){IB.order=e.target.value;try{localStorage.setItem('crownops-inbox-order',IB.order);}catch{}IB.offset=0;IB.lid=null;navigate('communications');}
  if(e.target.id==='inbox-scope'){IB.scope=e.target.value;IB.offset=0;IB.lid=null;navigate('communications');}

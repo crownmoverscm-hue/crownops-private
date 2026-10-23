@@ -1,10 +1,7 @@
 'use strict';
 function crownInquiryTable(rows){
- const labels=['Client','Latest inquiry','Move / service','Stage / follow-up','Sales owner / next action',''];
+ const labels=['Client','Latest contact','Move / service','Stage / follow-up','Sales owner / follow-up',''];
  return '<div class="table-wrap"><table><thead><tr>'+labels.map(label=>'<th>'+h(label)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(row=>'<tr>'+row.map((cell,i)=>'<td data-label="'+h(labels[i])+'">'+cell+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
-}
-function crownSalesPriorities(data){
- return '<div data-sales-priorities="'+h(data.suggestion_count||data.suggestions.length)+'">'+panel('Suggested next actions · '+h(data.date),'<p class="small muted">'+h(data.method)+'</p>'+(data.suggestions.length?data.suggestions.map(s=>'<div class="activity-row"><div class="grow"><strong>'+h(s.client_name)+'</strong><div>'+h(s.action)+'</div><p class="tiny muted">'+h(s.reason)+' · '+h(s.owner)+'</p></div><button class="btn-small" data-sales-open="'+h(s.lead_id)+'">Open client</button></div>').join(''):'<p class="small muted">No priority sales actions found.</p>')+(data.suggestion_count>12?'<p class="tiny muted">Showing 12 of '+h(data.suggestion_count)+' services needing attention. Use Follow-ups to review the full task list.</p>':''))+'</div><div class="spacer"></div>';
 }
 async function crownRequestDetails(lid){
  const state=await api('/leads/'+encodeURIComponent(lid)+'/detail-requests');const active=state.request;

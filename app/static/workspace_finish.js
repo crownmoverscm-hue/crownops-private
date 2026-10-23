@@ -4,11 +4,6 @@
  const phone=()=>matchMedia('(max-width:760px)').matches;
  const smallNavigation=()=>matchMedia('(max-width:1023px)').matches;
  const dirtyForms=new WeakSet();
- const hints={
-  owner:['Keep the company moving','Review the team’s open actions and today’s jobs. Resolve payment or readiness exceptions before dispatch.'],
-  manager:['Review the team, then your own services','Clear the action queue and check the crew and trucks. Use My Jobs in Schedule when you are leading a service.'],
-  sales:['Keep each inquiry moving forward','Claim the work you are handling, collect missing details and review the estimate. Record the next follow-up so the team can see what happens next.']
- };
  function finishTables(container){
   if(!container)return;
   container.querySelectorAll('table').forEach(table=>{
@@ -63,14 +58,14 @@
   const content=document.getElementById('content');if(S.page!=='sales'||!content)return;
   const search=content.querySelector('.filterbar:has(#crm-client-search)');
   if(search&&phone())content.querySelector('.page-head')?.after(search);
-  const items=[content.querySelector('.intake-status'),content.querySelector('[data-sales-priorities]')];
+  const items=[content.querySelector('.intake-status')];
   for(const item of items){
    if(!item)continue;
    const wrapper=item.parentElement;
    if(phone()&&!wrapper.matches('.finish-sales-details')){
     const details=document.createElement('details');details.className='finish-sales-details';
     const summary=document.createElement('summary');
-    summary.textContent=item.matches('.intake-status')?(item.querySelector('strong')?.textContent||'Inquiry import'):('Suggested next actions · '+item.dataset.salesPriorities);
+    summary.textContent=item.matches('.intake-status')?(item.querySelector('strong')?.textContent||'Inquiry import'):'Inquiry import';
     details.open=item.matches('.intake-status')&&/needs attention|paused/i.test(summary.textContent);
     item.before(details);details.append(summary,item);
    }else if(!phone()&&wrapper.matches('.finish-sales-details'))wrapper.replaceWith(item);
@@ -83,12 +78,6 @@
   if(S.user?.role==='crew'&&S.page==='invoices')content.querySelector('.page-head p').textContent='Prepare and follow invoices for your assigned services.';
   finishNavigation();finishTables(content);finishSales();finishConnection();
   for(const [selector,label] of [['[data-action=week-prev]','Previous week'],['[data-action=week-next]','Next week'],['[data-action=page-prev]','Previous page'],['[data-action=page-next]','Next page'],['[data-v5=off-prev]','Previous time-off period'],['[data-v5=off-next]','Next time-off period']])content.querySelectorAll(selector).forEach(button=>button.setAttribute('aria-label',label));
-  if(S.page==='dashboard'&&hints[S.user?.role]&&!content.querySelector('.finish-start')){
-   const [title,description]=hints[S.user.role],firstAction=content.querySelector('.attention-row [data-ux=attention]');
-   const box=document.createElement('section');box.className='finish-start';box.setAttribute('aria-label','Start here');
-   box.innerHTML='<div><strong>'+h(title)+'</strong><p>'+h(description)+'</p></div>'+(firstAction?'<button type="button" class="btn-primary" data-workspace-next>Review first action</button>':'');
-   content.querySelector('.page-head')?.insertAdjacentElement('afterend',box);
-  }
   if(S.page==='schedule'&&['crew','manager'].includes(S.user?.role)&&!content.querySelector('.finish-route-tip')){
    const text=S.user.role==='crew'?(S.jobScope==='mine'?'Open an assigned service for the crew brief, route, photos, materials and truck check.':'Use My Jobs to prepare your assigned services. All Jobs shows the wider company plan.'):(S.jobScope==='mine'?'These are your crew assignments. Your Manager access stays available while you lead the service.':'Use All Jobs to coordinate the team, or My Jobs to prepare the services you are working on.');
    const note=document.createElement('p');note.className='finish-route-tip';note.textContent=text;
@@ -122,8 +111,6 @@
  };
  document.addEventListener('click',event=>{
   if(event.target.closest('[data-workspace-close-menu]')){document.getElementById('sidebar')?.classList.remove('open');finishNavigation();document.querySelector('[data-action=menu]')?.focus();return;}
-  const next=event.target.closest('[data-workspace-next]');
-  if(next){event.preventDefault();document.querySelector('#content .attention-row [data-ux=attention]')?.click();return;}
   const menu=event.target.closest('[data-action=menu]'),sidebar=document.getElementById('sidebar');
   if(menu){queueMicrotask(()=>{finishNavigation();if(sidebar?.classList.contains('open'))(sidebar.querySelector('[aria-current=page]')||sidebar.querySelector('button'))?.focus();});return;}
   if(sidebar?.classList.contains('open')&&!event.target.closest('#sidebar')){sidebar.classList.remove('open');finishNavigation();}

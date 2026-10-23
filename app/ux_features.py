@@ -340,6 +340,7 @@ def register_ux_features(app,path,auth):
                 if _local_date(j['start_at'])==today:
                     ready=_job_readiness(db,j);j['readiness']=ready
                     j['crew_names']=[r['name'] for r in rows(db,"SELECT e.name FROM assignments a JOIN employees e ON e.id=a.resource_id WHERE a.job_id=? AND a.resource_type='employee' ORDER BY e.name",(j['id'],))]
+                    j['truck_names']=[r['name'] for r in rows(db,"SELECT v.name FROM assignments a JOIN vehicles v ON v.id=a.resource_id WHERE a.job_id=? AND a.resource_type='truck' ORDER BY v.name COLLATE NOCASE",(j['id'],))]
                     jobs.append(j)
                     if not ready['ready']:
                         add_item({'type':'job','id':j['id'],'title':j['title']+' needs attention','detail':', '.join(ready['missing']),'priority':'High'})

@@ -18,6 +18,8 @@ def qbo_work(path,kind,obj,rev,actor,action):
     """Reserve one write; failures of uncertain completion require human reconciliation."""
     key='qbo:'+kind+':'+obj+':'+str(rev)
     with transaction(path) as db:
+        if kind=='Estimate' and one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(obj,)):
+            raise HTTPException(409,'This estimate already uses QuickBooks delivery. Open that workflow instead.')
         old=one(db,'SELECT * FROM provider_operations WHERE id=?',(key,))
         if old:
             if old['status']=='Completed':return {**json.loads(old['result_json']),'duplicate':True}
@@ -46,6 +48,8 @@ def register_extensions(app,path,auth,public_url):
         if data.get('confirm') is not True:raise HTTPException(422,'Confirm draft-only export.')
         with closing(connect(path)) as db:
             q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
+            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):
+                raise HTTPException(409,'This estimate already uses the QuickBooks delivery flow. Open QuickBooks delivery to review it.')
             if not q or q['status'] not in ('Approved','Accepted'):raise HTTPException(409,'Approve this estimate before export.')
             l=one(db,'SELECT * FROM leads WHERE id=?',(q['lead_id'],))
             if l['notifications_suppressed'] or not quote_scope_current(db,q,l):raise HTTPException(409,'Activate and review the current client project first.')
@@ -123,8 +127,12 @@ def register_extensions(app,path,auth,public_url):
             lead=one(db,'SELECT email FROM leads WHERE id=(SELECT lead_id FROM jobs WHERE id=?)',(inv['job_id'],))
             terms=json.loads(inv['terms_json']);billing=str(terms.get('customer',{}).get('email') or lead['email']).strip().lower()
             recipients=list(dict.fromkeys([billing,lead['email'].lower()]))
-        return {'invoice_id':iid,'revision':inv['revision'],'version':inv['version'],'recipient':billing,'recipients':recipients,'message_id':record['id'] if record else None,'status':record['status'] if record else 'Not sent',
-                'sent_at':record['sent_at'] if record else None,'can_send':inv['status']=='Issued' and (not record or record['status'] in ('Draft','Cancelled'))}
+            native=one(db,'SELECT status,updated_at FROM provider_operations WHERE id=?',('qbo:InvoiceEmail:'+iid+':'+str(inv['revision']),))
+        return {'invoice_id':iid,'revision':inv['revision'],'version':inv['version'],'recipient':billing,'recipients':recipients,'message_id':record['id'] if record else None,
+                'status':('Sent' if native['status']=='Completed' else 'Sending' if native['status']=='Running' else 'Unknown') if native else record['status'] if record else 'Not sent',
+                'delivery_provider':'QuickBooks' if native else 'CrownOps',
+                'sent_at':native['updated_at'] if native and native['status']=='Completed' else record['sent_at'] if record else None,
+                'can_send':not native and inv['status']=='Issued' and (not record or record['status'] in ('Draft','Cancelled'))}
 
     @app.post('/api/invoices/{iid}/deliver')
     def deliver(iid:str,data:dict,u=Depends(auth)):
@@ -132,10 +140,13 @@ def register_extensions(app,path,auth,public_url):
         external_gate()
         from .invoice_payments import quickbooks_payment_state
         payment_state=quickbooks_payment_state(path,iid,user=u,reconcile=True,actor=u['id'])
+        if payment_state.get('provider_email_status')=='EmailSent':raise HTTPException(409,'QuickBooks already reports this invoice emailed. Check its delivery before sending another copy.')
         if payment_state['mapped'] and (payment_state['status'] in ('Review required','Unavailable') or payment_state['local_balance_cents']!=payment_state['remote_balance_cents']):raise HTTPException(409,payment_state['reason'] or 'Reconcile the current payment status before emailing this invoice.')
         payment=checked_quickbooks_link(path,iid,u) if data.get('include_quickbooks_payment') is True else None
         with transaction(path) as db:
             inv,calc=invoice_current(db,iid);j=invoice_job(db,inv['job_id'],u);l=one(db,'SELECT * FROM leads WHERE id=?',(j['lead_id'],))
+            if one(db,'SELECT id FROM provider_operations WHERE id=?',('qbo:InvoiceEmail:'+iid+':'+str(inv['revision']),)):
+                raise HTTPException(409,'This invoice uses QuickBooks delivery. Check its status before sending another email.')
             if inv['version']!=payment_state['version'] or inv['revision']!=payment_state['revision']:raise HTTPException(409,'Invoice or payments changed. Reload before emailing it.')
             if inv['status']!='Issued' or l['notifications_suppressed']:raise HTTPException(409,'A finalized invoice and an activated client email are required.')
             terms=json.loads(inv['terms_json']);billing=str(terms.get('customer',{}).get('email') or l['email']).strip().lower()

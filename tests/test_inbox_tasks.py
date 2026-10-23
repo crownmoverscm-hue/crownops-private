@@ -75,6 +75,30 @@ class InboxTaskTests(unittest.TestCase):
         log=self.sales.get('/api/inbox-calls?order=oldest').json()['items'][0]
         self.assertEqual(log['received_at'],'2026-10-20T11:59:00+00:00')
 
+    def test_today_activity_filters_before_pagination_and_keeps_unmatched_form_details(self):
+        with transaction(self.path) as db:
+            for n in range(35):
+                insert(db,'tasks',dict(id=f'internal-{n}',title='Check equipment',owner='sales2',due_date='2099-01-01',created_at='2099-01-01T12:00:00+00:00'))
+            insert(db,'integration_events',dict(id='test-form',event_key='gmail:test-form',event_type='gmail_quote',object_id='test-form',payload_json=dumps({'received_at':'2026-10-22T22:18:00-04:00','parsed':{'client_name':'TEST MUSE Alex','email':'test@example.invalid','phone':'5145550100','move_date':'2026-11-05'}}),status='Needs review',created_at=now()))
+            insert(db,'tasks',dict(id='unmatched-form',legacy_id='gmail-match:gmail:test-form',title='Match incoming quote form to the correct client service',created_at='2026-10-24T02:20:00+00:00'))
+        r=self.queue(activity_only=True,status='all')
+        self.assertEqual(r['total'],1)
+        t=r['items'][0]
+        self.assertEqual(t['id'],'unmatched-form');self.assertIsNone(t['lead_id'])
+        self.assertEqual(t['client_name'],'TEST MUSE Alex');self.assertEqual(t['move_date'],'2026-11-05')
+        self.assertEqual(t['received_at'],'2026-10-23T02:18:00+00:00');self.assertTrue(t['matching_required'])
+        self.assertEqual(self.get(t['id'])['client_name'],t['client_name'])
+        self.assertEqual(self.f.crew.get('/api/inbox-tasks?activity_only=true').status_code,403)
+
+    def test_mine_includes_old_and_future_unfinished_work_with_independent_scope_counts(self):
+        with transaction(self.path) as db:
+            for tid,owner,due,status in [('old','sales','2000-01-01','Open'),('future','sales','2099-01-01','Open'),('done','sales','2000-01-01','Done'),('other','sales2','2000-01-01','Open'),('free','','2099-01-01','Open')]:
+                insert(db,'tasks',dict(id=tid,title='Check equipment',owner=owner,due_date=due,status=status,created_at=now()))
+        mine=self.queue(scope='mine',status='open')
+        self.assertEqual({t['id'] for t in mine['items']},{'old','future'})
+        self.assertEqual(mine['scope_counts'],{'team':4,'mine':2,'unclaimed':1})
+        self.assertEqual(self.queue(scope='unclaimed',status='open')['total'],1)
+
     def test_answered_legacy_task_stays_visible_without_overdue_and_explicit_followup_survives(self):
         cid=self.call(lid=self.lid,status='Answered')
         with transaction(self.path) as db:

@@ -1,0 +1,53 @@
+'use strict';
+const {chromium}=require('playwright'),assert=require('node:assert/strict');
+(async()=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CROWNOPS_CHROMIUM_PATH||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
+ const errors=[];
+ for(const role of ['owner','manager','sales'])for(const width of [320,390,768,1440]){
+  const context=await browser.newContext({viewport:{width,height:900}}),base='http://127.0.0.1:8095';
+  await context.addCookies([{name:'crownops_session',value:role+'-token',url:base}]);
+  const page=await context.newPage();page.on('pageerror',e=>errors.push(role+'/'+width+': '+e.message));
+  let arrived=false;
+  const item=(id,channel,extra={})=>({id,channel,title:'Review '+id,client_name:'TEST '+id,received_at:'2026-10-23T02:18:00+00:00',created_at:'2026-10-24T02:20:00+00:00',move_date:'2026-11-05',status:'Open',bucket:'today',due_date:'2026-10-22',owner_id:'',owner_name:'',...extra});
+  const activity=[item('unmatched-form','forms',{matching_required:true}),item('email','emails',{received_at:'2026-10-23T02:00:00+00:00'}),item('answered','calls',{call_status:'Answered',status:'Done',bucket:'completed',received_at:'2026-10-22T23:00:00+00:00'})];
+  await page.route('**/api/ux/today?*',r=>r.fulfill({json:{date:'2026-10-22',view:'mine',attention:[],stats:{},jobs:[{id:'J1',title:'TEST service today',phase:'Moving',start_at:'2026-10-22T13:00:00+00:00',end_at:'2026-10-22T17:00:00+00:00',status:'Tentative',crew_names:[],truck_names:[]}]}}));
+  await page.route('**/api/inbox-tasks?*',r=>{
+   const u=new URL(r.request().url()),isActivity=u.searchParams.get('activity_only')==='true',scope=u.searchParams.get('scope');
+   let rows=isActivity?[...(arrived?[item('just-arrived','forms')]:[]),...activity]:[item('old-task','tasks',{owner_id:role,owner_name:role,bucket:'overdue',due_date:'2000-01-01'}),item('future-task','tasks',{owner_id:role,owner_name:role,bucket:'upcoming',due_date:'2099-01-01'})];
+   if(!isActivity&&scope==='unclaimed')rows=[item('unclaimed-task','tasks')];
+   if(isActivity&&u.searchParams.get('order')==='oldest')rows.reverse();
+   return r.fulfill({json:{items:rows,total:rows.length,scope_counts:{mine:2,unclaimed:1,team:3},summary:{open:2,today:1,overdue:1,upcoming:1},counts:{}}});
+  });
+  await page.goto(base);await page.locator('.today-workspace').waitFor();
+  assert.equal(await page.locator('#content h1').innerText(),'Thursday, October 22, 2026');
+  const groups=await page.locator('#content section.panel h2').allTextContents();
+  assert.deepEqual(groups,['Jobs scheduled today · 1','Latest calls, forms & emails','Unfinished tasks']);
+  assert(await page.getByText('TEST service today',{exact:true}).isVisible());
+  assert(await page.getByText('Crew to assign · Truck to assign',{exact:true}).isVisible());
+  assert.equal(await page.locator('.today-activity').first().getAttribute('data-activity-id'),'unmatched-form');
+  assert((await page.locator('.today-activity').first().innerText()).includes('Client match needs review'));
+  assert((await page.locator('.today-activity').first().innerText()).includes('10:18 PM ET'));
+  assert.equal(await page.locator('[data-activity-id="answered"] .inbox-tone-overdue').count(),0);
+  await page.locator('[data-ux="today-view"][data-value="mine"]').click();
+  await page.locator('.today-task-list [data-task-id="old-task"]').waitFor();
+  assert.equal(await page.locator('.today-task-list [data-task-id="future-task"]').count(),1);
+  assert.equal(await page.locator('.today-activity').first().getAttribute('data-activity-id'),'unmatched-form','Mine must not hide an unclaimed arrival');
+  await page.locator('#today-order').selectOption('oldest');await page.locator('[data-activity-id="answered"]').first().waitFor();
+  await page.waitForFunction(()=>document.querySelector('.today-activity')?.dataset.activityId==='answered');
+  await page.locator('#today-order').selectOption('newest');await page.waitForFunction(()=>document.querySelector('.today-activity')?.dataset.activityId==='unmatched-form');
+  await page.locator('#content h1').click();arrived=true;
+  await page.evaluate(()=>todayRefreshPanels());await page.locator('[data-activity-id="just-arrived"]').waitFor();
+  assert.equal(await page.locator('body').evaluate(x=>x.scrollWidth<=innerWidth+1),true,'Today overflow '+role+'/'+width);
+  assert.equal(await page.locator('.finish-start').count(),0);
+  const pages=await page.locator('#sidebar .nav-button').evaluateAll(xs=>xs.map(x=>x.dataset.page));
+  assert(pages.indexOf('communications')<pages.indexOf('sales'));
+  await page.evaluate(()=>navigate('sales'));await page.getByRole('heading',{name:'Clients',exact:true}).waitFor();
+  assert.equal(await page.locator('[data-sales-priorities]').count(),0);
+  assert.equal(await page.getByRole('heading',{name:'Inquiry inbox',exact:true}).count(),0);
+  assert.equal(await page.getByRole('heading',{name:'Client database',exact:true}).count(),1);
+  assert.equal(await page.locator('body').evaluate(x=>x.scrollWidth<=innerWidth+1),true,'Clients overflow '+role+'/'+width);
+  await context.close();
+ }
+ await browser.close();assert.deepEqual(errors,[]);
+ console.log('PASS: Today shows dated jobs, received-time activity including unmatched forms, Mine old/upcoming tasks, refreshed arrivals, Inbox-first navigation and Clients database at four widths for three roles.');
+})().catch(e=>{console.error(e);process.exit(1);});

@@ -17,7 +17,7 @@
  function metric(label,value,detail){return `<div class="doc-metric"><strong>${value}</strong><span>${h(label)}</span><small>${h(detail||'')}</small></div>`;}
  function menuButton(kind,d){return `<button type="button" class="doc-more" data-doc-menu="${kind}" data-id="${h(d.id)}" aria-label="Actions for ${h(kind==='quotes'?d.client_name+' revision '+d.revision:d.number)}" aria-haspopup="menu" aria-expanded="false">⋯</button>`;}
  function rowActions(kind,d){return `<div class="doc-row-actions"><button class="btn-small" data-doc-action="open" data-kind="${kind}" data-id="${h(d.id)}">Open</button>${menuButton(kind,d)}</div>`;}
- function delivery(d){return `<div class="doc-delivery">${h(d.email_status==='Sent'?'Email sent':d.email_status==='Not sent'?'Email not sent':'Email: '+d.email_status)}${d.sent_at?'<span>'+showDay(d.sent_at)+'</span>':''}</div>`;}
+ function delivery(d){return `<div class="doc-delivery">${h(d.email_status==='Sent'?(d.delivery_provider==='QuickBooks'?'Sent through QuickBooks':'Email sent'):d.email_status==='Not sent'?'Email not sent':'Email: '+d.email_status)}${d.sent_at?'<span>'+showDay(d.sent_at)+'</span>':''}${d.delivery_error?'<span class="pill orange">Review needed</span>':''}</div>`;}
  async function render(kind){
   closeMenu(false);
   records[kind]=await api(kind==='quotes'?'/documents/quotes':'/invoices');
@@ -25,7 +25,7 @@
   if(kind==='quotes'&&!s.history){const latest=new Map();for(const q of all){if(!latest.has(q.lead_id)||latest.get(q.lead_id).revision<q.revision)latest.set(q.lead_id,q);}all=[...latest.values()];}
   const period=all.filter(d=>inPeriod(d,kind)),count=key=>period.filter(d=>d.display_state===key).length;
   const q=kind==='quotes';
-  const statuses=q?['Draft','Ready','Sent','Accepted','Invoiced','Expired']:['Draft','Correction draft','Balance due','Partial','Overdue','Paid'];
+  const statuses=q?['Draft','Ready','Sent','Accepted','Declined','Invoiced','Expired']:['Draft','Correction draft','Balance due','Partial','Overdue','Paid'];
   const search=s.search.trim().toLowerCase();
   visible=period.filter(d=>(s.status==='all'||(s.status==='Viewed'?d.opens>0:s.status==='Overdue'?d.overdue:d.display_state===s.status))&&(!search||[d.id,d.number,d.client_name,d.email,d.inputs?.quote_title,d.inputs?.move_date,d.inputs?.pickup,d.inputs?.dropoff,d.service_date,d.due_date,d.display_state].join(' ').toLowerCase().includes(search)));
   visible.sort((a,b)=>s.sort==='customer'?String(a.client_name).localeCompare(String(b.client_name)):s.sort==='amount'?Number(q?b.result?.high_cents:b.billing_total_cents)-Number(q?a.result?.high_cents:a.billing_total_cents):String((s.sort==='service'?a.inputs?.move_date||a.service_date:a.created_at)||'').localeCompare(String((s.sort==='service'?b.inputs?.move_date||b.service_date:b.created_at)||''))*(s.sort==='newest'?-1:1));
@@ -63,6 +63,7 @@
   if(q){
    if(office())actions.push(['edit',d.status==='Draft'?'Edit draft':'Create revised quote'],['duplicate','Duplicate as new revision']);
    if(office()&&['Draft','Approved'].includes(d.status)&&d.email_status!=='Sent')actions.push(['send','Review & send estimate']);
+   if(office()&&['Draft','Approved','Accepted'].includes(d.status))actions.push(['quickbooks','QuickBooks delivery / acceptance']);
    if(office()&&['Approved','Accepted'].includes(d.status)&&d.display_state!=='Expired')actions.push(['share','Share private client link']);
    if(d.invoices?.length)actions.push(['invoice','Open linked invoice']);
    else if(office()&&d.status==='Accepted')actions.push(['prepare','Prepare job invoice']);
@@ -90,6 +91,7 @@
   if(a==='job')return openJob(d.job_id);
   if(a==='collect')return collectionPanel(id);
   if(kind==='quotes'){
+   if(a==='quickbooks')return openQuickBooksEstimate(id);
    if(a==='edit'||a==='duplicate'){const detail=await api('/crm/quotes/'+encodeURIComponent(id));await crmQuoteBuilder(detail.lead.id,{seed:detail.quote.inputs,result:detail.quote.result,templateKey:detail.quote.inputs.template_key,editorView:'document'});if(a==='duplicate')toast('Review the copied details. Saving creates a new draft revision for this client.');return;}
    if(a==='invoice')return openInvoice(d.invoices[0].id);
    if(a==='prepare'){

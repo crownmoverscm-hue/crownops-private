@@ -23,11 +23,13 @@ def invoice_tracking(db, inv, calculation):
     overdue = bool(issued and balance > 0 and due and due < business_day())
     state = ('Correction draft' if issued else 'Draft') if inv['status'] == 'Draft' else 'Paid' if balance == 0 else 'Overdue' if overdue else 'Partial' if credits > 0 else 'Balance due'
     message = one(db, "SELECT status,sent_at FROM outbound_messages WHERE event_key IN (?,?) ORDER BY CASE WHEN status='Sent' THEN 0 ELSE 1 END,created_at DESC LIMIT 1", ('invoice-delivery:'+inv['id']+':'+str(inv['revision']), 'invoice-mail:'+inv['id']+':'+str(inv['revision'])))
+    native=one(db,'SELECT status,updated_at FROM provider_operations WHERE id=?',('qbo:InvoiceEmail:'+inv['id']+':'+str(inv['revision']),))
+    if native:message={'status':'Sent' if native['status']=='Completed' else 'Sending' if native['status']=='Running' else 'Unknown','sent_at':native['updated_at'] if native['status']=='Completed' else None}
     return dict(created_at=inv['created_at'], issued_at=saved['issued_at'] if saved else None,
                 due_date=due, display_state=state, overdue=overdue, has_issued_revision=issued,
                 billing_total_cents=total, verified_paid_cents=credits if issued else 0,
                 outstanding_cents=balance if issued else 0,
-                email_status=message['status'] if message else 'Not sent', sent_at=message['sent_at'] if message else None)
+                delivery_provider='QuickBooks' if native else 'CrownOps',email_status=message['status'] if message else 'Not sent', sent_at=message['sent_at'] if message else None)
 
 
 def print_controls(html):
@@ -74,6 +76,7 @@ def register_document_browser(app,path,auth,public_url):
         from .quote_options import expired_quote
         with closing(connect(path)) as db:
             messages={m['event_key']:m for m in rows(db,"SELECT event_key,status,sent_at FROM outbound_messages WHERE event_key LIKE 'quote-delivery:%'")}
+            qbo_deliveries={d['quote_id']:d for d in rows(db,'SELECT quote_id,state,sent_at,error FROM qbo_estimate_deliveries')}
             views={v['quote_id']:v for v in rows(db,'SELECT quote_id,count(*) opens,max(viewed_at) last_viewed_at FROM quote_views GROUP BY quote_id')}
             invoices={}
             for i in rows(db,'SELECT j.quote_id,i.id,i.number,i.status,EXISTS(SELECT 1 FROM invoice_revisions r WHERE r.invoice_id=i.id) has_issued FROM job_invoices i JOIN jobs j ON j.id=i.job_id ORDER BY i.created_at'):
@@ -81,9 +84,13 @@ def register_document_browser(app,path,auth,public_url):
             result=[]
             for raw in rows(db,'SELECT q.*,l.client_name,l.email FROM quotes q JOIN leads l ON l.id=q.lead_id ORDER BY q.created_at DESC,q.revision DESC'):
                 q=payload(raw);m=messages.get('quote-delivery:'+q['id']+':'+str(q['revision']),{});v=views.get(q['id'],{})
+                qbo=qbo_deliveries.get(q['id'])
+                if qbo:m={'status':'Sent' if qbo['sent_at'] else qbo['state'],'sent_at':qbo['sent_at']}
                 linked=invoices.get(q['id'],[])
                 issued=any(i['has_issued'] for i in linked)
                 state='Invoiced' if issued else 'Accepted' if q['status']=='Accepted' else 'Expired' if q['status']=='Approved' and expired_quote(raw) else 'Sent' if q['status']=='Approved' and m.get('status')=='Sent' else 'Ready' if q['status']=='Approved' else q['status']
+                if qbo and qbo['state']=='Rejected' and not issued and q['status']!='Accepted':state='Declined'
+                q.update(delivery_provider='QuickBooks' if qbo else 'CrownOps',delivery_error=qbo['error'] if qbo else '')
                 q.update(display_state=state, email_status=m.get('status','Not sent'), sent_at=m.get('sent_at'), opens=v.get('opens',0),last_viewed_at=v.get('last_viewed_at'),invoices=linked)
                 result.append(q)
         return result

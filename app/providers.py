@@ -99,6 +99,28 @@ def qbo_read(path,resource,params=None):
 def qbo_query(path,statement):
     return qbo_read(path,'query',{'query':statement}).get('QueryResponse',{})
 
+def qbo_send_estimate(path,estimate_id,recipient):
+    """Intuit's explicit email endpoint; never automatically retry this operation."""
+    quickbooks_gate()
+    if not str(estimate_id).isdigit():raise ValueError('Invalid QuickBooks estimate ID.')
+    t,realm,host=_qbo_connection(path)
+    response=requests.post(host+'/v3/company/'+realm+'/estimate/'+str(estimate_id)+'/send',
+        params={'minorversion':os.getenv('QBO_MINOR_VERSION','75'),'sendTo':recipient},data=b'',
+        headers={'Authorization':'Bearer '+t['access_token'],'Accept':'application/json','Content-Type':'application/octet-stream'},timeout=30)
+    if not response.ok:raise RuntimeError('QuickBooks did not confirm estimate email sending.')
+    return response.json()
+
+def qbo_send_invoice(path,invoice_id,recipient):
+    """Send through Intuit once; delivery uncertainty is handled by the caller."""
+    quickbooks_gate()
+    if not str(invoice_id).isdigit():raise ValueError('Invalid QuickBooks invoice ID.')
+    t,realm,host=_qbo_connection(path)
+    response=requests.post(host+'/v3/company/'+realm+'/invoice/'+str(invoice_id)+'/send',
+        params={'minorversion':os.getenv('QBO_MINOR_VERSION','75'),'sendTo':recipient},data=b'',
+        headers={'Authorization':'Bearer '+t['access_token'],'Accept':'application/json','Content-Type':'application/octet-stream'},timeout=30)
+    if not response.ok:raise RuntimeError('QuickBooks did not confirm invoice email sending.')
+    return response.json()
+
 def qbo_mapping(path,key):
     env_key={'service_item_id':'QBO_SERVICE_ITEM_ID','tax_code_id':'QBO_TAX_CODE_ID','discount_account_id':'QBO_DISCOUNT_ACCOUNT_ID','deposit_account_id':'QBO_DEPOSIT_ACCOUNT_ID'}[key]
     mapping_key='quickbooks_mappings_'+quickbooks_environment()
@@ -130,9 +152,16 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
     if discount:
         if not discount_account:raise ValueError('Configure the reviewed QuickBooks discount account ID.')
         lines.append({'DetailType':'DiscountLineDetail','Amount':discount/100,'DiscountLineDetail':{'PercentBased':False,'DiscountAccountRef':{'value':discount_account}}})
-    return {'CustomerRef':{'value':customer_id},'CurrencyRef':{'value':'CAD'},'GlobalTaxCalculation':'TaxExcluded','Line':lines,
+    fr=str(doc.get('language','')).lower().startswith('fr')
+    memo=(f"Bonjour {t['customer'].get('name','')}, merci d’avoir choisi Crown Movers! Voici votre facture pour le service du {doc['service_date']}. Si vous avez déjà payé, ne payez pas une deuxième fois. Une question? 514-606-4030." if fr else
+          f"Hi {t['customer'].get('name','')}, thank you for choosing Crown Movers! Here is your invoice for service on {doc['service_date']}. If you have already paid, please do not pay again. Questions? 514-606-4030.")
+    if t.get('payment_terms'):memo+='\n'+t['payment_terms']
+    if len(memo)>1000:raise ValueError('Shorten the invoice payment terms before exporting to QuickBooks; no terms were truncated.')
+    payload={'CustomerRef':{'value':customer_id},'CurrencyRef':{'value':'CAD'},'GlobalTaxCalculation':'TaxExcluded','Line':lines,
        'BillEmail':{'Address':t['customer'].get('email','')},'TxnDate':doc['service_date'],'PrivateNote':'CrownOps '+doc['id']+' revision '+str(doc['revision']),
-       'CustomerMemo':{'value':t.get('approval_reference','')[:1000]},'ApplyTaxAfterDiscount':True}
+       'CustomerMemo':{'value':memo},'ApplyTaxAfterDiscount':True,'EmailStatus':'NotSet'}
+    if t.get('due_date'):payload['DueDate']=t['due_date']
+    return payload
 
 def send_gmail(path,message):
     t=provider_token(path,'gmail')
@@ -186,6 +215,7 @@ def process_mail(path,mid):
         if len(marker)!=3 or marker[0] not in ('invoice-delivery','invoice-mail'):raise HTTPException(409,'Prepare the current invoice email before sending.')
         from .invoice_payments import quickbooks_payment_state
         invoice_check=quickbooks_payment_state(path,marker[1],reconcile=True,actor=preview['approved_by'])
+        if invoice_check.get('provider_email_status')=='EmailSent':raise HTTPException(409,'QuickBooks already reports this invoice emailed. Review its delivery before sending another copy.')
         if invoice_check['mapped'] and (invoice_check['status'] in ('Review required','Unavailable') or invoice_check['local_balance_cents']!=invoice_check['remote_balance_cents']):
             raise HTTPException(409,invoice_check['reason'] or 'Reconcile the current payment status before sending this invoice.')
     if preview and preview['status']=='Approved' and preview['category']=='Collection':
@@ -204,6 +234,8 @@ def process_mail(path,mid):
         recipients={l['email'].strip().lower()}
         if m['category']=='Invoice':
             marker=(m.get('event_key') or '').split(':')
+            if len(marker)==3 and one(db,'SELECT id FROM provider_operations WHERE id=?',('qbo:InvoiceEmail:'+marker[1]+':'+marker[2],)):
+                raise HTTPException(409,'This invoice uses QuickBooks email delivery. Check its delivery status before another send.')
             if len(marker)!=3 or marker[0] not in ('invoice-delivery','invoice-mail'):raise HTTPException(409,'Prepare the current issued invoice email before sending.')
             inv=one(db,'SELECT i.* FROM job_invoices i JOIN jobs j ON j.id=i.job_id WHERE i.id=? AND j.lead_id=?',(marker[1],l['id']))
             if not inv or inv['status']!='Issued' or str(inv['revision'])!=marker[2]:raise HTTPException(409,'Invoice changed. Prepare the current issued invoice email.')
@@ -225,6 +257,8 @@ def process_mail(path,mid):
         if m['recipient'].strip().lower() not in recipients:raise HTTPException(409,'Client or approved billing email changed. Prepare a new message.')
         if m['event_key'].startswith('quote-delivery:'):
             _,qid,revision=m['event_key'].split(':')
+            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):
+                raise HTTPException(409,'This estimate uses QuickBooks delivery. Review its status before sending another email.')
             q=one(db,'SELECT * FROM quotes WHERE id=? AND lead_id=?',(qid,l['id']))
             from .client_communications import quote_scope_current,pending_scope_changes
             if not q or q['status'] not in ('Approved','Accepted') or q['revision']!=int(revision) or not quote_scope_current(db,q,l) or pending_scope_changes(db,l['id']):
@@ -283,8 +317,9 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             health={key:settings(db,'connection_health_'+key,{}) or {} for key in PROVIDERS}
         reviewed_matches=bool(reviewed and reviewed.get('policy')=='quebec-normal-move-v1' and all(str(reviewed.get(k,'')).strip()==str(mappings.get(k,'')).strip() for k in ('service_item_id','tax_code_id','deposit_account_id')))
         mappings_complete=bool(reviewed_matches and mappings['service_item_id'] and mappings['tax_code_id'] and mappings['deposit_account_id'])
+        from .quickbooks_status import account_status
         return {'external_actions_enabled':live_enabled(),'gmail':{'authorized_at':connected.get('gmail'),'configured':bool(os.getenv('GOOGLE_CLIENT_ID'))},
-          'quickbooks':{'authorized_at':connected.get('quickbooks'),'configured':bool(os.getenv('QBO_CLIENT_ID')),'environment':env,'writes_enabled':quickbooks_write_enabled(),'mappings_complete':mappings_complete},
+          'quickbooks':{'authorized_at':connected.get('quickbooks'),**account_status(path,mappings_complete)},
           'square':square_connection_status(),
           'ai':{'configured':bool(os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_MODEL'))},
           'intake':{'configured':len(os.getenv('CROWNOPS_WEBHOOK_SECRET',''))>=32},'scanner':{'configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND'))},
@@ -368,9 +403,19 @@ def register_providers(app,path,auth,public_url,new_lead=None):
 
     @app.get('/api/quickbooks/test-connection')
     def quickbooks_test_connection(u=Depends(auth)):
-        require_role(u,MANAGERS);_,realm,_=_qbo_connection(path)
-        info=qbo_read(path,'companyinfo/'+realm).get('CompanyInfo',{})
-        return {'ok':True,'environment':quickbooks_environment(),'realm_id':realm,'company_name':info.get('CompanyName') or info.get('LegalName') or '','writes_enabled':quickbooks_write_enabled()}
+        require_role(u,OFFICE);env=quickbooks_environment();realm=''
+        try:
+            _,realm,_=_qbo_connection(path)
+            info=qbo_read(path,'companyinfo/'+realm).get('CompanyInfo',{})
+            if not info.get('Id') or not (info.get('CompanyName') or info.get('LegalName')):
+                raise ValueError('Company identity was not confirmed.')
+            result={'ok':True,'environment':env,'realm_id':realm,'company_name':info.get('CompanyName') or info.get('LegalName'),
+                    'writes_enabled':quickbooks_write_enabled(),'checked_at':now(),'message':'Company account read successfully. No email, invoice or payment was created.'}
+        except Exception:
+            result={'ok':False,'environment':env,'realm_id':realm,'company_name':'','checked_at':now(),
+                    'message':'QuickBooks could not confirm the company account. Check the connection; saved authorization has been retained.'}
+        with transaction(path) as db:put_setting(db,'quickbooks_account_check_'+env,result)
+        return result
 
     @app.get('/api/gmail/review')
     def gmail_review(u=Depends(auth)):
@@ -507,6 +552,11 @@ def register_providers(app,path,auth,public_url,new_lead=None):
     def sync_invoice(iid:str,data:dict,u=Depends(auth)):
         require_role(u,{'owner','manager','accounting'});quickbooks_gate()
         if data.get('confirmed',data.get('confirm')) is not True:raise HTTPException(422,'Confirm the accounting write after reviewing mappings and totals.')
+        # Capture company scope from the saved grant without an extra provider
+        # request or a network call under the invoice writer lock.
+        with closing(connect(path)) as db:
+            grant=one(db,"SELECT ciphertext FROM oauth_credentials WHERE provider='quickbooks'")
+        export_realm=str(decrypt(grant['ciphertext']).get('realm_id') or '') if grant else ''
         with transaction(path) as db:
             inv,calc=invoice_current(db,iid)
             if inv['status']!='Issued':raise HTTPException(409,'Finalize the current invoice revision first.')
@@ -520,14 +570,27 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             db.execute('DELETE FROM provider_operations WHERE id=?',(key,));insert(db,'provider_operations',dict(id=key,provider='quickbooks',object_id=iid,kind='Invoice',status='Running',created_at=now(),updated_at=now()))
         try:
             cust=qbo_customer(path,l);payload=qbo_invoice_payload(doc,cust,qbo_mapping(path,'service_item_id'),qbo_mapping(path,'tax_code_id'),qbo_mapping(path,'discount_account_id'))
+            if not old and j.get('quote_id'):
+                with closing(connect(path)) as db:
+                    estimate=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(j['quote_id'],))
+                if estimate:
+                    if estimate['environment']!=quickbooks_environment() or estimate['realm_id']!=export_realm:
+                        raise ValueError('The accepted estimate belongs to a different QuickBooks company. Reconcile before invoicing.')
+                    remote_estimate=qbo_read(path,'estimate/'+estimate['external_id'])['Estimate']
+                    from .estimate_delivery import validate_remote
+                    validate_remote(estimate,remote_estimate)
+                    if remote_estimate.get('TxnStatus')!='Accepted' or str(remote_estimate.get('CustomerRef',{}).get('value'))!=str(cust):
+                        raise ValueError('The linked QuickBooks estimate must be accepted for the same customer before invoicing.')
+                    payload['LinkedTxn']=[{'TxnId':estimate['external_id'],'TxnType':'Estimate'}]
             if old:
                 existing=qbo_call(path,'GET','invoice/'+quote(old['external_id']))['Invoice']
                 if existing['SyncToken']!=old['sync_token']:raise ValueError('QuickBooks was edited externally. Reconcile before overwriting.')
                 payload.update(Id=old['external_id'],SyncToken=old['sync_token'],sparse=False)
+                if existing.get('LinkedTxn'):payload['LinkedTxn']=existing['LinkedTxn']
             r=qbo_call(path,'POST','invoice',payload,key)['Invoice'];remote=cents(r['TotalAmt'])
             with transaction(path) as db:
                 insert(db,'external_records',dict(provider='quickbooks',kind='Invoice',object_id=iid,revision=inv['revision'],external_id=r['Id'],sync_token=r['SyncToken'],amount_cents=remote,updated_at=now()))
-                db.execute('UPDATE provider_operations SET status=?,result_json=?,updated_at=? WHERE id=?',('Completed' if remote==calc['total_cents'] else 'Mismatch',dumps({'external_id':r['Id'],'remote_total_cents':remote,'expected_total_cents':calc['total_cents']}),now(),key))
+                db.execute('UPDATE provider_operations SET status=?,result_json=?,updated_at=? WHERE id=?',('Completed' if remote==calc['total_cents'] else 'Mismatch',dumps({'external_id':r['Id'],'remote_total_cents':remote,'expected_total_cents':calc['total_cents'],'environment':quickbooks_environment(),'realm_id':export_realm}),now(),key))
                 audit(db,u['id'],'Invoice accounting export','job_invoices',iid,{'external_id':r['Id'],'amount_matches':remote==calc['total_cents']})
             return {'external_id':r['Id'],'amount_matches':remote==calc['total_cents'],'sent':False}
         except Exception as e:
