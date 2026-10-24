@@ -1405,7 +1405,7 @@ def create_app(database_path=None):
             if db.execute('SELECT count(*) FROM ai_runs WHERE user_id=? AND created_at>?',(u['id'],since)).fetchone()[0]>=4:
                 raise HTTPException(429,'Limit: four AI requests per minute per user.')
             # Conservative reservation uses bytes rather than an understated word estimate.
-            reserve=len(dumps({'text':body,'context':context,'quote':approved}).encode())+len(ai.SYSTEM.encode())+len(dumps(ai.SCHEMA).encode())+6000
+            reserve=len(json.dumps({'language':language,'client_text':body,'known_facts':context,'approved_quote':approved},ensure_ascii=True).encode())+len(ai.SYSTEM.encode())+len(json.dumps(ai.SCHEMA,ensure_ascii=True).encode())+6000
             used=db.execute("SELECT coalesce(sum(CASE WHEN status='Completed' THEN input_tokens+output_tokens ELSE reserved_tokens END),0) FROM ai_runs WHERE substr(created_at,1,7)=?",(month,)).fetchone()[0]
             if used+reserve>int(os.environ.get('AI_MONTHLY_TOKEN_LIMIT','250000')):
                 raise HTTPException(429,'Monthly AI token budget reached or reserved. An owner must review usage before increasing it.')

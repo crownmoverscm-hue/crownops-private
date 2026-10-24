@@ -30,6 +30,14 @@ class AIControlsTests(unittest.TestCase):
   with patch('app.ai.invoke',side_effect=TimeoutError):self.assertEqual(self.client.post('/api/ai/analyze',json=self.data()).status_code,502)
  def test_sales_status_does_not_expose_owner_spending(self):
   r=self.client.get('/api/ai/status');self.assertEqual(r.status_code,200);self.assertIsNone(r.json()['monthly_reserved_usd_cents']);self.assertIsNone(r.json()['budget_usd_cents'])
+ def test_unicode_input_reserves_the_actual_serialized_payload(self):
+  d=self.data();d['text']='é漢'*100
+  with patch('app.ai.invoke',return_value=(self.result(),{'input_tokens':10,'output_tokens':10})):
+   self.assertEqual(self.client.post('/api/ai/analyze',json=d).status_code,200)
+  with connect(self.f.path) as db:
+   reservation=db.execute('SELECT reserved_tokens FROM ai_runs').fetchone()[0]
+  actual=len(json.dumps({'language':'English','client_text':d['text'],'known_facts':{},'approved_quote':None},ensure_ascii=True).encode())+len(ai.SYSTEM.encode())+len(json.dumps(ai.SCHEMA,ensure_ascii=True).encode())+6000
+  self.assertGreaterEqual(reservation,actual)
  def test_crew_cannot_use_office_analyzer(self):
   c=TestClient(self.f.app);self.addCleanup(c.close);c.cookies.set('crownops_session','crew-token');c.headers['x-csrf-token']='crew-csrf'
   self.assertEqual(c.post('/api/ai/analyze',json=self.data()).status_code,403)
