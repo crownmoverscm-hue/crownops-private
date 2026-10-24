@@ -16,6 +16,18 @@ class AIControlsTests(unittest.TestCase):
  def test_default_off_blocks_provider(self):
   with patch.dict(os.environ,{'CROWNOPS_AI_ASSIST_ENABLED':'0'}),patch('app.ai.invoke') as provider:
    self.assertEqual(self.client.post('/api/ai/analyze',json=self.data()).status_code,503);provider.assert_not_called()
+ def test_isolated_staging_ai_permission_keeps_general_external_gate_closed(self):
+  with patch.dict(os.environ,{'CROWNOPS_ENV':'staging','CROWNOPS_AI_STAGING_TEST_ENABLED':'1','CROWNOPS_ALLOW_EXTERNAL':'0'}),patch('app.ai.invoke',return_value=(self.result(),{'input_tokens':10,'output_tokens':10})):
+   self.assertEqual(self.client.post('/api/ai/analyze',json=self.data()).status_code,200)
+   from app.platform_common import external_gate
+   from fastapi import HTTPException
+   with self.assertRaises(HTTPException):external_gate()
+ def test_staging_permission_cannot_bypass_production_external_gate(self):
+  with patch.dict(os.environ,{'CROWNOPS_ENV':'production','CROWNOPS_AI_STAGING_TEST_ENABLED':'1','CROWNOPS_ALLOW_EXTERNAL':'0'}),patch('app.ai.invoke') as provider:
+   self.assertEqual(self.client.post('/api/ai/analyze',json=self.data()).status_code,503);provider.assert_not_called()
+ def test_general_external_gate_still_blocks_without_staging_permission(self):
+  with patch.dict(os.environ,{'CROWNOPS_ENV':'staging','CROWNOPS_AI_STAGING_TEST_ENABLED':'0','CROWNOPS_ALLOW_EXTERNAL':'0'}),patch('app.ai.invoke') as provider:
+   self.assertEqual(self.client.post('/api/ai/analyze',json=self.data()).status_code,503);provider.assert_not_called()
  def test_missing_cost_policy_blocks(self):
   with patch.dict(os.environ,{'AI_MAX_USD_PER_MILLION_TOKENS':''}),patch('app.ai.invoke') as provider:
    self.assertEqual(self.client.post('/api/ai/analyze',json=self.data()).status_code,503);provider.assert_not_called()

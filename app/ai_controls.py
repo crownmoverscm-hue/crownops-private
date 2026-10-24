@@ -27,3 +27,9 @@ def reserve_cost(db,month,tokens,ceiling,budget):
     spent=db.execute('SELECT COALESCE(SUM(reserved_cost_cents),0) FROM ai_runs WHERE substr(created_at,1,7)=?',(month,)).fetchone()[0]
     if spent+cost>budget:raise HTTPException(429,'Monthly AI spending budget is fully reserved. No provider request was made.')
     return cost
+
+
+def staging_ai_test_enabled():
+    """Permit only the staff draft endpoint in an explicitly isolated staging install."""
+    return (os.getenv('CROWNOPS_ENV') == 'staging'
+            and os.getenv('CROWNOPS_AI_STAGING_TEST_ENABLED') == '1')

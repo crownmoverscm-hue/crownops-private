@@ -1352,6 +1352,7 @@ def create_app(database_path=None):
     @app.get('/api/ai/status')
     def ai_status(u=Depends(auth)):
         require(u,QUOTERS)
+        from .ai_controls import staging_ai_test_enabled
         with closing(connect(path)) as db:
             columns={r['name'] for r in db.execute('PRAGMA table_info(ai_runs)')}
             reserved=db.execute("SELECT COALESCE(SUM(reserved_cost_cents),0) FROM ai_runs WHERE substr(created_at,1,7)=?",(now()[:7],)).fetchone()[0] if 'reserved_cost_cents' in columns else 0
@@ -1360,6 +1361,7 @@ def create_app(database_path=None):
             'model':os.getenv('OPENAI_MODEL',''), 'mode':'Staff draft only',
             'pricing_context_enabled':os.getenv('CROWNOPS_AI_APPROVED_PRICING')=='1',
             'automatic_actions':False,
+            'provider_requests_allowed':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1' or staging_ai_test_enabled(),
             'monthly_reserved_usd_cents':reserved if u['role']=='owner' else None,
             'budget_usd_cents':os.getenv('AI_MONTHLY_BUDGET_USD_CENTS') if u['role']=='owner' else None}
 
@@ -1369,7 +1371,9 @@ def create_app(database_path=None):
         from .platform_common import external_gate
         if os.getenv('CROWNOPS_AI_ASSIST_ENABLED')!='1':
             raise HTTPException(503,'AI staff assistance is paused. No provider request was made.')
-        external_gate()
+        from .ai_controls import staging_ai_test_enabled
+        if not staging_ai_test_enabled():
+            external_gate()
         if not os.environ.get('OPENAI_API_KEY') or not os.environ.get('OPENAI_MODEL'):
             raise HTTPException(503,'AI is not connected in this pilot. Add OPENAI_API_KEY and OPENAI_MODEL on the server. No tokens were used.')
         body=bounded(data.get('text',''),'Client message',14000)
