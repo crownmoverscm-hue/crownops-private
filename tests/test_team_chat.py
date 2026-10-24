@@ -5,6 +5,8 @@ import test_template_quotes as fixture
 
 class TeamChatTests(unittest.TestCase):
  def setUp(self):
+  from unittest.mock import patch
+  self.flags=patch.dict('os.environ',{'CROWNOPS_TEAM_CHAT_MODE':'all'});self.flags.start();self.addCleanup(self.flags.stop)
   self.f=fixture.TemplateQuoteTests();self.f.setUp();self.addCleanup(self.f.doCleanups);self.sales=self.f.client
   self.crew=TestClient(self.f.app);self.addCleanup(self.crew.close);self.crew.cookies.set('crownops_session','crew-token');self.crew.headers['x-csrf-token']='crew-csrf'
  def test_dm_unread_retry_and_no_inbox_task(self):

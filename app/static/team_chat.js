@@ -5,6 +5,7 @@
  async function refresh(){
   if(!S.user){if(drawer){drawer.close();drawer.remove();drawer=null;}selected='';cursor=0;retry=null;document.querySelector('#team-chat-open')?.remove();return;}if(document.hidden)return;
   const top=document.querySelector('.topbar');if(!top)return;
+  try{const access=await api('/team-chat/access');if(!access.enabled){document.querySelector('#team-chat-open')?.remove();if(drawer?.open)drawer.close();return;}}catch{return;}
   let button=document.querySelector('#team-chat-open');
   if(!button){button=document.createElement('button');button.id='team-chat-open';button.className='btn-soft';button.onclick=open;top.append(button);}
   try{

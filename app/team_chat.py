@@ -1,6 +1,7 @@
 """Private staff messaging; never writes client Inbox or booking records."""
 from contextlib import closing
 from datetime import datetime,timezone,timedelta
+import os
 import hashlib
 import json
 from fastapi import Depends, HTTPException
@@ -15,6 +16,8 @@ CREATE INDEX IF NOT EXISTS team_messages_thread ON team_messages(thread_id,seq);
 
 
 def staff(db,u):
+    mode=os.getenv('CROWNOPS_TEAM_CHAT_MODE','off')
+    if mode not in ('owner','all') or (mode=='owner' and u['role']!='owner'):raise HTTPException(403,'Team Chat pilot is not enabled for this account.')
     if not one(db,'SELECT id FROM users WHERE id=? AND active=1',(u['id'],)):raise HTTPException(403,'Active staff access required.')
 
 
@@ -25,6 +28,11 @@ def member(db,u,tid):
 
 def register_team_chat(app,path,auth):
     with closing(connect(path)) as db:db.executescript(SCHEMA)
+
+    @app.get('/api/team-chat/access')
+    def access(u=Depends(auth)):
+        mode=os.getenv('CROWNOPS_TEAM_CHAT_MODE','off')
+        return {'enabled':mode=='all' or (mode=='owner' and u['role']=='owner')}
 
     @app.get('/api/team-chat/people')
     def people(u=Depends(auth)):
