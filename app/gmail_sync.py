@@ -195,30 +195,31 @@ def _quote_fields(body, subject):
             if v:
                 return v
         return ''
-    name = anyv('Client Name', 'Name')
-    raw_email = anyv('Email')
+    name = anyv('Client Name', 'Name', 'Nom du client', 'Nom complet', 'Nom')
+    raw_email = anyv('Email', 'Courriel', 'Adresse courriel')
     em = re.search(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', raw_email, re.I)
     email = em.group(0).lower() if em else ''
-    raw_phone = anyv('Phone')
+    raw_phone = anyv('Phone', 'Téléphone', 'Telephone')
     phone = _digits(raw_phone)
-    move_date = anyv('Moving Date')
-    pickup = anyv('Pickup Address', 'Pickup Address or Postal Code', 'Pickup')
-    dropoff = anyv('Destination Address', 'Destination Address or Postal Code', 'Destination')
-    home = anyv('Home Size')
-    boxes = anyv('Approximate Boxes', 'Approximate Number of Boxes', 'Boxes')
-    pickup_access = anyv('Pickup Access')
-    dropoff_access = anyv('Drop-off Access')
-    pickup_walk = anyv('Pickup Walking Distance', 'Walk at Pickup')
-    dropoff_walk = anyv('Drop-off Walking Distance', 'Walk at Drop-off')
-    heavy = anyv('Heavy Items', 'Heavy / Specialty Items')
-    details = anyv('Additional Details', 'Additional Details or Other Services', 'Details / Notes')
-    photo = anyv('Photo / Video Link', 'Photo or Video Link', 'Client photo or video link')
+    move_date = anyv('Moving Date', 'Date du déménagement', 'Date de déménagement')
+    pickup = anyv('Pickup Address', 'Pickup Address or Postal Code', 'Pickup', 'Adresse de départ', 'Code postal de départ')
+    dropoff = anyv('Destination Address', 'Destination Address or Postal Code', 'Destination', 'Adresse de destination', 'Adresse d’arrivée', "Adresse d'arrivée")
+    home = anyv('Home Size', 'Taille du logement')
+    boxes = anyv('Approximate Boxes', 'Approximate Number of Boxes', 'Boxes', 'Nombre approximatif de boîtes', 'Boîtes')
+    pickup_access = anyv('Pickup Access', 'Accès au départ')
+    dropoff_access = anyv('Drop-off Access', 'Accès à destination')
+    pickup_walk = anyv('Pickup Walking Distance', 'Walk at Pickup', 'Distance de marche au départ')
+    dropoff_walk = anyv('Drop-off Walking Distance', 'Walk at Drop-off', 'Distance de marche à destination')
+    heavy = anyv('Heavy Items', 'Heavy / Specialty Items', 'Objets lourds', 'Articles lourds ou spéciaux')
+    details = anyv('Additional Details', 'Additional Details or Other Services', 'Details / Notes', 'Détails supplémentaires')
+    photo = anyv('Photo / Video Link', 'Photo or Video Link', 'Client photo or video link', 'Lien photos / vidéos')
     labels=['Client Name','Email','Phone','Moving Date','Pickup Address','Destination Address','Greater Montreal Move','Home Size','Pickup Access','Drop-off Access','Pickup Walking Distance','Drop-off Walking Distance','Approximate Boxes','Heavy Items','Additional Details','Photo / Video Link','Submission ID']
     boundary='|'.join(re.escape(x) for x in labels)
     multiline=re.search(r'(?ims)^\s*Additional Details\s*:\s*(.*?)(?=^\s*(?:'+boundary+r')\s*:|END_CROWN_QUOTE_BUILDER_INPUT|\Z)',block)
     if multiline:details=multiline.group(1).strip()
     notes = details
-    local_area=anyv('Greater Montreal Move','Local Montreal')
+    local_area=anyv('Greater Montreal Move','Local Montreal','Déménagement dans le Grand Montréal')
+    local_area={'oui':'Yes','non':'No','incertain':'Not sure','pas certain':'Not sure'}.get(local_area.casefold(),local_area)
     local_area=local_area if local_area in ('Yes','No','Not sure') else ''
     if photo.startswith('END_CROWN_'):photo=''
     if not move_date:
@@ -231,6 +232,13 @@ def _quote_fields(body, subject):
         estimate = re.search(r'(?s)Calculator Estimate\s*\n+\s*(\$[^\n]+)', text)
         if estimate:
             notes = (notes + '\nCalculator estimate: ' + estimate.group(1).strip()).strip()
+    explicit_language=anyv('Language','Preferred Language','Langue','Langue préférée').strip().casefold()
+    if explicit_language in ('fr','fr-ca','french','français','francais'):language='French'
+    elif explicit_language in ('en','en-ca','english','anglais'):language='English'
+    else:
+        french_marker=re.search(r'\b(?:QuickQuoteForm|QuoteForm|InstantEstimateForm)[ _-]*FR\b|/fr/(?:demenagement-montreal|calculateur-cout-demenagement-montreal)/',subject+'\n'+text,re.I)
+        french_fields=re.search(r'(?im)^\s*(?:Nom du client|Date du déménagement|Date de déménagement|Taille du logement)\s*:',text)
+        language='French' if french_marker or french_fields else 'English'
     return {
         'client_name': name or 'Website inquiry',
         'email': email,
@@ -253,7 +261,7 @@ def _quote_fields(body, subject):
         'lead_type': 'Instant estimate' if subject.startswith('New Instant') else 'Form',
         'stage': 'New Lead',
         'priority': 'Normal',
-        'language': 'English',
+        'language': language,
     }
 
 
@@ -398,13 +406,13 @@ def _review_task(db,event_key,title):
         insert(db,'tasks',dict(id=uid('TASK'),legacy_id='gmail-match:'+event_key,title=title,due_date=business_day(),owner='',created_at=now()))
 
 
-def _record_incoming_message(db, lead_id, actor, subject, body, created_at=None):
+def _record_incoming_message(db, lead_id, actor, subject, body, created_at=None, language='English'):
     # Stable Gmail event IDs provide deduplication in the enclosing transaction.
     # Different replies/forms can legitimately have the same subject.
     mid = uid('MSG')
     insert(db, 'messages', dict(
         id=mid, lead_id=lead_id, kind='Incoming email', subject=(subject or '')[:300],
-        body=(body or '')[:12000], language='English', author=actor, created_at=created_at or now()
+        body=(body or '')[:12000], language='French' if language=='French' else 'English', author=actor, created_at=created_at or now()
     ))
     return mid
 
@@ -457,7 +465,7 @@ def _quote_inquiry(db,data,payload,actor,event_key,new_lead,matched=None):
     else:
         selected=new_lead(db,creation_data,actor,external_id=event_key,suppressed=1);lead_id=selected['id'];created=True
         db.execute('UPDATE leads SET created_at=? WHERE id=?',(payload.get('received_at') or now(),lead_id))
-    message=_record_incoming_message(db,lead_id,actor,payload.get('subject') or '',payload.get('body') or payload.get('snippet') or '',created_at=payload.get('received_at'))
+    message=_record_incoming_message(db,lead_id,actor,payload.get('subject') or '',payload.get('body') or payload.get('snippet') or '',created_at=payload.get('received_at'),language=data.get('language','English'))
     payload.update(lead_id=lead_id,message_id=message,origin_label='Quote Form')
     if payload.get('photo_link_review'):
         add_task(db,lead_id,'Review client photo / folder reference in the original quote form',selected.get('assigned_to') or '',key='gmail-photo:'+event_key)

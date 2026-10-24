@@ -8,6 +8,8 @@ The next patch prepares a reviewable deposit-request email when a newly accepted
 
 Website intake currently polls Gmail every two minutes through configured feeds. Client matching can require office review; Inbox must retain the unmatched event. Local calculator drafting requires sufficient details and approved pricing, and never auto-sends. Imported client communications are suppressed until office review/activation.
 
+The next patch also fixes the importer hardcoding every quote form to English. It recognizes explicit language preferences, known French form/source markers and French field labels. Explicit English wins over a French page marker. Names alone never determine language. French fields are preserved without inferring travel time or prices; historical reviewed client records are not rewritten automatically.
+
 QuickBooks sends official estimates/invoices only through explicit reviewed actions and enabled gates. Acceptance polling is every two minutes in batches up to 25. Accepted estimates become tentative jobs when scheduling checks pass; fully booked/missing-date/changed-scope cases remain office review. A provider status is not proof of a client click. No email-open count should be invented if the provider does not expose it.
 
 Deposits currently use approved Interac verification or the existing Square checkout, not a new native QuickBooks deposit workflow. A verified deposit still goes through availability/capacity confirmation checks. Final invoice payment/reconciliation is a separate journey. Move-preparation and collection workers currently generate drafts for approval, not automatic client sends. Run flags, account settings and sender authorization must be verified in the actual installation.
