@@ -1349,10 +1349,26 @@ def create_app(database_path=None):
         return Response(json.dumps(json.loads(e['payload_json']),indent=2),media_type='application/json',
                         headers={'Content-Disposition':f'attachment; filename="{eid}.json"'})
 
+    @app.get('/api/ai/status')
+    def ai_status(u=Depends(auth)):
+        require(u,QUOTERS)
+        with closing(connect(path)) as db:
+            columns={r['name'] for r in db.execute('PRAGMA table_info(ai_runs)')}
+            reserved=db.execute("SELECT COALESCE(SUM(reserved_cost_cents),0) FROM ai_runs WHERE substr(created_at,1,7)=?",(now()[:7],)).fetchone()[0] if 'reserved_cost_cents' in columns else 0
+        return {'enabled':os.getenv('CROWNOPS_AI_ASSIST_ENABLED')=='1',
+            'configured':bool(os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_MODEL')),
+            'model':os.getenv('OPENAI_MODEL',''), 'mode':'Staff draft only',
+            'pricing_context_enabled':os.getenv('CROWNOPS_AI_APPROVED_PRICING')=='1',
+            'automatic_actions':False,
+            'monthly_reserved_usd_cents':reserved if u['role']=='owner' else None,
+            'budget_usd_cents':os.getenv('AI_MONTHLY_BUDGET_USD_CENTS') if u['role']=='owner' else None}
+
     @app.post('/api/ai/analyze')
     def analyze(data:dict,u=Depends(auth)):
         require(u,QUOTERS)
         from .platform_common import external_gate
+        if os.getenv('CROWNOPS_AI_ASSIST_ENABLED')!='1':
+            raise HTTPException(503,'AI staff assistance is paused. No provider request was made.')
         external_gate()
         if not os.environ.get('OPENAI_API_KEY') or not os.environ.get('OPENAI_MODEL'):
             raise HTTPException(503,'AI is not connected in this pilot. Add OPENAI_API_KEY and OPENAI_MODEL on the server. No tokens were used.')
@@ -1363,23 +1379,27 @@ def create_app(database_path=None):
         rid=bounded(data.get('request_id',''),'Request ID',120)
         if not re.fullmatch(r'[a-zA-Z0-9_-]{12,120}',rid):raise HTTPException(422,'Use a unique request identifier.')
         language=bounded(data.get('language','English'),'Language',20)
+        if language not in ('English','French'):raise HTTPException(422,'Choose English or French.')
         lid=data.get('lead_id') or None
         context={};approved=None;model=os.environ['OPENAI_MODEL']
+        from .ai_controls import spending_policy,reserve_cost,ensure_cost_column
+        price_ceiling,budget=spending_policy()
         with transaction(path) as db:
             if lid:
                 lead=get_lead(db,lid)
                 # Do not send the workbook, call history, payroll, or unrelated clients.
                 context={k:str(lead.get(k,''))[:1000] for k in ai.FIELDS}
                 q=one(db,"SELECT * FROM quotes WHERE lead_id=? AND status IN ('Approved','Accepted') ORDER BY revision DESC LIMIT 1",(lid,))
-                if q and quote_scope_current(db,q,lead):approved=json.loads(q['result_json'])
+                if q and quote_scope_current(db,q,lead) and os.getenv('CROWNOPS_AI_APPROVED_PRICING')=='1':approved=json.loads(q['result_json'])
             content_hash=sha(dumps({'body':body,'language':language,'lead':lid,'context':context,'quote':approved,'model':model}))
             previous=one(db,'SELECT * FROM ai_runs WHERE id=?',(rid,))
             if previous:
                 if previous['request_hash']!=content_hash or previous['user_id']!=u['id']:
                     raise HTTPException(409,'Request ID was already used for another request.')
                 if previous['status']=='Completed':
-                    return {'result':json.loads(previous['result_json']),'usage':{k:previous[k] for k in ('input_tokens','cached_tokens','output_tokens')},'cached_result':True}
+                    return {'result':json.loads(previous['result_json']),'usage':{k:previous[k] for k in ('input_tokens','cached_tokens','output_tokens')},'cached_result':True,'applied':False,'sent':False}
                 raise HTTPException(409,'This request already exists or is unresolved. Review the AI usage log before retrying.')
+            ensure_cost_column(db)
             month=now()[:7]
             since=(datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat(timespec='seconds')
             if db.execute('SELECT count(*) FROM ai_runs WHERE user_id=? AND created_at>?',(u['id'],since)).fetchone()[0]>=4:
@@ -1389,7 +1409,8 @@ def create_app(database_path=None):
             used=db.execute("SELECT coalesce(sum(CASE WHEN status='Completed' THEN input_tokens+output_tokens ELSE reserved_tokens END),0) FROM ai_runs WHERE substr(created_at,1,7)=?",(month,)).fetchone()[0]
             if used+reserve>int(os.environ.get('AI_MONTHLY_TOKEN_LIMIT','250000')):
                 raise HTTPException(429,'Monthly AI token budget reached or reserved. An owner must review usage before increasing it.')
-            insert(db,'ai_runs',dict(id=rid,request_hash=content_hash,user_id=u['id'],lead_id=lid,model=model,
+            cost=reserve_cost(db,month,reserve,price_ceiling,budget)
+            insert(db,'ai_runs',dict(reserved_cost_cents=cost,id=rid,request_hash=content_hash,user_id=u['id'],lead_id=lid,model=model,
                 status='Running',reserved_tokens=reserve,created_at=now()))
         try:
             result,usage=ai.invoke(body,language,context,approved)
