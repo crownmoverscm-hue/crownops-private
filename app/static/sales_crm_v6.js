@@ -393,6 +393,6 @@ document.addEventListener('submit',async e=>{
 });
 
 // Legacy quote-entry bridge: every estimate action now enters the v6 CRM workflow.
-if(typeof chooseLead==='function')chooseLead=function(action){return action==='ai'?crmChooseClient():crmChooseClient();};
+if(typeof chooseLead==='function')chooseLead=function(action){return action==='ai'?aiCompose():crmChooseClient();};
 if(typeof newQuote==='function')newQuote=function(leadId){return crmQuoteBuilder(leadId);};
 if(typeof openQuote==='function')openQuote=function(qid){return crmOpenQuote(qid);};
