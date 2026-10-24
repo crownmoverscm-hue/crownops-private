@@ -18,6 +18,8 @@ def ensure_cost_column(db):
     if 'reserved_cost_cents' not in {r['name'] for r in db.execute('PRAGMA table_info(ai_runs)')}:
         db.execute('ALTER TABLE ai_runs ADD COLUMN reserved_cost_cents INTEGER NOT NULL DEFAULT 0')
 
+    if 'provider_json' not in {r['name'] for r in db.execute('PRAGMA table_info(ai_runs)')}:
+        db.execute("ALTER TABLE ai_runs ADD COLUMN provider_json TEXT NOT NULL DEFAULT '{}'")
 
 def reserve_cost(db,month,tokens,ceiling,budget):
     cost=max(1,int((Decimal(tokens)*ceiling/Decimal(10000)).quantize(Decimal('1'),rounding=ROUND_CEILING)))

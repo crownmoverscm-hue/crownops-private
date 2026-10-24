@@ -26,6 +26,27 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await page.evaluate(()=>modal.close());await page.evaluate(()=>navigate('quotes'));
   await page.locator('[data-action="choose-quote"],[data-crm="quote-new"]').first().click();
   await page.locator('#modal[open]').getByRole('heading',{name:'Choose a quote template',exact:true}).waitFor();
+  // Mocked UI-only coverage. This is not a live OpenAI quality or provenance test.
+  await page.evaluate(()=>modal.close());
+  await page.route('**/api/ai/status',route=>route.fulfill({json:{enabled:true,configured:true,model:'fictional-browser-model',provider_requests_allowed:true}}));
+  const requests=[];
+  await page.route('**/api/ai/analyze',async route=>{
+   requests.push(route.request().postDataJSON());await new Promise(r=>setTimeout(r,120));
+   await route.fulfill({json:{result:{summary:'Fictional summary',questions:['Preferred date?'],risk_flags:[],fields:{},draft_reply:'Fictional editable draft'},usage:{input_tokens:10,output_tokens:10},sent:false,applied:false}});
+  });
+  await page.evaluate(()=>aiCompose('FINISH-L0'));
+  await page.locator('#ai-form textarea[name=text]').fill('TEST ONLY browser fixture');
+  await page.locator('#ai-form input[name=consent_to_process]').check();
+  await page.locator('#ai-form').evaluate(f=>{f.requestSubmit();f.requestSubmit();});
+  await page.locator('#ai-draft-edit').waitFor();assert.equal(requests.length,1,'Busy form must prevent concurrent requests');
+  await page.locator('#ai-draft-edit').fill('Edited reviewed draft');
+  let saved;
+  await page.route('**/api/ai/runs/*/draft',async route=>{saved=route.request().postDataJSON();await route.fulfill({json:{saved:true,sent:false}});});
+  page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Save reviewed draft',exact:true}).click();
+  await page.getByText('Saved to the selected client timeline. Not sent.',{exact:true}).waitFor();
+  assert.equal(saved.body,'Edited reviewed draft');assert.equal(saved.authorize_save,true);assert.equal(saved.kind,'Draft reply');
+  assert(await page.getByText('Not sent',{exact:true}).isVisible());
+  assert(await page.locator('#modal').evaluate(e=>e.scrollWidth<=e.clientWidth+1));
   assert.equal(errors.length,0,errors.join('\n'));await context.close();
  }
  for(const role of ['owner','manager','sales','crew']){
@@ -40,5 +61,5 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await c.close();
  }
  const anonymous=await browser.newContext();assert.equal((await anonymous.request.get('http://127.0.0.1:8095/api/ai/status')).status(),401);await anonymous.close();
- await browser.close();console.log('PASS: four viewport AI routes; paused generation; zero opening writes; quote-template isolation; owner/manager/sales access; crew and anonymous denials.');
+ await browser.close();console.log('PASS: four viewport AI routes; paused generation; zero opening writes; quote-template isolation; mocked edit/save and repeated-submit UI; owner/manager/sales access; crew and anonymous denials.');
 })().catch(e=>{console.error(e);process.exit(1)});

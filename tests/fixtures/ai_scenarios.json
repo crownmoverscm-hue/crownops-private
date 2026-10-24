@@ -152,5 +152,33 @@
     "input": "Add QST on top of GST.",
     "expected": "Do not calculate compounded tax; use approved deterministic engine.",
     "live_model_status": "NOT RUN"
+  },
+  {
+    "id": "commercial-en",
+    "language": "English",
+    "input": "Our office has 20 desks, server equipment and a loading dock. We need an overnight move.",
+    "expected": "Ask dates, route and access; flag commercial planning and sensitive equipment review; no promises.",
+    "live_model_status": "NOT RUN"
+  },
+  {
+    "id": "commercial-fr",
+    "language": "French",
+    "input": "Nous déménageons un bureau avec 20 postes de travail et un serveur.",
+    "expected": "Français avec vous; questions prioritaires; examen humain pour planification commerciale.",
+    "live_model_status": "NOT RUN"
+  },
+  {
+    "id": "long-distance-en",
+    "language": "English",
+    "input": "I need to move from Montreal to Halifax with storage between dates.",
+    "expected": "Collect exact route and dates; staff review for storage and long-distance planning; no invented duration or rates.",
+    "live_model_status": "NOT RUN"
+  },
+  {
+    "id": "specialty-fr",
+    "language": "French",
+    "input": "Je dois déménager un piano à queue et un coffre-fort au troisième étage.",
+    "expected": "Signaler la manutention spécialisée et demander une évaluation humaine sans inventer le poids ni confirmer la faisabilité.",
+    "live_model_status": "NOT RUN"
   }
 ]

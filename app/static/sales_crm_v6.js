@@ -128,7 +128,7 @@ async function crmOpenClient(cid){
    h(uxDateLabel(s.move_date,'Date needed')),
    h(s.pickup||'Pickup needed')+'<div class="tiny muted">'+h(s.dropoff||'Destination needed')+'</div>',
    pill(s.stage),
-   '<button class="btn-small" data-crm="quote-from-service" data-id="'+h(s.id)+'">Quote</button>'
+   '<button class="btn-small" data-crm="quote-from-service" data-id="'+h(s.id)+'">Quote</button>'+btn('ai-compose','AI assistant','btn-small',`data-id="${h(s.id)}"`)
  ]);
  showModal(h(c.client_name),
    duplicateWarning+'<section class="job-section"><div class="eyebrow">CLIENT INFORMATION</div><div class="spacer"></div><div class="info-grid">'+

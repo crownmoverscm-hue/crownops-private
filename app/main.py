@@ -1355,12 +1355,14 @@ def create_app(database_path=None):
         from .ai_controls import staging_ai_test_enabled
         with closing(connect(path)) as db:
             columns={r['name'] for r in db.execute('PRAGMA table_info(ai_runs)')}
+            recent=rows(db,'SELECT id,created_at,model,status,provider_json FROM ai_runs ORDER BY created_at DESC LIMIT 10') if u['role']=='owner' and 'provider_json' in columns else []
             reserved=db.execute("SELECT COALESCE(SUM(reserved_cost_cents),0) FROM ai_runs WHERE substr(created_at,1,7)=?",(now()[:7],)).fetchone()[0] if 'reserved_cost_cents' in columns else 0
         return {'enabled':os.getenv('CROWNOPS_AI_ASSIST_ENABLED')=='1',
             'configured':bool(os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_MODEL')),
             'model':os.getenv('OPENAI_MODEL',''), 'mode':'Staff draft only',
             'pricing_context_enabled':os.getenv('CROWNOPS_AI_APPROVED_PRICING')=='1',
             'automatic_actions':False,
+            'recent_provider_evidence':[{**r,'provider_json':json.loads(r['provider_json'])} for r in recent],
             'provider_requests_allowed':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1' or staging_ai_test_enabled(),
             'monthly_reserved_usd_cents':reserved if u['role']=='owner' else None,
             'budget_usd_cents':os.getenv('AI_MONTHLY_BUDGET_USD_CENTS') if u['role']=='owner' else None}
@@ -1401,7 +1403,7 @@ def create_app(database_path=None):
                 if previous['request_hash']!=content_hash or previous['user_id']!=u['id']:
                     raise HTTPException(409,'Request ID was already used for another request.')
                 if previous['status']=='Completed':
-                    return {'result':json.loads(previous['result_json']),'usage':{k:previous[k] for k in ('input_tokens','cached_tokens','output_tokens')},'cached_result':True,'applied':False,'sent':False}
+                    return {'result':json.loads(previous['result_json']),'usage':{**(json.loads(previous.get('provider_json') or '{}')),**{k:previous[k] for k in ('input_tokens','cached_tokens','output_tokens')}},'cached_result':True,'applied':False,'sent':False}
                 raise HTTPException(409,'This request already exists or is unresolved. Review the AI usage log before retrying.')
             ensure_cost_column(db)
             month=now()[:7]
@@ -1418,16 +1420,37 @@ def create_app(database_path=None):
                 status='Running',reserved_tokens=reserve,created_at=now()))
         try:
             result,usage=ai.invoke(body,language,context,approved)
+            usage={**usage,'reply_language':language}
             it=int(usage.get('input_tokens',0));ot=int(usage.get('output_tokens',0));ct=int(usage.get('input_tokens_details',{}).get('cached_tokens',0))
             with transaction(path) as db:
-                db.execute("UPDATE ai_runs SET status='Completed',input_tokens=?,cached_tokens=?,output_tokens=?,result_json=? WHERE id=?",(it,ct,ot,dumps(result),rid))
+                db.execute("UPDATE ai_runs SET status='Completed',input_tokens=?,cached_tokens=?,output_tokens=?,result_json=?,provider_json=? WHERE id=?",(it,ct,ot,dumps(result),dumps(usage),rid))
                 audit(db,u['id'],'AI suggestion generated; not applied or sent','ai_runs',rid,{'input_tokens':it,'output_tokens':ot})
-            return {'result':result,'usage':{'input_tokens':it,'cached_tokens':ct,'output_tokens':ot},'applied':False,'sent':False}
+            return {'result':result,'usage':{**usage,'input_tokens':it,'cached_tokens':ct,'output_tokens':ot},'applied':False,'sent':False}
         except Exception as exc:
             error=str(exc) if isinstance(exc,RuntimeError) else 'AI request failed or timed out. Check server connectivity. No client changes or messages were made.'
             with transaction(path) as db:
                 db.execute("UPDATE ai_runs SET status='Error',error=? WHERE id=?",(error[:500],rid))
             raise HTTPException(502,error)
+
+    @app.post('/api/ai/runs/{rid}/draft')
+    def save_ai_draft(rid:str,data:dict,u=Depends(auth)):
+        require(u,QUOTERS)
+        if data.get('authorize_save') is not True:raise HTTPException(422,'Review the draft and explicitly authorize saving it. Nothing was sent.')
+        body=bounded(data.get('body',''),'Draft',14000)
+        if not body:raise HTTPException(422,'Draft is empty.')
+        kind=data.get('kind','Draft reply')
+        if kind not in ('Draft reply','Note'):raise HTTPException(422,'Only a draft reply or summary note can be saved.')
+        with transaction(path) as db:
+            run=one(db,'SELECT * FROM ai_runs WHERE id=?',(rid,))
+            if not run or run['user_id']!=u['id']:raise HTTPException(404,'Your AI draft was not found.')
+            if run['status']!='Completed' or not run['lead_id']:raise HTTPException(409,'A completed client-associated AI run is required. Standalone drafts do not create client records.')
+            lead=get_lead(db,run['lead_id'])
+            mid='AI-DRAFT-'+sha(dumps([rid,kind,body]))
+            previous=one(db,'SELECT * FROM messages WHERE id=?',(mid,))
+            if not previous:
+                insert(db,'messages',dict(id=mid,lead_id=lead['id'],kind=kind,subject='AI-assisted draft' if kind=='Draft reply' else 'AI-assisted summary',body=body,language=json.loads(run.get('provider_json') or '{}').get('reply_language') or lead['language'],author=u['id'],created_at=now()))
+                audit(db,u['id'],'AI draft saved after staff review; not sent','messages',mid,{'run_id':rid})
+        return {'id':mid,'lead_id':run['lead_id'],'saved':True,'already_saved':bool(previous),'sent':False}
 
     @app.post('/api/webhooks/intake')
     async def intake(request:Request):
