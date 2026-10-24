@@ -6,12 +6,12 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await context.addCookies([{name:'crownops_session',value:'owner-token',url:'http://127.0.0.1:8095'}]);
   const page=await context.newPage(),errors=[],writes=[];
   page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('http://127.0.0.1:8095');await page.locator('.topbar').waitFor();
+  await page.goto('http://127.0.0.1:8095');await page.locator('.topbar').waitFor();await page.locator('#content h1').waitFor();
   await page.evaluate(()=>navigate('connections'));
   const before=await (await context.request.get('http://127.0.0.1:8095/api/ai/status')).json();
   assert.equal(before.enabled,false);
   page.on('request',r=>{if(!['GET','HEAD','OPTIONS'].includes(r.method()))writes.push(r.url());});
-  await page.getByRole('button',{name:'Open staff AI workspace',exact:true}).click();
+  try{await page.getByRole('button',{name:'Open staff AI workspace',exact:true}).click({timeout:5000});}catch(e){throw Error('AI entry missing at width '+width+'; page errors='+JSON.stringify(errors)+'; content='+await page.locator('body').innerText());}
   const dialog=page.locator('#modal[open]');await dialog.getByRole('heading',{name:'Staff AI workspace',exact:true}).waitFor();
   assert(await dialog.getByText('AI generation is paused',{exact:true}).isVisible());
   assert(await dialog.getByRole('button',{name:'Analyze & draft',exact:true}).isDisabled());

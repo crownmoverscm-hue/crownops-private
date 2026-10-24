@@ -1,0 +1,33 @@
+name: Staff AI focused QA
+on:
+  pull_request:
+    paths:
+      - 'app/ai*'
+      - 'app/main.py'
+      - 'app/static/app.js'
+      - 'app/static/sales_crm_v6.js'
+      - 'tests/browser/staff_ai.cjs'
+      - 'tests/test_ai_controls.py'
+      - '.github/workflows/staff-ai-qa.yml'
+jobs:
+  staff-ai:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -p test_ai_controls.py -v
+      - run: |
+          npm install --prefix /tmp/crownops-browser --no-audit --no-fund playwright@1.62.1
+          /tmp/crownops-browser/node_modules/.bin/playwright install --with-deps chromium
+          python tests/browser/run_mobile.py staff_ai
+        env:
+          NODE_PATH: /tmp/crownops-browser/node_modules
+          CROWNOPS_AI_ASSIST_ENABLED: '0'
