@@ -1527,5 +1527,7 @@ def create_app(database_path=None):
     register_payroll_periods(app,path,auth)
     from .staff_portal import register_staff_portal
     register_staff_portal(app,path,auth)
+    from .team_chat import register_team_chat
+    register_team_chat(app,path,auth)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app
