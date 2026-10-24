@@ -288,6 +288,9 @@ def synchronize(path,qid,actor='quickbooks-sync'):
                 if not job and not problem:problem='Accepted — add the requested service date before scheduling.'
                 add_task(db,lead['id'],'Accepted QuickBooks estimate — review date, deposit and assign crew/truck',lead['assigned_to'],'accepted:'+qid)
                 state='Accepted'
+                if job and not problem:
+                    from .client_communications import prepare_deposit_request
+                    prepare_deposit_request(db,qid,actor)
                 if row['state']!='Accepted':audit(db,actor,'QuickBooks acceptance synchronized; booking not confirmed','quotes',qid,{'job_id':job['id'] if job else None})
             elif status=='Rejected':
                 state='Rejected';problem='Client declined in QuickBooks. Review the client follow-up; existing jobs were not cancelled.'

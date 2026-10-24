@@ -255,6 +255,11 @@ def process_mail(path,mid):
             billing=json.loads(issued['document_json']).get('terms',{}).get('customer',{}).get('email','') if issued else ''
             if isinstance(billing,str) and '@' in billing:recipients.add(billing.strip().lower())
         if m['recipient'].strip().lower() not in recipients:raise HTTPException(409,'Client or approved billing email changed. Prepare a new message.')
+        if m['event_key'].startswith('accepted-deposit:'):
+            from .client_communications import deposit_request_current
+            if not deposit_request_current(db,m):
+                db.execute("UPDATE outbound_messages SET status='Cancelled',error='Deposit, booking or payment instructions changed; review a current request' WHERE id=?",(mid,))
+                return {'sent':False,'reason':'Deposit request changed; stale message cancelled'}
         if m['event_key'].startswith('quote-delivery:'):
             _,qid,revision=m['event_key'].split(':')
             if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):

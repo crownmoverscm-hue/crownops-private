@@ -264,6 +264,8 @@ def register_portal(app,path,auth,public_url,secure):
             # It remains tentative until the deposit or a manager-approved exception confirms the booking.
             from .sales_crm_v6 import ensure_tentative_job
             job=ensure_tentative_job(db,q,l,'client:'+c['email'])
+            from .client_communications import prepare_deposit_request
+            prepare_deposit_request(db,qid,'client:'+c['email'])
             add_task(db,c['lead_id'],'Verify deposit and assign crew/truck after acceptance',l['assigned_to'],'accepted:'+qid)
             audit(db,'client:'+c['email'],'Quote accepted in portal','quotes',qid,{'terms_version':terms['version'],'tentative_job_id':job['id'] if job else None})
         return {'ok':True,'booking_confirmed':False,'tentative_job_id':job['id'] if job else None,'message':'Estimate accepted. Your requested date is now held as tentative while Crown verifies the deposit and final booking details.'}

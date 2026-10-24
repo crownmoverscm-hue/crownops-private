@@ -90,6 +90,78 @@ def public_base():
     return (os.getenv('CROWNOPS_PUBLIC_URL') or ('https://'+os.environ['RAILWAY_PUBLIC_DOMAIN'] if os.getenv('RAILWAY_PUBLIC_DOMAIN') else 'http://127.0.0.1:8080')).rstrip('/')
 
 
+def deposit_request_context(db, qid):
+    """Only request a verified outstanding deposit for a current tentative job."""
+    from .deposits import deposit_state
+    from .availability import assert_dates_open
+    from fastapi import HTTPException
+    q=one(db,"SELECT * FROM quotes WHERE id=? AND status='Accepted'",(qid,))
+    if not q:return None
+    lead=one(db,'SELECT * FROM leads WHERE id=?',(q['lead_id'],))
+    job=one(db,"SELECT * FROM jobs WHERE quote_id=? AND status='Tentative' ORDER BY created_at DESC LIMIT 1",(qid,))
+    if not lead or not lead.get('email') or not job:return None
+    if not quote_scope_current(db,q,lead) or pending_scope_changes(db,lead['id']):return None
+    if one(db,"SELECT id FROM quotes WHERE lead_id=? AND revision>? AND status IN ('Approved','Accepted')",(lead['id'],q['revision'])):return None
+    if one(db,"SELECT id FROM cases WHERE lead_id=? AND status!='Resolved'",(lead['id'],)):return None
+    state=deposit_state(db,lead['id'],q)
+    if state['due_cents']<=0 or state['pending_cents']>0:return None
+    try:assert_dates_open(db,job['start_at'],job['end_at'])
+    except HTTPException:return None
+    return q,lead,job,state
+
+
+def deposit_request_fingerprint(db, context):
+    q,lead,job,state=context
+    policy=settings_for_deposit(db)
+    return hashlib.sha256(dumps({'quote':q['id'],'revision':q['revision'],'lead_version':lead['version'],
+        'email':lead['email'],'job_version':job['version'],'start':job['start_at'],'end':job['end_at'],
+        'due':state['due_cents'],'policy':policy}).encode()).hexdigest()[:24]
+
+
+def settings_for_deposit(db):
+    from .platform_common import settings
+    policy=settings(db,'deposit_policy',{}) or {}
+    return {k:policy.get(k) for k in ('approved','enabled','recipient_email','recipient_name','auto_deposit','reference_note')}
+
+
+def prepare_deposit_request(db, qid, actor):
+    """Prepare one reviewable EN/FR request. Never create a checkout or send mail."""
+    from .platform_common import queue_message
+    context=deposit_request_context(db,qid)
+    if not context:return None
+    q,lead,job,state=context
+    key='accepted-deposit:'+qid+':'+deposit_request_fingerprint(db,context)
+    old=one(db,'SELECT * FROM outbound_messages WHERE event_key=?',(key,))
+    if old:return old
+    policy=settings_for_deposit(db)
+    fr=str(json.loads(q['inputs_json']).get('language') or lead.get('language','')).lower().startswith('fr')
+    details=booking_details(job,q);amount=state['due_cents']/100
+    link=portal_link(db,lead,actor,tab='details')
+    if fr:
+        subject='Votre soumission est acceptée — prochaine étape | Crown Movers'
+        body=f"Bonjour {lead['client_name']},\n\nMerci d’avoir accepté notre soumission! Date demandée : {details['date']}. Arrivée prévue : {details['arrival_window']} (heure de Montréal). Votre service reste provisoire jusqu’à la vérification du dépôt et des disponibilités par Crown.\n\nDépôt restant à vérifier : {amount:.2f} $ CA. Si vous avez déjà payé, ne payez pas une deuxième fois; contactez-nous pour faire vérifier le paiement."
+    else:
+        subject='Your estimate is accepted — next step | Crown Movers'
+        body=f"Hi {lead['client_name']},\n\nThank you for accepting our estimate! Requested date: {details['date']}. Expected arrival: {details['arrival_window']} (Montréal time). Your service remains tentative until Crown verifies the deposit and availability.\n\nOutstanding deposit to verify: CAD {amount:.2f}. If you have already paid, please do not pay again; contact us so we can verify it."
+    if policy.get('approved') and policy.get('enabled') and policy.get('recipient_email'):
+        body+=('\n\nVirement Interac : ' if fr else '\n\nInterac e-Transfer: ')+str(policy['recipient_email'])+' ('+str(policy.get('recipient_name') or 'Crown Movers')+').'
+        if policy.get('auto_deposit',True):body+=(' Aucun mot de passe requis : dépôt automatique.' if fr else ' Auto-deposit is enabled; no password is required.')
+        if policy.get('reference_note'):body+=' '+str(policy['reference_note'])
+    else:
+        body+=('\n\nContactez Crown pour obtenir les instructions de paiement approuvées.' if fr else '\n\nPlease contact Crown for the approved payment instructions.')
+    body+=('\n\nVérifier mon dossier et ajouter mes photos :\n' if fr else '\n\nReview my moving details and add photos:\n')+link
+    body+=('\n\nBesoin d’aide? Demandez un rappel dans votre dossier ou appelez le 514-606-4030.\n\nMerci,\nL’équipe Crown Movers' if fr else '\n\nNeed a hand? Request a callback in your file or call 514-606-4030.\n\nThank you,\nThe Crown Movers team')
+    return queue_message(db,lead['id'],subject,body,'Follow-up',actor,key,job['id'],job['version'])
+
+
+def deposit_request_current(db,message):
+    marker=message.get('event_key','').split(':')
+    if len(marker)!=3 or marker[0]!='accepted-deposit':return False
+    context=deposit_request_context(db,marker[1])
+    return bool(context and context[1]['id']==message['lead_id'] and context[2]['id']==message['job_id'] and
+        marker[2]==deposit_request_fingerprint(db,context))
+
+
 def portal_link(db, lead, actor, base=None, tab='details'):
     raw=secrets.token_urlsafe(40)
     insert(db,'portal_invites',dict(token_hash=stamp_hash(raw),lead_id=lead['id'],email=lead['email'],

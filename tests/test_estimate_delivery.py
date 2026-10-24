@@ -87,6 +87,65 @@ class EstimateDeliveryTests(unittest.TestCase):
         self.assertEqual(r.json()['state'],'Accepted');self.assertIsNone(r.json()['job_id']);self.assertIn('fully booked',r.json()['message'])
         with closing(connect(self.path)) as db:self.assertEqual(len(rows(db,'SELECT * FROM jobs')),0)
 
+    def test_acceptance_prepares_one_deposit_draft_without_sending_or_charging(self):
+        self.deliver();self.remote['TxnStatus']='Accepted'
+        for _ in range(2):self.assertEqual(self.client.post(self.base+'/sync').status_code,200)
+        with closing(connect(self.path)) as db:
+            messages=rows(db,"SELECT * FROM outbound_messages WHERE event_key LIKE 'accepted-deposit:%'")
+            self.assertEqual(len(messages),1);m=messages[0]
+            self.assertEqual(m['status'],'Draft');self.assertIn('remains tentative',m['body'])
+            self.assertIn('approved payment instructions',m['body']);self.assertIn('/portal?',m['body'])
+            self.assertEqual(len(rows(db,'SELECT * FROM portal_invites')),1)
+            self.assertEqual(len(rows(db,'SELECT * FROM payments')),0)
+            self.assertEqual(len(rows(db,'SELECT * FROM deposit_links')),0)
+        self.assertEqual(self.send_count,1)
+
+    def test_paid_or_pending_deposit_does_not_prepare_request(self):
+        self.deliver();self.remote['TxnStatus']='Accepted'
+        with transaction(self.path) as db:
+            db.execute("INSERT INTO payments(id,lead_id,amount_cents,method,purpose,reference,verified,recorded_by,created_at) VALUES('TEST-PAY',?,30000,'Cash','Deposit','TEST',0,'test',?)",(self.q['lead_id'],now()))
+        self.assertEqual(self.client.post(self.base+'/sync').status_code,200)
+        with closing(connect(self.path)) as db:self.assertEqual(len(rows(db,"SELECT * FROM outbound_messages WHERE event_key LIKE 'accepted-deposit:%'")),0)
+        with transaction(self.path) as db:db.execute("UPDATE payments SET verified=1 WHERE id='TEST-PAY'")
+        self.assertEqual(self.client.post(self.base+'/sync').status_code,200)
+        with closing(connect(self.path)) as db:self.assertEqual(len(rows(db,"SELECT * FROM outbound_messages WHERE event_key LIKE 'accepted-deposit:%'")),0)
+
+    def test_deposit_request_stales_after_payment_policy_or_booking_change(self):
+        from app.client_communications import deposit_request_current
+        self.deliver();self.remote['TxnStatus']='Accepted';self.client.post(self.base+'/sync')
+        with transaction(self.path) as db:
+            m=one(db,"SELECT * FROM outbound_messages WHERE event_key LIKE 'accepted-deposit:%'")
+            self.assertTrue(deposit_request_current(db,m))
+            put_setting(db,'deposit_policy',{'approved':True,'enabled':True,'recipient_email':'new@example.invalid'})
+            self.assertFalse(deposit_request_current(db,m))
+            put_setting(db,'deposit_policy',{})
+            db.execute("UPDATE jobs SET status='Confirmed' WHERE quote_id=?",(self.qid,))
+            self.assertFalse(deposit_request_current(db,m))
+
+    def test_french_request_uses_approved_interac_and_remaining_amount(self):
+        from app.client_communications import prepare_deposit_request
+        self.deliver();self.remote['TxnStatus']='Accepted';self.client.post(self.base+'/sync')
+        with transaction(self.path) as db:
+            q=one(db,'SELECT * FROM quotes WHERE id=?',(self.qid,));inputs=json.loads(q['inputs_json']);inputs['language']='French'
+            db.execute('UPDATE quotes SET inputs_json=? WHERE id=?',(dumps(inputs),self.qid))
+            put_setting(db,'deposit_policy',{'approved':True,'enabled':True,'recipient_email':'approved@example.invalid','recipient_name':'TEST Crown','auto_deposit':True})
+            db.execute("INSERT INTO payments(id,lead_id,amount_cents,method,purpose,reference,verified,recorded_by,created_at) VALUES('TEST-PARTIAL',?,10000,'Cash','Deposit','TEST',1,'test',?)",(q['lead_id'],now()))
+            m=prepare_deposit_request(db,self.qid,'test')
+            self.assertIn('Bonjour',m['body']);self.assertIn('200.00',m['body']);self.assertIn('approved@example.invalid',m['body'])
+            self.assertEqual(m.get('status','Draft'),'Draft')
+
+    def test_approved_request_is_cancelled_before_send_after_a_deposit_is_recorded(self):
+        from app.providers import process_mail
+        self.deliver();self.remote['TxnStatus']='Accepted';self.client.post(self.base+'/sync')
+        with transaction(self.path) as db:
+            m=one(db,"SELECT * FROM outbound_messages WHERE event_key LIKE 'accepted-deposit:%'")
+            db.execute("UPDATE outbound_messages SET status='Approved' WHERE id=?",(m['id'],))
+            db.execute("UPDATE leads SET notifications_suppressed=0 WHERE id=?",(m['lead_id'],))
+            db.execute("INSERT INTO payments(id,lead_id,amount_cents,method,purpose,reference,verified,recorded_by,created_at) VALUES('TEST-PENDING',?,30000,'Cash','Deposit','TEST',0,'test',?)",(m['lead_id'],now()))
+        with patch('app.providers.external_gate'),patch('app.providers.send_gmail') as send:
+            result=process_mail(self.path,m['id']);self.assertFalse(result['sent']);send.assert_not_called()
+        with closing(connect(self.path)) as db:self.assertEqual(one(db,'SELECT status FROM outbound_messages WHERE id=?',(m['id'],))['status'],'Cancelled')
+
     def test_unknown_send_is_never_retried_and_can_reconcile(self):
         self.prepare();p=self.client.get(self.base).json()
         data={'confirm':True,'recipient':p['recipient'],'review_hash':p['review_hash']}
