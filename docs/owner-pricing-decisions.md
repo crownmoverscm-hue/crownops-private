@@ -2,6 +2,16 @@
 
 Source: `config/workbook_pricing_snapshot.json`; marked approved_for_pilot=false. The numbers below are copied, NOT approved or deployed rates. Live database rates have not been read in this workstream.
 
+## Owner decision — October 25, 2026
+
+Owner approved the following direction for new quotes going forward:
+- Standard local fuel amount: CAD $35.99.
+- Afternoon local moving minimum: one hour of labour, plus transportation, plus CAD $35.99 fuel. This supersedes the previous 1.5-hour afternoon proposal.
+- These are separate charges; one hour is a labour minimum, not a promise that the move takes one hour. Actual additional service remains billable under the reviewed quote terms.
+- Existing accepted quotes are not repriced. No production pricing was changed by recording this decision.
+- Still to confirm before implementation: whether the fuel amount applies once per service or per truck; the transportation method/amount; whether the reduced minimum applies to all afternoon local moves or only the previously qualifying small jobs. Morning/general minimum and 2027 labour rates remain unapproved.
+- Record approval date separately from deployment date. No retroactive changes or implicit approval of other source rates.
+
 ## Decisions to approve
 
 | Decision | Current source/code | What owner must approve |
