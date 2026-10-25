@@ -421,16 +421,30 @@ def register_providers(app,path,auth,public_url,new_lead=None):
     @app.get('/api/quickbooks/test-connection')
     def quickbooks_test_connection(u=Depends(auth)):
         require_role(u,OFFICE);env=quickbooks_environment();realm=''
+        expected=os.getenv('QBO_SANDBOX_REALM_ID','').strip()
+        result={'ok':False,'environment':env,'realm_id':'','company_name':'','country':'',
+                'checked_at':now(),'message':'QuickBooks could not confirm the company account. Check the connection; saved authorization has been retained.'}
         try:
-            _,realm,_=_qbo_connection(path)
-            info=qbo_read(path,'companyinfo/'+realm).get('CompanyInfo',{})
-            if not info.get('Id') or not (info.get('CompanyName') or info.get('LegalName')):
-                raise ValueError('Company identity was not confirmed.')
-            result={'ok':True,'environment':env,'realm_id':realm,'company_name':info.get('CompanyName') or info.get('LegalName'),
-                    'writes_enabled':quickbooks_write_enabled(),'checked_at':now(),'message':'Company account read successfully. No email, invoice or payment was created.'}
+            if expected and env!='sandbox':
+                result.update(state='Wrong environment',message='This test service requires QuickBooks sandbox. No accounting write or email was requested.')
+            else:
+                _,realm,_=_qbo_connection(path)
+                result['realm_id']=str(realm)
+                if expected and str(realm)!=expected:
+                    result.update(state='Wrong company',message='The connected company does not match the owner-approved sandbox ID. No accounting write or email was requested.')
+                else:
+                    info=qbo_read(path,'companyinfo/'+str(realm)).get('CompanyInfo',{})
+                    country=str(info.get('Country') or '').strip().upper()
+                    if not info.get('Id') or not (info.get('CompanyName') or info.get('LegalName')):
+                        raise ValueError('Company identity was not confirmed.')
+                    if expected and country!='CA':
+                        result.update(state='Canadian company not verified',message='CompanyInfo did not verify Canada. No accounting write or email was requested.')
+                    else:
+                        result.update(ok=True,state='Account verified',company_name=info.get('CompanyName') or info.get('LegalName'),
+                                      country=country,writes_enabled=quickbooks_write_enabled(),
+                                      message='Company account read successfully. No email, invoice or payment was created.')
         except Exception:
-            result={'ok':False,'environment':env,'realm_id':realm,'company_name':'','checked_at':now(),
-                    'message':'QuickBooks could not confirm the company account. Check the connection; saved authorization has been retained.'}
+            pass  # Return only the bounded, non-sensitive failure above; retain OAuth.
         with transaction(path) as db:put_setting(db,'quickbooks_account_check_'+env,result)
         return result
 

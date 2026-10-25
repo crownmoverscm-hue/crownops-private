@@ -8,10 +8,21 @@
    (S.user.role==='owner'&&!q.authorized_at?'<button data-v4="connect-quickbooks" data-id="quickbooks">Connect QuickBooks</button>':'')+
    (S.user.role==='owner'&&q.authorized_at&&data.connection_health?.quickbooks?.state==='reconnect_required'?'<button data-v4="connect-quickbooks" data-id="quickbooks">Restore QuickBooks permission</button>':'')+
    (['owner','manager'].includes(S.user.role)?'<button data-ux="qbo-setup">Review tax / item setup</button>':'');
+  const container=document.createElement('div');container.innerHTML=original;
+  let management='';
+  for(const title of container.querySelectorAll('h2')){
+   if(title.textContent.trim()!=='QuickBooks')continue;
+   const old=title.closest('.panel');if(!old)continue;
+   const details=[...old.querySelectorAll('details')].find(x=>x.querySelector('summary')?.textContent.trim()==='Manage connection');
+   if(details)management=details.outerHTML;
+   old.remove();
+  }
   const card=panel('QuickBooks — company connection',
    '<div class="row wrap">'+pill(q.state||'Not checked')+pill(q.environment==='production'?'LIVE ACCOUNT':'TEST ACCOUNT')+'</div>'+
    '<p class="small"><strong>Configured environment: '+h(q.environment||'Not configured')+'</strong> · '+(q.authorized_at?'Verify the connected company with the account check.':'No connected company verified.')+'</p>'+
    '<div class="spacer"></div><div class="info-grid"><div><div class="info-label">Company</div><div class="strong">'+h(q.company_name||'Run the account check to confirm')+'</div></div>'+
+   '<div><div class="info-label">Company ID</div><div class="strong">'+h(q.realm_id||'Not verified')+'</div></div>'+
+   '<div><div class="info-label">Country verified by API</div><div class="strong">'+h(q.country||'Not verified')+'</div></div>'+
    '<div><div class="info-label">Last account check</div><div class="strong">'+h(q.checked_at?uxTimestampLabel(q.checked_at):'Not checked')+'</div></div>'+
    '<div><div class="info-label">Accounting / tax setup</div><div class="strong">'+(q.mappings_complete?'Mappings reviewed':'Review needed')+'</div></div>'+
    '<div><div class="info-label">Quote email and acceptance</div><div class="strong">'+available(q.estimate_email_enabled&&q.writes_enabled)+'</div></div>'+
@@ -21,14 +32,7 @@
    (q.check_error?'<div class="callout orange">'+h(q.check_error)+'</div>':'')+
    '<p>The account check reads company details. It sends no email and creates no invoice or payment. Each invoice’s payment link and balance are checked separately before collection.</p>'+
    '<p class="small muted">Saved authorization and automatic renewal do not certify the full quote → acceptance → invoice → payment journey. Only an owner can connect or disconnect the company account.</p>'+
-   '<div class="row wrap">'+actions+'</div>');
-  const container=document.createElement('div');container.innerHTML=original;
-  for(const title of container.querySelectorAll('h2')){
-   if(title.textContent.trim()!=='QuickBooks')continue;
-   const old=title.closest('.panel');if(!old)continue;
-   const advanced=document.createElement('details');advanced.innerHTML='<summary>Advanced QuickBooks connection controls</summary>';
-   old.replaceWith(advanced);advanced.appendChild(old);
-  }
+   '<div class="row wrap">'+actions+'</div>'+management);
   const heading=container.querySelector('.page-head');
   if(heading)heading.insertAdjacentHTML('afterend',card+'<div class="spacer"></div>');else container.insertAdjacentHTML('afterbegin',card);
   return container.innerHTML;

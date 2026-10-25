@@ -42,7 +42,7 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
  await page.route('**/api/connections',async route=>{
   const response=await route.fetch(),data=await response.json();
   data.quickbooks={...data.quickbooks,authorized_at:'2026-10-21',state:accountVerified?'Account verified':'Authorization saved — account not checked',
-   company_name:accountVerified?'TEST — MUSE Company':'',environment:'sandbox',writes_enabled:true,mappings_complete:true,estimate_email_enabled:true,invoice_email_enabled:true};
+   company_name:accountVerified?'TEST — MUSE Company':'',realm_id:'123',country:accountVerified?'CA':'',environment:'sandbox',writes_enabled:true,mappings_complete:true,estimate_email_enabled:true,invoice_email_enabled:true};
   await route.fulfill({json:data});
  });
  await page.route('**/api/quickbooks/test-connection',route=>{accountVerified=true;return route.fulfill({json:{ok:true,company_name:'TEST — MUSE Company'}});});
@@ -74,6 +74,10 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await page.getByRole('heading',{name:'QuickBooks — company connection',exact:true}).waitFor();
   await page.getByRole('button',{name:'Check QuickBooks connection',exact:true}).click();
   await page.getByText('Account verified',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('heading',{name:'QuickBooks',exact:true}).count(),0,'no competing QuickBooks status card');
+  assert.equal(await page.getByRole('heading',{name:'QuickBooks — company connection',exact:true}).count(),1);
+  assert.match(await page.locator('#content').innerText(),/Company ID/);
+  assert.match(await page.locator('#content').innerText(),/Country verified by API/);
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'connection page overflow '+width);
   assert.match(await page.locator('#content').innerText(),/Configured environment: sandbox/);
   bridgePrepared=false;bridgeReviewed=false;bridgeSent=false;

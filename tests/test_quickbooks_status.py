@@ -33,6 +33,31 @@ class QuickBooksStatusTests(unittest.TestCase):
         self.assertFalse(self.state()['account_verified'])
         with closing(connect(self.path)) as db:self.assertIsNotNone(one(db,"SELECT provider FROM oauth_credentials WHERE provider='quickbooks'"))
 
+    def test_expected_sandbox_company_and_country_are_read_only_and_visible(self):
+        with patch.dict('os.environ',{'QBO_SANDBOX_REALM_ID':'123'}),patch('app.providers._qbo_connection',return_value=({},'123','host')),patch('app.providers.qbo_read',return_value={'CompanyInfo':{'Id':'1','Country':'CA','CompanyName':'TEST Canadian Company'}}) as read,patch('app.providers.qbo_call') as write:
+            r=self.sales.get('/api/quickbooks/test-connection')
+            self.assertTrue(r.json()['ok']);self.assertEqual(r.json()['realm_id'],'123')
+            self.assertEqual(r.json()['country'],'CA');read.assert_called_once_with(self.path,'companyinfo/123');write.assert_not_called()
+            q=self.state();self.assertTrue(q['account_verified']);self.assertEqual(q['realm_id'],'123');self.assertEqual(q['country'],'CA')
+
+    def test_wrong_sandbox_company_never_reaches_provider(self):
+        with patch.dict('os.environ',{'QBO_SANDBOX_REALM_ID':'999'}),patch('app.providers._qbo_connection',return_value=({},'123','host')),patch('app.providers.qbo_read') as read:
+            r=self.sales.get('/api/quickbooks/test-connection')
+            self.assertFalse(r.json()['ok']);self.assertEqual(r.json()['state'],'Wrong company');read.assert_not_called()
+            self.assertFalse(self.state()['account_verified'])
+
+    def test_missing_or_wrong_country_is_not_verified(self):
+        for country in ('','US'):
+            with self.subTest(country=country),patch.dict('os.environ',{'QBO_SANDBOX_REALM_ID':'123'}),patch('app.providers._qbo_connection',return_value=({},'123','host')),patch('app.providers.qbo_read',return_value={'CompanyInfo':{'Id':'1','Country':country,'CompanyName':'TEST'}}):
+                r=self.sales.get('/api/quickbooks/test-connection')
+                self.assertFalse(r.json()['ok']);self.assertEqual(r.json()['state'],'Canadian company not verified')
+                self.assertFalse(self.state()['account_verified'])
+
+    def test_old_account_check_cannot_prove_country_for_new_sandbox_pin(self):
+        with patch('app.providers._qbo_connection',return_value=({},'123','host')),patch('app.providers.qbo_read',return_value={'CompanyInfo':{'Id':'1','CompanyName':'TEST'}}):self.sales.get('/api/quickbooks/test-connection')
+        with patch.dict('os.environ',{'QBO_SANDBOX_REALM_ID':'123'}):
+            self.assertFalse(self.state()['account_verified'])
+
     def test_company_switch_does_not_reuse_previous_verification(self):
         with patch('app.providers._qbo_connection',return_value=({},'123','host')),patch('app.providers.qbo_read',return_value={'CompanyInfo':{'Id':'1','CompanyName':'TEST Company'}}):self.sales.get('/api/quickbooks/test-connection')
         with transaction(self.path) as db:token_save(db,'quickbooks',{'access_token':'fictional-only','realm_id':'456'})
