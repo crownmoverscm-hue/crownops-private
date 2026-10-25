@@ -8,7 +8,7 @@ import json
 import os
 from fastapi import Depends, HTTPException
 from .store import connect, transaction, one, insert, now, dumps, audit
-from .platform_common import require_role, SALES, quickbooks_environment, quickbooks_gate
+from .platform_common import require_role, SALES, quickbooks_environment, quickbooks_gate, business_day
 
 
 def workflow(db,qid):
@@ -89,7 +89,7 @@ def sync_acceptance(path,qid,actor):
         if remote.get('TxnStatus')!='Accepted':
             payload={'Id':linked['external_id'],'SyncToken':remote['SyncToken'],'sparse':True,
                      'CustomerRef':remote['CustomerRef'],'TxnStatus':'Accepted','AcceptedBy':ref['name'],
-                     'AcceptedDate':str(ref['accepted_at'])[:10]}
+                     'AcceptedDate':business_day(ref['accepted_at'])}
             # Intuit requestid is stable; a retry reads remote status first.
             remote=qbo_call(path,'POST','estimate',payload,'portal-acceptance:'+qid)['Estimate']
         validate_remote(linked,remote,require_quebec=True)

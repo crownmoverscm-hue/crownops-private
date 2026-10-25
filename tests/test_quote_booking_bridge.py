@@ -62,8 +62,13 @@ class QuoteBookingBridgeTests(unittest.TestCase):
         self.assertEqual(r.status_code,200,r.text);self.assertFalse(r.json()['booking_confirmed'])
         again=client.post('/api/portal/quotes/'+self.qid+'/accept',json=accept)
         self.assertEqual(again.status_code,200,again.text)
+        with transaction(self.path) as db:
+            accepted=json.loads(one(db,'SELECT acceptance_ref FROM quotes WHERE id=?',(self.qid,))['acceptance_ref'])
+            accepted['accepted_at']='2026-10-25T03:30:00+00:00'  # Oct 24 in Montreal.
+            db.execute('UPDATE quotes SET acceptance_ref=? WHERE id=?',(dumps(accepted),self.qid))
         r=self.client.post(self.base+'/sync-acceptance',json={'confirm':True});self.assertEqual(r.status_code,200,r.text)
         self.assertEqual(r.json()['acceptance']['quickbooks_sync'],'Synced')
+        self.assertEqual(self.f.remote['AcceptedDate'],'2026-10-24')
         self.client.post(self.base+'/sync-acceptance',json={'confirm':True})
         self.assertEqual(self.accept_writes,1);self.assertEqual(self.f.send_count,0)
         with closing(connect(self.path)) as db:
