@@ -89,14 +89,16 @@ No future-year material prices are invented; catalog has no effective-date prici
 
 ## Still required for actual milestone
 
-- Merge/review branch and run browser CI; arrange staging release AFTER Muse finishes
-  the current build retest. Record the actual deployed version/build at that time.
+- Keep PR #88 draft and use the separate quote-acceptance service. Do not deploy over
+  Muse's Staff AI service. Record the actual deployment commit/build after deployment.
 - Owner-authorized Gmail/Intuit sandbox credentials, exact sandbox company, reviewed
   service item/tax/discount account; secret values entered only in protected dashboards.
 - Sender proof email + received-message confirmation; separate explicit quote-email approval.
 - Real provider scenario: saved quote → actual QB ID and exact cents → approved inbox
   delivery → portal acceptance → one Tentative job → real acceptance sync evidence.
-- New original form fixtures and an authorized stored-exception recovery report.
+- Retrieve the four original TEST form payloads from stored exceptions or the correct
+  authorized mailbox; do not assume an empty unrelated mailbox proves absence. Run
+  reviewed recovery only after preview and authorization.
 - Canonical rate/fee approvals, final confirmation human-call gate, full role matrix,
   invoices/deposits, security/backups and production approval remain launch gates.
 
@@ -116,3 +118,54 @@ Gmail or QuickBooks integration acceptance, and have not sent mail or money.
   bridge flag. Configure credentials privately in the correct staging service before
   attempting the authorized real-provider walkthrough. Do not copy production grants.
 - Draft PR #88 targets feature/ai-staff-controls so Muse's current build remains stable.
+
+
+## Quote-test activation and secure preflight (October 25)
+
+The separate `crownops-quote-acceptance` service and its own volume are staged only;
+there is no deployed URL or live test database yet. Muse's active Staff AI service
+is unchanged. Before applying a patch, read back its complete resource list and
+confirm it changes only the new test service/volume; never apply unrelated changes.
+
+Do not infer OAuth grant absence from Railway variable names. In an existing
+owner-authenticated staging session, inspect `/api/connections` and
+`/api/quickbooks/setup`; the latter performs read-only provider queries. Record
+actual company name, realm, environment, country and retrieved reference IDs.
+Check the existing server encryption key can decrypt saved grants before replacing
+any key. Do not copy production databases, credentials or grants into the new service.
+
+For the new empty service, configure a fresh protected server encryption key and
+staging OAuth clients only after confirming it contains no saved grants. Obtain
+Google Web client settings from the existing authorized Cloud project; obtain
+Intuit Development settings from the existing authorized Intuit app. Enter secret
+values directly in Railway Variables, never in chat or source files. Register the
+actual new HTTPS domain plus `/api/oauth/gmail/callback` and
+`/api/oauth/quickbooks/callback` respectively, and set `CROWNOPS_PUBLIC_URL` to that
+same domain. Connect `crownmovers.cm@gmail.com` through the account chooser; verify
+`info@crownmovers.ca` From and Reply-To through the proof flow. Do not substitute
+the separate ChatGPT Gmail connector, which currently uses another mailbox.
+
+New combined-flow company gate: set non-secret `QBO_SANDBOX_REALM_ID` to the actual
+owner-approved Canadian sandbox company ID. Do not invent it from the historical
+name 'Sandbox Company CA 5634'. Every combined prepare/review/delivery/sync checks
+that realm and reads CompanyInfo.Country=CA. Missing realm, wrong company, missing
+country and unavailable provider fail closed before accounting writes or mail.
+`GET /api/quote-booking/sandbox-check` is staff-authenticated and read-only. It
+reports company verification separately from mappings and end-to-end acceptance.
+Acceptance synchronization explicitly reads the same estimate back after updating
+its status; an unconfirmed readback remains Unresolved, not Synced.
+
+Pricing test activation is independently controlled by
+`CROWNOPS_LOCAL_PRICING_POLICY=2026-10-25`; it is default off. This enables $35.99
+per truck for local Moving and the explicitly selected qualifying one-hour
+Afternoon Moving minimum. Packing, regular minimum, transport and long-distance
+rules are not newly approved. No automatic local kilometre surcharge is applied.
+
+Keep AI, workers, live payments, production accounting, invoice delivery and receipt
+sync off. Enable the sandbox write/combined-flow flags only for an approved test;
+external email additionally requires owner approval of the specific recipient and
+send. Existing valid sender proof can be reused only for the same actual identity;
+otherwise the verification email and quote email need separate explicit approval.
+
+The real-provider scenario is still BLOCKED/NOT TESTED. Simulated-provider tests
+are not evidence that any real email, estimate or booking was created.

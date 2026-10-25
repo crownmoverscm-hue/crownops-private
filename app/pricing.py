@@ -8,6 +8,7 @@ hours are ONLY the separate base-to-first and last-to-base allowance.
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 import json
+from . import local_pricing_policy
 
 MINIMUM_KEYS = ('morning_service_minimum', 'afternoon_micro_minimum', 'minimum_billable_hours')
 FUEL_KEYS = ('normal_local_fuel', 'extended_local_fuel', 'gas_per_truck')
@@ -90,20 +91,20 @@ def calculate(inputs, pricing):
     if base_high < base_low:
         raise ValueError('High service hours cannot be lower than low hours.')
     allowance = number(inputs.get('allowance_percent', 0), 'Planning allowance', 0, 50)
-    minimum = number(settings[mk], 'Minimum', 0, 12)
+    minimum = number(local_pricing_policy.afternoon_minimum(settings[mk]) if mk=='afternoon_micro_minimum' else settings[mk], 'Minimum', 0, 12)
     step = number(settings.get('time_increment_hours', .25), 'Time increment', .01, 1)
     def planned(h):
         return (max(minimum, h * (1 + allowance / 100)) / step).quantize(Decimal('1'), rounding=ROUND_CEILING) * step
     lo, hi = planned(base_low), planned(base_high)
     transport = number(inputs.get('transport_hours'), 'Separate transport hours', 0, 100)
-    fuel = number(settings[fk], 'Fuel per vehicle', 0, 1000)
+    fuel = number(inputs.get('local_fuel_rate', local_pricing_policy.local_fuel_default(settings[fk])), 'Fuel per vehicle', 0, 1000)
     materials = number(inputs.get('materials_amount', 0), 'Materials allowance', 0, 50000)
     other = number(inputs.get('other_amount', 0), 'Other agreed charges', 0, 50000)
     discount = number(inputs.get('discount_amount', 0), 'Discount', 0, 50000)
     fixed = transport * rate + trucks * fuel + materials + other
     if discount > lo * rate + fixed:
         raise ValueError('Discount exceeds the low estimate.')
-    return {'currency':'CAD','before_tax':True,'hourly_rate_cents':cents(rate),
+    return {'currency':'CAD','before_tax':True,'local_pricing_policy':local_pricing_policy.snapshot(),'hourly_rate_cents':cents(rate),
             'service_low':float(lo),'service_high':float(hi),'minimum_hours':float(minimum),
             'transport_hours':float(transport),'transport_cents':cents(transport*rate),
             'fuel_per_truck_cents':cents(fuel),'fuel_cents':cents(fuel*trucks),

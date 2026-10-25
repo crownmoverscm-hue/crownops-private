@@ -17,7 +17,7 @@ class QuoteBookingBridgeTests(unittest.TestCase):
         self.f=fixture.EstimateDeliveryTests();self.f.setUp();self.addCleanup(self.f.doCleanups)
         self.path,self.client,self.qid=self.f.path,self.f.client,self.f.qid
         self.base='/api/quotes/'+self.qid+'/booking-workflow'
-        env=patch.dict('os.environ',{'CROWNOPS_ENV':'staging','CROWNOPS_GMAIL_QBO_SANDBOX_WORKFLOW':'1','QBO_ENV':'sandbox','CROWNOPS_ALLOW_EXTERNAL':'1'})
+        env=patch.dict('os.environ',{'CROWNOPS_ENV':'staging','CROWNOPS_GMAIL_QBO_SANDBOX_WORKFLOW':'1','QBO_ENV':'sandbox','CROWNOPS_ALLOW_EXTERNAL':'1','QBO_SANDBOX_REALM_ID':'123'})
         env.start();self.addCleanup(env.stop)
         self.accept_writes=0
         def provider(path,method,resource,body,key):
@@ -25,12 +25,65 @@ class QuoteBookingBridgeTests(unittest.TestCase):
                 self.accept_writes+=1;self.f.remote.update(body);self.f.remote['SyncToken']='1'
                 return {'Estimate':deepcopy(self.f.remote)}
             return self.f.create(path,method,resource,body,key)
-        for mock in (patch('app.estimate_delivery.qbo_call',side_effect=provider),patch('app.providers.qbo_call',side_effect=provider),patch('app.providers.qbo_read',side_effect=self.f.read)):
+        for mock in (patch('app.estimate_delivery.qbo_call',side_effect=provider),patch('app.providers.qbo_call',side_effect=provider),patch('app.providers.qbo_read',side_effect=lambda path,resource: {'CompanyInfo':{'Country':'CA','CompanyName':'TEST Canadian Sandbox'}} if resource.startswith('companyinfo/') else self.f.read(path,resource))):
             mock.start();self.addCleanup(mock.stop)
         with transaction(self.path) as db:
             cfg={'connected_mailbox':'mailbox@example.invalid','send_as':'info@example.invalid','reply_to':'info@example.invalid','approved':True}
             put_setting(db,'company_communications',cfg)
             put_setting(db,'company_sender_proof',{'state':'Sending enabled','identity_hash':identity_key(cfg),'actual_from':cfg['send_as'],'actual_reply_to':cfg['reply_to']})
+
+    def test_company_preflight_rejects_missing_or_wrong_realm_without_writes(self):
+        for realm,status in (('',503),('999',409)):
+            with patch.dict('os.environ',{'QBO_SANDBOX_REALM_ID':realm}):
+                r=self.client.post(self.base+'/prepare',json={'confirm':True,'basis':'high'})
+                self.assertEqual(r.status_code,status,r.text)
+                self.assertEqual(self.f.create_count,0)
+        with closing(connect(self.path)) as db:
+            self.assertEqual(len(rows(db,'SELECT * FROM quote_booking_workflows')),0)
+
+    def test_company_preflight_rejects_non_canadian_or_missing_country(self):
+        for company in ({'Country':'US'},{}):
+            with patch('app.providers.qbo_read',return_value={'CompanyInfo':company}):
+                r=self.client.post(self.base+'/prepare',json={'confirm':True,'basis':'high'})
+                self.assertEqual(r.status_code,409,r.text)
+                self.assertEqual(self.f.create_count,0)
+
+    def test_company_preflight_provider_failure_does_not_claim_connection_or_write(self):
+        with patch('app.providers.qbo_read',side_effect=TimeoutError('private provider details')):
+            r=self.client.get('/api/quote-booking/sandbox-check')
+            self.assertEqual(r.status_code,502,r.text)
+            self.assertNotIn('private provider details',r.text)
+            self.assertEqual(self.f.create_count,0)
+
+    def test_company_preflight_reports_company_separately_from_e2e_readiness(self):
+        r=self.client.get('/api/quote-booking/sandbox-check')
+        self.assertEqual(r.status_code,200,r.text)
+        self.assertEqual(r.json()['country'],'CA')
+        self.assertEqual(r.json()['realm_id'],'123')
+        self.assertNotIn('READY FOR SANDBOX TESTING',r.text)
+        self.assertEqual(self.f.create_count,0)
+
+    def test_acceptance_write_requires_independent_readback(self):
+        self.prepare_review()
+        # Use the existing portal acceptance path and then force stale readback.
+        from app.quote_booking_workflow import sync_acceptance
+        from app.store import dumps
+        with transaction(self.path) as db:
+            db.execute("UPDATE quotes SET status='Accepted',acceptance_ref=? WHERE id=?",
+                       (dumps({'portal_email':'template@example.invalid','name':'TEST Client','accepted_at':'2026-10-25T12:00:00+00:00'}),self.qid))
+        stale=deepcopy(self.f.remote)
+        stale['TxnStatus']='Pending'
+        def readback(path,resource):
+            if resource.startswith('companyinfo/'):
+                return {'CompanyInfo':{'Country':'CA','CompanyName':'TEST Canadian Sandbox'}}
+            return {'Estimate':deepcopy(stale)}
+        with patch('app.providers.qbo_read',side_effect=readback):
+            with self.assertRaises(Exception) as ctx:
+                sync_acceptance(self.path,self.qid,'sales')
+        self.assertEqual(ctx.exception.status_code,502)
+        with closing(connect(self.path)) as db:
+            self.assertEqual(one(db,'SELECT acceptance_state FROM quote_booking_workflows WHERE quote_id=?',(self.qid,))['acceptance_state'],'Unresolved')
+        self.assertEqual(self.accept_writes,1)
 
     def prepare_review(self):
         r=self.client.post(self.base+'/prepare',json={'confirm':True,'basis':'high'})

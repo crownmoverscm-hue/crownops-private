@@ -2,24 +2,23 @@
 
 Source: `config/workbook_pricing_snapshot.json`; marked approved_for_pilot=false. The numbers below are copied, NOT approved or deployed rates. Live database rates have not been read in this workstream.
 
-## Owner decision — October 25, 2026
+## Owner decision — October 25, 2026 (latest direct instruction)
 
-Owner approved the following direction for new quotes going forward:
-- Standard local fuel amount: CAD $35.99.
-- Afternoon local moving minimum: one hour of labour, plus transportation, plus CAD $35.99 fuel. This supersedes the previous 1.5-hour afternoon proposal.
-- These are separate charges; one hour is a labour minimum, not a promise that the move takes one hour. Actual additional service remains billable under the reviewed quote terms.
-- Existing accepted quotes are not repriced. No production pricing was changed by recording this decision.
-- Still to confirm before implementation: whether the fuel amount applies once per service or per truck; the transportation method/amount; whether the reduced minimum applies to all afternoon local moves or only the previously qualifying small jobs. Morning/general minimum and 2027 labour rates remain unapproved.
-- Record approval date separately from deployment date. No retroactive changes or implicit approval of other source rates.
+- Local Moving fuel default: **CAD $35.99 per truck**, separate from labour and transportation. This direct clarification supersedes the attached completed PDF / pasted directive's once-per-booking wording.
+- Route scope: 700 rue Hodge → all pickups and destinations → 700 rue Hodge. Standard fuel covers total distance up to 40 km. Keep $35.99 as the default even when entered distance is larger; staff may manually adjust the per-truck amount. No automatic kilometre surcharge, threshold fee or 5% local distance buffer is approved. The owner mentioned $0.94/km for multi-stop routes; do not automatically infer whether that replaces the fee or is added.
+- Qualifying afternoon local Moving labour minimum: **one hour**, plus separately reviewed transportation and fuel, before applicable taxes. Additional service time remains billable under reviewed terms.
+- Precise afternoon cutoff / expanded eligibility, transportation formula and morning/general minimum remain pending. Preserve existing explicit small-afternoon opt-in rather than automatically treating every afternoon service as eligible. Packing and long-distance policy are not changed.
+- Approved direction recorded October 25, 2026; activate for new quote calculations only after an approved deployment. Never reprice stored accepted quote snapshots.
+- Implementation switch: `CROWNOPS_LOCAL_PRICING_POLICY=2026-10-25`, default off. Both local calculators use the approved fee and afternoon minimum when enabled. Results carry a policy version snapshot. This does not approve labour rates or any 2027 price table.
 
 ## Decisions to approve
 
 | Decision | Current source/code | What owner must approve |
 |---|---|---|
 | Labour | Seasonal source table below; dated rates and daily overrides also exist | Exact 2026 effective periods and 2–6 mover rates; separate 2027 periods and rates |
-| Local fuel | Source normal $35, extended/gas $39.99; CRM defaults $35/truck | Which fee applies, scope, effective dates, and whether per truck |
+| Local fuel | Approved $35.99/truck; 40 km complete base-to-base route; manual override | Deployment activation only; any automatic mileage formula remains unapproved |
 | Local transportation | Quote supports entered fixed amount ($35 placeholder), or team hourly base travel; extra truck $25 in hourly mode | Fixed vs hourly method and whether fuel/extra-truck fee is additional |
-| Minimum hours | Legacy source general 2.5h; CRM standard >=3h, qualifying small afternoon 1.5h | One standard minimum, qualifying afternoon exception and rounding policy |
+| Minimum hours | Legacy source general 2.5h; CRM standard >=3h, qualifying small afternoon 1.5h before the new policy | New one-hour Moving exception approved; general minimum, eligibility expansion and rounding changes remain pending |
 | Crew/truck rule | CRM requires 3 trucks for 6 movers; legacy calculator accepts 2 for 6 | Confirm the canonical rule; no staffing-policy change made in this branch |
 | Long distance | Code driving multiplier 1.15; round-trip km buffer 5%; $0.94/km/truck | Each multiplier/rate and whether both time and distance charges apply |
 | Deposit | Auto-draft default $300 | Amount/rule, due timing, exceptions and human confirmation process |
@@ -55,3 +54,20 @@ Do not reply simply approve all: labour and conflicting fees need explicit amoun
 Unapproved and deliberately unspecified. Provide exact date ranges, 2–6 mover hourly rates, fuel/transport/minimum rules, and approval reference. Existing 2026 accepted quotes keep their saved price snapshots; this work does not reprice them.
 
 Tax contract: fully taxable Quebec moves use TPS 5% and TVQ 9.975% independently on the pretax discounted base; $100 yields $114.98. Special exemptions or non-Quebec treatment require explicit accounting review, not automatic use of this normal-move check.
+
+
+## Transportation comparison — illustration only, not a rate approval
+
+Let R be the approved crew rate, H reviewed transport hours, and T a separately
+agreed fixed fee. For a one-truck, one-hour eligible afternoon move:
+
+| Method | Transport | Pretax minimum |
+|---|---|---|
+| Fixed | T, explicitly entered | R + T + $35.99 |
+| Hourly (existing code) | R × H; existing extra-truck amount requires review | R + (R × H) + $35.99 |
+
+Pure technical example using fictional R=$100/h, H=0.5h and T=$35: fixed method
+would yield $170.99 pretax; hourly method $185.99 pretax. These are not approved
+customer rates. Both must show fuel separately and must not also include that
+same fuel in a transportation bundle. Base travel and travel between client stops
+must not be billed twice. Do not select a new method until the owner approves it.

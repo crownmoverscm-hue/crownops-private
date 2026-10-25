@@ -189,7 +189,7 @@ async function crmQuoteBuilder(leadId='',options={}){
    field('hours_low','Estimated hours - low',3,'number','step="0.25" min="0.25" required')+
    field('hours_high','Estimated hours - high',4,'number','step="0.25" min="0.25" required')+
    field('minimum_hours','Minimum service hours',3,'number','step="0.25" min="0" required')+
-   '<label id="crm-small-afternoon-wrap" class="checkbox-label full"><input type="checkbox" name="small_afternoon_job"><span><strong>Small afternoon job</strong><br><span class="tiny muted">Use only for a small local Moving/Packing job. Sets Afternoon 1:00-4:00 PM and a 1.5-hour service minimum.</span></span></label>'+
+   '<label id="crm-small-afternoon-wrap" class="checkbox-label full"><input type="checkbox" name="small_afternoon_job"><span><strong>Small afternoon job</strong><br><span class="tiny muted">Use only for a small local Moving/Packing job. Sets Afternoon 1:00-4:00 PM and '+h(firstSetup.defaults?.afternoon_moving_minimum??1.5)+'-hour Moving minimum (Packing: 1.5 hours).</span></span></label>'+
    field('deposit_required','Deposit required',300,'number','step="0.01" min="0"')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-transport-fields"><div class="eyebrow">3 · TRANSPORTATION</div><p class="small muted">Local: transportation hours × team rate, plus $25 per extra truck. Long distance: enter true total driving time from 700 Rue Hodge through the route and back to base. Driving time of 1 hour+ is billed at 1.15×. Gas/distance uses actual round-trip road KM + 5%, then $0.94/km per truck.</p><div class="grid2">'+
@@ -198,6 +198,7 @@ async function crmQuoteBuilder(leadId='',options={}){
    field('fixed_transport','OR fixed transportation fee','','number','step="0.01" min="0"')+
    field('distance_km','Actual round-trip road km',0,'number','step="1" min="0"')+
    field('distance_rate','Long-distance rate / km',0.94,'number','step="0.01" min="0"')+
+   (firstSetup.local_pricing_policy?.version?'<div id="crm-local-fuel-wrap" class="full">'+field('local_fuel_rate','Local Moving fuel fee per truck',firstSetup.defaults.local_fuel_per_truck,'number','step="0.01" min="0"')+'<p class="small muted full">Local Moving default: $35.99 per truck for up to 40 km, from 700 rue Hodge through every stop and back. Review longer routes manually; no mileage surcharge is automatic. Transportation is separate.</p></div>':'')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-junk-fields" style="display:none"><div class="eyebrow">JUNK REMOVAL</div><div class="grid2">'+
    select('junk_tier','Truck space',[['single','$175 · Single item'],['quarter','$400 · 1/4 truck · approx. 5 ft'],['half','$800 · 1/2 truck · approx. 10 ft'],['three_quarter','$1,200 · 3/4 truck · approx. 15 ft'],['full','$1,600 · Full 20 ft truck']],'quarter')+
@@ -218,10 +219,11 @@ function crmQuoteData(){
  const d=Object.fromEntries(new FormData(f));d.materials=[];
  d.small_afternoon_job=Boolean(f.elements.small_afternoon_job?.checked);
  document.querySelectorAll('.crm-mat-check:checked').forEach(ch=>{const qty=document.querySelector('.crm-mat-qty[data-code="'+CSS.escape(ch.dataset.code)+'"]');d.materials.push({code:ch.dataset.code,name:ch.dataset.name,qty:Number(qty?.value||1),unit_price:Number(ch.dataset.price||0)/100});});
- for(const k of ['movers','trucks','hourly_rate','hours_low','hours_high','minimum_hours','deposit_required','transport_hours','fixed_transport','distance_km','distance_rate','junk_extra_half_hours','other_amount','discount_amount']){
+ for(const k of ['movers','trucks','hourly_rate','hours_low','hours_high','minimum_hours','deposit_required','transport_hours','fixed_transport','distance_km','distance_rate','junk_extra_half_hours','other_amount','discount_amount','local_fuel_rate']){
    if(d[k]===undefined)continue;
    if(d[k]==='')d[k]=null;else d[k]=Number(d[k]);
  }
+ if(d.service_type!=='Moving')delete d.local_fuel_rate;
  return d;
 }
 function crmRenderCalc(r){
@@ -248,6 +250,7 @@ function crmToggleServiceFields(){
  toggle('crm-junk-fields',type!=='Junk Removal');
  toggle('crm-moving-fields',type==='Junk Removal');
  toggle('crm-transport-fields',type==='Junk Removal');
+ toggle('crm-local-fuel-wrap',type!=='Moving');
  const smallWrap=document.getElementById('crm-small-afternoon-wrap'),small=f.elements.small_afternoon_job;
  const smallAllowed=['Moving','Packing'].includes(type);
  if(smallWrap)smallWrap.style.display=smallAllowed?'flex':'none';
@@ -356,7 +359,7 @@ document.addEventListener('change',async e=>{
      if(e.target.value!=='afternoon'&&f.elements.small_afternoon_job?.checked){f.elements.small_afternoon_job.checked=false;f.elements.minimum_hours.value='3';toast('Small afternoon job was turned off because the arrival window changed.');}
    }
    if(e.target.name==='small_afternoon_job'){
-     if(e.target.checked){f.elements.start_window.value='afternoon';f.elements.minimum_hours.value='1.5';crmToggleStartTime();toast('Afternoon window selected with a 1.5-hour service minimum.');}
+     if(e.target.checked){f.elements.start_window.value='afternoon';f.elements.minimum_hours.value=String(f.elements.service_type.value==='Moving'?(CRM.quoteSetup?.defaults?.afternoon_moving_minimum??1.5):1.5);crmToggleStartTime();toast('Afternoon window selected. Review the labour minimum, transportation and fuel separately.');}
      else{f.elements.minimum_hours.value='3';}
    }
    if(e.target.name==='movers'){

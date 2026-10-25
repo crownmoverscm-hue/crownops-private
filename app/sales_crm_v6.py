@@ -12,6 +12,7 @@ from fastapi import Depends, HTTPException
 from .store import connect, transaction, rows, one, insert, audit, uid, now, dumps
 from .platform_common import SALES, OFFICE, MANAGERS, require_role, settings, put_setting, queue_message, add_task, quickbooks_gate
 from .pricing import seasonal_rate, number as pricing_number
+from . import local_pricing_policy
 from .inquiry_intake import intake_values, photo_link
 from .client_communications import pending_scope_changes, quote_scope_current, booking_details, booking_confirmation_key
 
@@ -88,7 +89,7 @@ def service_minimum_hours(data,service):
             raise HTTPException(422,"The small-afternoon minimum is available only for local moving or packing services.")
         if start_window!="afternoon":
             raise HTTPException(422,"Small afternoon jobs must use the Afternoon arrival window.")
-        return Decimal("1.5"),True
+        return (local_pricing_policy.afternoon_minimum("1.5") if service=="Moving" else Decimal("1.5")),True
     if service in ("Moving","Packing"):
         return max(requested,Decimal("3")),False
     return requested,False
@@ -487,7 +488,7 @@ def calculate(db,data):
         show_transport_hours=transport_hours
     km=number(data.get("distance_km",0),"Actual round-trip distance km",0,10000);km_rate=number(data.get("distance_rate",LONG_KM),"Distance rate",0,20)
     adjusted_km=km*LONG_DISTANCE_KM_BUFFER if service=="Long Distance" else km
-    local_fuel=number(data.get('local_fuel_rate',LOCAL_FUEL),'Local fuel rate per truck',0,10000)
+    local_fuel=number(data.get('local_fuel_rate',local_pricing_policy.local_fuel_default(LOCAL_FUEL) if service=='Moving' else LOCAL_FUEL),'Local fuel rate per truck',0,10000)
     fuel=adjusted_km*km_rate*trucks if service=="Long Distance" else local_fuel*trucks
     mats,mat_total=materials(db,data.get("materials") or [])
     hos_plan=long_distance_hos_plan(transport_hours,high) if service=="Long Distance" else None
@@ -516,6 +517,7 @@ def calculate(db,data):
     if discount:lines.append({"name":"Rabais approuve" if fr else "Approved discount","qty":1,"unit_cents":-money(discount),"total_cents":-money(discount)})
     return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":money(rate),
       "suggested_hourly_rate_cents":money(suggested),"rate_source":source,"service_low":float(low),"service_high":float(high),
+      "local_pricing_policy":local_pricing_policy.snapshot() if service=="Moving" else {},
       "minimum_hours":float(minimum),"transport_hours":float(show_transport_hours),"billable_transport_hours":float(billable_transport_hours),"transport_cents":money(transport),
       "transport_multiplier":float(LONG_TRANSPORT_MULTIPLIER) if service=="Long Distance" and fixed in (None,"") and transport_hours>=1 else 1.0,
       "fuel_cents":money(fuel),"truck_fee_cents":money(EXTRA_TRUCK*max(0,trucks-1)),"distance_km":float(km),
@@ -767,7 +769,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
         return {"client":a,"lead":l,"suggested_hourly_rate":float(rate) if rate is not None else None,"rate_source":source or "",
           "materials":mats,"long_distance_presets":presets,"can_manage_materials":u['role'] in ('owner','manager'),
           "billing_taxes":(policy.get('terms') or {}).get('taxes',[]) if policy.get('approved') else [],
-          "defaults":{"local_fuel_per_truck":35.0,"extra_truck_transport":25.0,"long_distance_per_km":0.94,
+          "local_pricing_policy":local_pricing_policy.snapshot(),
+          "defaults":{"afternoon_moving_minimum":float(local_pricing_policy.afternoon_minimum("1.5")),"local_fuel_per_truck":float(local_pricing_policy.local_fuel_default(LOCAL_FUEL)),"extra_truck_transport":25.0,"long_distance_per_km":0.94,
             "long_distance_km_buffer_percent":5.0,"deposit":300.0,"limited_liability":"$0.60/lb per article"}}
 
     @app.post("/api/crm/quotes/calculate")

@@ -21,8 +21,35 @@ def gate():
         raise HTTPException(503,'The combined Gmail/QuickBooks walkthrough is staging-only and has not been enabled.')
 
 
+def verify_test_company(path):
+    """Read back the intended Canadian sandbox before any combined-flow action.
+
+    Realm IDs are non-secret identifiers; never infer them from a company name.
+    An absent country is unverified, not an invitation to assume Canada.
+    """
+    gate()
+    expected=os.getenv('QBO_SANDBOX_REALM_ID','').strip()
+    if not expected.isdigit():
+        raise HTTPException(503,'Set the verified Canadian sandbox company ID (QBO_SANDBOX_REALM_ID) before this test.')
+    from .estimate_delivery import _qbo_connection
+    from .providers import qbo_read
+    _,realm,_=_qbo_connection(path)
+    if str(realm)!=expected:
+        raise HTTPException(409,'Wrong QuickBooks sandbox company. No accounting write or email was requested.')
+    try:
+        company=qbo_read(path,'companyinfo/'+str(realm)).get('CompanyInfo',{})
+    except Exception:
+        raise HTTPException(502,'Sandbox CompanyInfo could not be verified. Check the saved connection; no accounting write or email was requested.')
+    if str(company.get('Country','')).upper()!='CA':
+        raise HTTPException(409,'The selected sandbox is not verified as a Canadian company. No accounting write or email was requested.')
+    return {'environment':'sandbox','realm_id':str(realm),'company_name':company.get('CompanyName',''),
+            'country':'CA','checked_at':now(),'state':'Company verified',
+            'note':'Company verification alone does not certify tax mappings, delivery or acceptance.'}
+
+
 def check_delivery(path,qid,data):
     gate()
+    verify_test_company(path)
     from .estimate_delivery import preview, source
     from .sender_proof import verified_company_sender
     with closing(connect(path)) as db:
@@ -72,6 +99,7 @@ def status(db,qid):
 
 def sync_acceptance(path,qid,actor):
     gate();quickbooks_gate()
+    verify_test_company(path)
     from .estimate_delivery import same_company,validate_remote,source
     from .providers import qbo_read,qbo_call
     with closing(connect(path)) as db:
@@ -91,7 +119,9 @@ def sync_acceptance(path,qid,actor):
                      'CustomerRef':remote['CustomerRef'],'TxnStatus':'Accepted','AcceptedBy':ref['name'],
                      'AcceptedDate':business_day(ref['accepted_at'])}
             # Intuit requestid is stable; a retry reads remote status first.
-            remote=qbo_call(path,'POST','estimate',payload,'portal-acceptance:'+qid)['Estimate']
+            qbo_call(path,'POST','estimate',payload,'portal-acceptance:'+qid)
+            # A successful write response alone is not proof of stored state.
+            remote=qbo_read(path,'estimate/'+linked['external_id'])['Estimate']
         validate_remote(linked,remote,require_quebec=True)
         if remote.get('TxnStatus')!='Accepted':raise ValueError('Provider did not confirm acceptance')
     except Exception:
@@ -113,6 +143,11 @@ def register_quote_booking_workflow(app,path,auth,finalize):
             totals_json TEXT NOT NULL DEFAULT '{}', acceptance_state TEXT NOT NULL DEFAULT 'Not accepted',
             error TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL, created_at TEXT NOT NULL,updated_at TEXT NOT NULL)""")
 
+    @app.get('/api/quote-booking/sandbox-check')
+    def sandbox_check(u=Depends(auth)):
+        require_role(u,SALES)
+        return verify_test_company(path)
+
     @app.get('/api/quotes/{qid}/booking-workflow')
     def get_status(qid:str,u=Depends(auth)):
         require_role(u,SALES)
@@ -122,6 +157,7 @@ def register_quote_booking_workflow(app,path,auth,finalize):
     def prepare(qid:str,data:dict,u=Depends(auth)):
         require_role(u,SALES);gate()
         if data.get('confirm') is not True:raise HTTPException(422,'Confirm preparation of an unsent sandbox estimate.')
+        verify_test_company(path)
         from .estimate_delivery import prepare as prepare_estimate,source
         with transaction(path) as db:
             source(db,qid)
@@ -135,6 +171,7 @@ def register_quote_booking_workflow(app,path,auth,finalize):
     @app.get('/api/quotes/{qid}/booking-workflow/preview')
     def preview(qid:str,u=Depends(auth)):
         require_role(u,SALES);gate()
+        verify_test_company(path)
         from .estimate_delivery import preview as estimate_preview
         with closing(connect(path)) as db:
             if not workflow(db,qid):raise HTTPException(409,'Prepare the combined workflow first.')

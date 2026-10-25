@@ -87,6 +87,25 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   assert(await page.locator('#modal').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'combined modal overflow '+width);
   await page.locator('#modal [data-action="close"]').first().click();
  }
+ // Server policy metadata controls the editor; no provider call is made here.
+ await page.route('**/api/crm/quote-setup?**',async route=>{
+  const response=await route.fetch(),data=await response.json();
+  data.local_pricing_policy={version:'2026-10-25'};
+  data.defaults={...data.defaults,local_fuel_per_truck:35.99,afternoon_moving_minimum:1};
+  await route.fulfill({json:data});
+ });
+ for(const width of [320,390,768,1440]){
+  await page.setViewportSize({width,height:900});
+  await page.evaluate(()=>crmQuoteBuilder('FINISH-L0'));
+  await page.locator('[name=small_afternoon_job]').check();
+  assert.equal(await page.locator('[name=minimum_hours]').inputValue(),'1');
+  assert.equal(await page.locator('[name=local_fuel_rate]').inputValue(),'35.99');
+  await page.locator('[name=local_fuel_rate]').fill('94');
+  assert.equal(await page.locator('[name=local_fuel_rate]').inputValue(),'94');
+  assert.match(await page.locator('#modal').innerText(),/700 rue Hodge/);
+  assert(await page.locator('#modal').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'local pricing overflow '+width);
+  await page.getByRole('button',{name:'Cancel',exact:true}).last().click();
+ }
  assert.equal(sends,4);assert.equal(invoiceSends,4);assert.equal(bridgeSends,4);assert.deepEqual(errors,[]);await browser.close();
  console.log('PASS: mocked quote send/acceptance, invoice email and company verification at four widths. No real provider, email or payment.');
 })().catch(error=>{console.error(error);process.exit(1);});
