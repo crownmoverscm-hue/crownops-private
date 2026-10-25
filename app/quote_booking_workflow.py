@@ -28,7 +28,9 @@ def check_delivery(path,qid,data):
     with closing(connect(path)) as db:
         row=workflow(db,qid)
         if not row:raise HTTPException(409,'Prepare the combined sandbox workflow first.')
-        source(db,qid)
+        linked=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,))
+        if not linked or source(db,qid)[3]!=linked['source_hash']:
+            raise HTTPException(409,'The estimate or booking terms changed. Review a new current revision before delivery.')
         if data.get('sync_quickbooks') is True:raise HTTPException(409,'This quote already uses the itemized QuickBooks estimate. Do not create a legacy export.')
         if data.get('send_now') is True and not verified_company_sender(db):
             raise HTTPException(409,'Verify and approve the actual company From/Reply-To before sending.')

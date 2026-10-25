@@ -10,6 +10,7 @@ Source: `config/workbook_pricing_snapshot.json`; marked approved_for_pilot=false
 | Local fuel | Source normal $35, extended/gas $39.99; CRM defaults $35/truck | Which fee applies, scope, effective dates, and whether per truck |
 | Local transportation | Quote supports entered fixed amount ($35 placeholder), or team hourly base travel; extra truck $25 in hourly mode | Fixed vs hourly method and whether fuel/extra-truck fee is additional |
 | Minimum hours | Legacy source general 2.5h; CRM standard >=3h, qualifying small afternoon 1.5h | One standard minimum, qualifying afternoon exception and rounding policy |
+| Crew/truck rule | CRM requires 3 trucks for 6 movers; legacy calculator accepts 2 for 6 | Confirm the canonical rule; no staffing-policy change made in this branch |
 | Long distance | Code driving multiplier 1.15; round-trip km buffer 5%; $0.94/km/truck | Each multiplier/rate and whether both time and distance charges apply |
 | Deposit | Auto-draft default $300 | Amount/rule, due timing, exceptions and human confirmation process |
 | Materials | Existing SKU sell/cost values; no dated material price book | Approved current list and separate future effective-date requirements |

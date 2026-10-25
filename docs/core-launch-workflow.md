@@ -72,10 +72,11 @@ certify those original templates or the live four-form acceptance test.
 ## Bulk preparation only
 
 Owner-only POST `/api/launch/staff-invitations/preview` and `/materials/preview` take
-`{rows:[...]}` (1–200). They return normalized values, errors, intended action and hash.
+`{rows:[...]}` (1–200), or `{csv:"..."}` (under 100 KB). They return normalized values, errors, intended action and hash.
 NO apply endpoint is exposed: no invitations, employee accounts or catalog changes occur.
-UI accepts JSON; CSV upload/import and bilingual SKU/QBO mapping need a later reviewed
-extension before claiming a full bulk import is launch-ready.
+UI accepts a CSV file or JSON. CSV uses the same field names, explicit true/false booleans,
+strict headers and quoting checks. Bilingual SKU/QBO mapping and a separately approved
+apply workflow remain required before claiming a full bulk import is launch-ready.
 
 Staff fields: name,email,role,employee_id. Existing login, current invitation, duplicate
 email, invalid role, inactive/nonexistent employee and missing crew mapping are flagged.
@@ -101,3 +102,17 @@ No future-year material prices are invented; catalog has no effective-date prici
 
 Local contract tests use simulated providers and disposable SQLite. They are not real
 Gmail or QuickBooks integration acceptance, and have not sent mail or money.
+
+## Evidence collected in this workstream
+
+- Full local regression: 642 tests passed before the final stale-terms/invalid-payload
+  hardening; 20 JavaScript tests passed. Final branch CI is authoritative for the head.
+- GitHub account verified as crownmoverscm-hue / crownmovers.cm@gmail.com.
+- Railway staging remains deployment a526ea6a-0f41-47f2-a4db-28fbc96c7a2a, SUCCESS,
+  commit cc69ca7790e50204b95c484da3eda39d3db2202f. This branch was not deployed.
+- OAuth-scoped staging variable inventory exposes names only. It contains no
+  GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET, QBO_CLIENT_ID/QBO_CLIENT_SECRET/QBO_ENV,
+  CROWNOPS_SECRET_KEY, CROWNOPS_TEST_EMAIL_ALLOWLIST, intake webhook secret or new
+  bridge flag. Configure credentials privately in the correct staging service before
+  attempting the authorized real-provider walkthrough. Do not copy production grants.
+- Draft PR #88 targets feature/ai-staff-controls so Muse's current build remains stable.

@@ -2,6 +2,8 @@
 from contextlib import closing
 import hashlib
 import re
+import csv
+import io
 from fastapi import Depends, HTTPException
 from .store import connect, one, rows, dumps, now
 from .platform_common import require_role
@@ -9,8 +11,28 @@ from .pricing import number, cents
 
 
 def batch(data,allowed):
+    if set(data)=={'csv'}:
+        source=data['csv']
+        if not isinstance(source,str) or len(source.encode())>100000:raise HTTPException(422,'Use a CSV under 100 KB.')
+        try:
+            reader=csv.DictReader(io.StringIO(source.lstrip('\ufeff')),strict=True)
+            headers=reader.fieldnames or []
+            if not headers or len(headers)!=len(set(headers)) or set(headers)-allowed:
+                raise HTTPException(422,'CSV headers must be unique documented field names.')
+            records=[]
+            for row in reader:
+                if None in row or any(value is None for value in row.values()):raise HTTPException(422,'Each CSV row must match its headers.')
+                row={key:value.strip() for key,value in row.items()}
+                if not any(row.values()):continue
+                for key in ('taxable','active'):
+                    if key in row and row[key].casefold() in ('true','false'):row[key]=row[key].casefold()=='true'
+                if row.get('version','').isdigit():row['version']=int(row['version'])
+                records.append(row)
+                if len(records)>200:raise HTTPException(422,'Use at most 200 CSV rows per preview.')
+            data={'rows':records}
+        except csv.Error:raise HTTPException(422,'CSV quoting or formatting is invalid.')
     if set(data)!={'rows'} or not isinstance(data['rows'],list) or not 1<=len(data['rows'])<=200:
-        raise HTTPException(422,'Supply 1–200 rows for a dry-run preview.')
+        raise HTTPException(422,'Supply 1–200 rows or CSV records for a dry-run preview.')
     if any(not isinstance(row,dict) or set(row)-allowed for row in data['rows']):
         raise HTTPException(422,'Unknown import fields. Use the documented preview format.')
     return data['rows']

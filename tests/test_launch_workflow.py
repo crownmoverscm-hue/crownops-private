@@ -123,6 +123,15 @@ class LaunchWorkflowTests(unittest.TestCase):
         r=self.client.post('/api/launch/materials/preview',json={'rows':[{'code':'TEST','name':'Box','category':'Boxes','taxable':True,'active':True}]}).json()
         self.assertEqual(r['invalid_rows'],1)
 
+    def test_csv_previews_validate_types_and_write_nothing(self):
+        before=self.counts()
+        csv='code,name,category,sell_price,cost_price,taxable,active\nTEST_BOX,"Box, large",Boxes,12.50,4.00,true,true\n'
+        r=self.client.post('/api/launch/materials/preview',json={'csv':csv})
+        self.assertEqual(r.status_code,200,r.text);self.assertEqual(r.json()['valid_rows'],1)
+        self.assertEqual(r.json()['items'][0]['values']['name'],'Box, large');self.assertEqual(before,self.counts())
+        r=self.client.post('/api/launch/materials/preview',json={'csv':'code,code\nA,B'})
+        self.assertEqual(r.status_code,422)
+
     def test_setup_previews_owner_only_and_recovery_denies_crew(self):
         self.client.cookies.set('crownops_session','sales-token');self.client.headers['x-csrf-token']='sales-csrf'
         for route in ('/api/launch/staff-invitations/preview','/api/launch/materials/preview','/api/intake/recovery/preview'):

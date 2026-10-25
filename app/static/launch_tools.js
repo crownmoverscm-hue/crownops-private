@@ -16,7 +16,9 @@
  }
  function preview(kind){
   const recovery=kind==='recovery';
-  showModal('Dry-run preview — '+kind,'<p>This preview writes no records and sends nothing. Paste the documented '+(recovery?'event_ids':'rows')+' JSON object.</p><label>Preview data<textarea id="launch-preview-input" rows="10" style="width:100%;box-sizing:border-box">'+h(recovery?'{}':'{"rows": []}')+'</textarea></label><pre id="launch-preview-result" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>',
+  showModal('Dry-run preview — '+kind,'<p>This preview writes no records and sends nothing. '+(recovery?'Paste the documented event_ids JSON object.':'Choose a CSV file or paste the documented rows JSON object.')+'</p>'+
+   (recovery?'':'<label>CSV file<input id="launch-preview-file" type="file" accept=".csv,text/csv"></label>')+
+   '<label>Preview data<textarea id="launch-preview-input" rows="10" style="width:100%;box-sizing:border-box">'+h(recovery?'{}':'{"rows": []}')+'</textarea></label><pre id="launch-preview-result" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>',
    '<button data-action="close">Close</button><button data-launch="preview" data-kind="'+kind+'" class="btn-primary">Validate preview</button>');
  }
  const oldEstimate=window.openQuickBooksEstimate;
@@ -47,7 +49,10 @@
    if(['staff','materials','recovery'].includes(action))return preview(action);
    if(action==='preview'){
     const kind=b.dataset.kind,route=kind==='recovery'?'/intake/recovery/preview':'/launch/'+(kind==='staff'?'staff-invitations':'materials')+'/preview';
-    const result=await api(route,{method:'POST',data:JSON.parse(document.getElementById('launch-preview-input').value)});
+    const file=document.getElementById('launch-preview-file')?.files?.[0];
+    if(file&&file.size>100000)throw Error('Use a CSV under 100 KB.');
+    const data=file?{csv:await file.text()}:JSON.parse(document.getElementById('launch-preview-input').value);
+    const result=await api(route,{method:'POST',data});
     document.getElementById('launch-preview-result').textContent=JSON.stringify(result,null,2);return;
    }
    if(action.startsWith('sender-')){

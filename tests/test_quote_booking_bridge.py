@@ -94,6 +94,14 @@ class QuoteBookingBridgeTests(unittest.TestCase):
             r=self.client.post(self.base+'/prepare',json={'confirm':True,'basis':'high'})
         self.assertEqual(r.status_code,503);self.assertEqual(self.f.create_count,0)
 
+    def test_changed_booking_terms_block_email_draft_preparation(self):
+        r=self.client.post(self.base+'/prepare',json={'confirm':True,'basis':'high'});self.assertEqual(r.status_code,200,r.text)
+        preview=self.client.get(self.base+'/preview').json()
+        with transaction(self.path) as db:put_setting(db,'client_terms',{'approved':True,'version':'TEST-2','text':'Changed fictional terms'})
+        r=self.client.post(self.base+'/review',json={'confirm':True,'review_hash':preview['review_hash']})
+        self.assertEqual(r.status_code,409,r.text)
+        with closing(connect(self.path)) as db:self.assertEqual(rows(db,'SELECT * FROM outbound_messages'),[])
+
 
 class SenderProofTests(unittest.TestCase):
     def setUp(self):

@@ -22,6 +22,7 @@ def recovery_preview(db,ids):
         if not event:raise HTTPException(404,'Stored quote form not found: '+eid)
         try:payload=json.loads(event['payload_json'])
         except (ValueError,TypeError):payload={}
+        if not isinstance(payload,dict):payload={}
         parsed=_quote_fields(payload.get('body',''),payload.get('subject',''))
         match=match_inquiry_project(db,parsed,'quote')
         failures=[]
