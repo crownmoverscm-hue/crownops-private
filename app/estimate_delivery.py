@@ -128,7 +128,7 @@ def normalized_lines(entity):
     return result
 
 
-def validate_remote(row, remote):
+def validate_remote(row, remote, require_quebec=False):
     expected=json.loads(row['payload_json'])
     if str(remote.get('Id')) != str(row['external_id']): raise HTTPException(409, 'QuickBooks returned a different estimate.')
     for key in ('CustomerRef','CurrencyRef'):
@@ -147,6 +147,11 @@ def validate_remote(row, remote):
             raise ValueError('Incomplete tax breakdown')
     except ValueError:raise HTTPException(409,'QuickBooks amounts or tax breakdown are incomplete. Review before sending or booking.')
     if total-tax != net: raise HTTPException(409, 'QuickBooks total does not match the estimate plus tax.')
+    from .quebec_taxes import taxable_move
+    expected_tax=taxable_move(net)
+    actual_tax_lines=sorted(_amount(line.get('Amount')) for line in remote.get('TxnTaxDetail',{}).get('TaxLine',[]))
+    if require_quebec and (tax!=expected_tax['tax_cents'] or actual_tax_lines!=sorted([expected_tax['gst_cents'],expected_tax['qst_cents']])):
+        raise HTTPException(409,'QuickBooks taxes must match TPS 5% and TVQ 9.975%, each on the pre-tax amount. Review the Quebec tax mapping before sending or booking.')
     return total,tax
 
 
@@ -200,7 +205,7 @@ def preview(path, qid):
     if not row['external_id']: return {'state':row['state'],'error':row['error']}
     same_company(path,row)
     remote=qbo_read(path,'estimate/'+row['external_id'])['Estimate']
-    total,tax=validate_remote(row,remote)
+    total,tax=validate_remote(row,remote,require_quebec=True)
     # This preview exposes exactly what the provider stored, including tax lines.
     tax_lines=[]
     for line in remote.get('TxnTaxDetail',{}).get('TaxLine',[]):
@@ -220,6 +225,9 @@ def preview(path, qid):
 
 def send(path,qid,data,actor):
     enabled();quickbooks_gate()
+    from .quote_booking_workflow import workflow
+    with closing(connect(path)) as db:
+        if workflow(db,qid):raise HTTPException(409,'This sandbox estimate uses CrownOps email. QuickBooks email must remain off.')
     if data.get('confirm') is not True: raise HTTPException(422,'Review the recipient, tax and full estimate, then confirm sending.')
     with closing(connect(path)) as db:
         row=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,))
@@ -231,7 +239,7 @@ def send(path,qid,data,actor):
     if (quickbooks_environment()=='sandbox' or os.getenv('CROWNOPS_ENV')!='production') and row['recipient'].lower() not in allowlist:
         raise HTTPException(403,'This test recipient has not been approved. No email was sent.')
     same_company(path,row)
-    remote=qbo_read(path,'estimate/'+row['external_id'])['Estimate'];validate_remote(row,remote)
+    remote=qbo_read(path,'estimate/'+row['external_id'])['Estimate'];validate_remote(row,remote,require_quebec=True)
     if remote.get('TxnStatus')!='Pending' or remote.get('EmailStatus') not in ('NotSet',None):
         raise HTTPException(409,'QuickBooks already sent or changed this estimate. Check its status instead of sending again.')
     if data.get('review_hash')!=review_hash(remote):raise HTTPException(409,'QuickBooks changed since preview. Review the latest amounts before sending.')
@@ -257,11 +265,14 @@ def send(path,qid,data,actor):
 
 
 def synchronize(path,qid,actor='quickbooks-sync'):
+    from .quote_booking_workflow import workflow
+    with closing(connect(path)) as db:
+        if workflow(db,qid):raise HTTPException(409,'This quote accepts through the CrownOps portal. Use its explicit sandbox acceptance synchronization.')
     with closing(connect(path)) as db:row=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,))
     if not row or not row['external_id']:raise HTTPException(409,'No linked QuickBooks estimate is ready to check.')
     try:
         same_company(path,row)
-        remote=qbo_read(path,'estimate/'+row['external_id'])['Estimate'];validate_remote(row,remote)
+        remote=qbo_read(path,'estimate/'+row['external_id'])['Estimate'];validate_remote(row,remote,require_quebec=True)
         before=json.loads(row['remote_json'])
         if row['state'] not in ('Ready','Preparing') and (remote.get('TotalAmt')!=before.get('TotalAmt') or remote.get('TxnTaxDetail')!=before.get('TxnTaxDetail')):
             raise HTTPException(409,'QuickBooks tax or total changed after delivery. Review before booking.')

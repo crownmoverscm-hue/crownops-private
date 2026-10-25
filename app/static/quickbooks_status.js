@@ -10,6 +10,7 @@
    (['owner','manager'].includes(S.user.role)?'<button data-ux="qbo-setup">Review tax / item setup</button>':'');
   const card=panel('QuickBooks — company connection',
    '<div class="row wrap">'+pill(q.state||'Not checked')+pill(q.environment==='production'?'LIVE ACCOUNT':'TEST ACCOUNT')+'</div>'+
+   '<p class="small"><strong>Configured environment: '+h(q.environment||'Not configured')+'</strong> · '+(q.authorized_at?'Verify the connected company with the account check.':'No connected company verified.')+'</p>'+
    '<div class="spacer"></div><div class="info-grid"><div><div class="info-label">Company</div><div class="strong">'+h(q.company_name||'Run the account check to confirm')+'</div></div>'+
    '<div><div class="info-label">Last account check</div><div class="strong">'+h(q.checked_at?uxTimestampLabel(q.checked_at):'Not checked')+'</div></div>'+
    '<div><div class="info-label">Accounting / tax setup</div><div class="strong">'+(q.mappings_complete?'Mappings reviewed':'Review needed')+'</div></div>'+

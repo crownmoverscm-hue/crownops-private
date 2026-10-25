@@ -163,14 +163,14 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
     if t.get('due_date'):payload['DueDate']=t['due_date']
     return payload
 
-def send_gmail(path,message):
+def send_gmail(path,message,*,sender_test=False):
     t=provider_token(path,'gmail')
     profile=requests.get('https://gmail.googleapis.com/gmail/v1/users/me/profile',headers={'Authorization':'Bearer '+t['access_token']},timeout=15)
     profile.raise_for_status();sender=profile.json().get('emailAddress','')
     if not isinstance(sender,str) or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',sender):raise ValueError('Gmail sender identity could not be confirmed.')
     with closing(connect(path)) as db:identity=settings(db,'company_communications',{}) or {}
     reply_to=sender
-    if identity.get('approved') is True:
+    if identity.get('approved') is True or sender_test:
         if str(identity.get('connected_mailbox','')).lower()!=sender.lower():raise ValueError('The connected mailbox changed. Management must review company email rules before sending.')
         alias=identity.get('send_as','');reply=identity.get('reply_to','')
         if any(not isinstance(value,str) or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',value) for value in (alias,reply)):raise ValueError('Review the company sender and reply email addresses before sending.')
@@ -200,6 +200,11 @@ def process_mail(path,mid):
     invoice_check=None
     with closing(connect(path)) as db:
         preview=one(db,'SELECT * FROM outbound_messages WHERE id=?',(mid,))
+        if preview and preview['status']=='Approved' and (preview.get('event_key') or '').startswith('quote-delivery:'):
+            from .quote_booking_workflow import workflow,check_delivery
+            qid=preview['event_key'].split(':')[1]
+            combined=workflow(db,qid)
+        else:combined=None
         if preview and preview['status']=='Approved' and preview['category']=='Collection':
             marker=(preview.get('event_key') or '').split(':')
             if len(marker)==4 and marker[0]=='balance':
@@ -226,6 +231,7 @@ def process_mail(path,mid):
             with transaction(path) as db:
                 db.execute("UPDATE outbound_messages SET status='Cancelled',error=? WHERE id=? AND status='Approved'",(reason,mid))
             return {'sent':False,'reason':reason,'payment_status':collection_check['status']}
+    if combined:check_delivery(path,qid,{'send_now':True,'review_hash':combined['review_hash']})
     with transaction(path) as db:
         m=one(db,'SELECT * FROM outbound_messages WHERE id=?',(mid,))
         if not m or m['status']!='Approved':raise HTTPException(409,'Only a reviewed and approved message can be sent.')
@@ -262,7 +268,13 @@ def process_mail(path,mid):
                 return {'sent':False,'reason':'Deposit request changed; stale message cancelled'}
         if m['event_key'].startswith('quote-delivery:'):
             _,qid,revision=m['event_key'].split(':')
-            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):
+            from .quote_booking_workflow import workflow,delivery_guard
+            linked_workflow=workflow(db,qid)
+            if linked_workflow:
+                delivery_guard(db,qid)
+                allowlist={x.strip().lower() for x in os.getenv('CROWNOPS_TEST_EMAIL_ALLOWLIST','').split(',') if x.strip()}
+                if m['recipient'].lower() not in allowlist:raise HTTPException(403,'Combined sandbox quote email requires an allowlisted test recipient.')
+            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)) and not linked_workflow:
                 raise HTTPException(409,'This estimate uses QuickBooks delivery. Review its status before sending another email.')
             q=one(db,'SELECT * FROM quotes WHERE id=? AND lead_id=?',(qid,l['id']))
             from .client_communications import quote_scope_current,pending_scope_changes

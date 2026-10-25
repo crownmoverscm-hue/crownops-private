@@ -70,7 +70,9 @@ def calculate(inputs, pricing):
     movers, trucks = int(movers_n), int(trucks_n)
     if movers >= 4 and trucks < 2:
         raise ValueError('Crown planning rule: crews of 4 or more need at least 2 trucks. Confirm any exception with management outside this pilot.')
-    rate, season = seasonal_rate(rates, str(inputs.get('move_date','')), movers)
+    # Managed dated rates do not require a second, potentially conflicting
+    # yearless seasonal row. Both quote engines use daily > dated > seasonal.
+    rate, season = (Decimal(0),'') if pricing.get('_annual_override') or pricing.get('_daily_override') else seasonal_rate(rates, str(inputs.get('move_date','')), movers)
     if pricing.get('_annual_override'):
         a=pricing['_annual_override']
         rate = Decimal(a[f'rate_{movers}_cents']) / 100
@@ -118,13 +120,15 @@ def calculate_with_overrides(inputs,pricing,db):
     from .store import one, rows
     p=dict(pricing)
     move_date=inputs.get('move_date')
-    annuals=rows(db,"SELECT * FROM annual_rate_periods WHERE active=1 AND start_date<=? AND end_date>=? ORDER BY version DESC",(move_date,move_date))
+    annuals=rows(db,"SELECT * FROM annual_rate_periods WHERE active=1 AND start_date<=? AND end_date>=? AND (?<'2027-01-01' OR approved_by!='migration') ORDER BY version DESC",(move_date,move_date,move_date))
     if len(annuals)>1:
         raise ValueError('Move date matches more than one managed annual rate period. Fix the pricing calendar before quoting.')
     annual=annuals[0] if annuals else None
     if annual:p['_annual_override']=annual
     override=one(db,'SELECT * FROM daily_rates WHERE service_date=? AND movers=? ORDER BY version DESC LIMIT 1',(move_date,inputs.get('movers')))
     if override:p['_daily_override']=override
+    if not annual and not override and date.fromisoformat(move_date).year>=2027:
+        raise ValueError('Approve an effective-dated rate period for this service year. Current rates are not automatically reused for 2027 or later.')
     result=calculate(inputs,p)
     if annual:result['annual_rate_period_id']=annual['id'];result['annual_rate_period_version']=annual['version']
     if override:result['daily_rate_id']=override['id'];result['daily_rate_version']=override['version']

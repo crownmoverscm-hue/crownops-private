@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import time
+from html.parser import HTMLParser
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
@@ -155,21 +156,38 @@ def _attachments(payload):
     return out
 
 
+class _MailText(HTMLParser):
+    """Extract visible text without treating a quoted > in a URL as a tag end."""
+    blocks={'br','p','div','tr','td','th','li','h1','h2','h3','h4','h5','h6'}
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts=[];self.hidden=0
+    def handle_starttag(self,tag,attrs):
+        if tag in ('script','style'):self.hidden+=1
+        if tag in self.blocks and not self.hidden:self.parts.append('\n')
+    def handle_endtag(self,tag):
+        if tag in ('script','style'):self.hidden=max(0,self.hidden-1)
+        if tag in self.blocks and not self.hidden:self.parts.append('\n')
+    def handle_data(self,data):
+        if not self.hidden:self.parts.append(data)
+
+
 def _clean_html(text):
-    if '<' not in text:
-        return html.unescape(text)
-    text = re.sub(r'(?is)<(script|style).*?>.*?</\1>', ' ', text)
-    text = re.sub(r'(?i)<br\s*/?>', '\n', text)
-    text = re.sub(r'(?i)</(p|div|tr|li|h[1-6])>', '\n', text)
-    return html.unescape(re.sub(r'(?s)<[^>]+>', ' ', text))
+    text=str(text or '')
+    # Some notification bodies contain escaped HTML instead of HTML MIME parts.
+    if not re.search(r'<[a-zA-Z/!]',text) and re.search(r'&lt;/?[a-zA-Z]',text):
+        text=html.unescape(text)
+    if re.search(r'<[a-zA-Z/!]',text):
+        parser=_MailText();parser.feed(text);parser.close();text=''.join(parser.parts)
+    return html.unescape(text).replace('\xa0',' ')
 
 
 def _value_after(text, label):
     lines=text.splitlines()
     for i,line in enumerate(lines):
-        match=re.fullmatch(r'[ \t]*'+re.escape(label)+r'[ \t]*:?[ \t]*(.*)',line,re.I)
+        match=re.fullmatch(r'[ \t]*'+re.escape(label)+r'[ \t]*(?::[ \t]*(.*))?',line,re.I)
         if not match:continue
-        value=match.group(1).strip()
+        value=(match.group(1) or '').strip()
         if value:return value
         for next_line in lines[i+1:i+5]:
             value=next_line.strip()
@@ -196,22 +214,23 @@ def _quote_fields(body, subject):
                 return v
         return ''
     name = anyv('Client Name', 'Name', 'Nom du client', 'Nom complet', 'Nom')
-    raw_email = anyv('Email', 'Courriel', 'Adresse courriel')
+    raw_email = anyv('Email', 'Email Address', 'E-mail', 'Courriel', 'Adresse courriel', 'Adresse e-mail')
     em = re.search(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', raw_email, re.I)
     email = em.group(0).lower() if em else ''
-    raw_phone = anyv('Phone', 'Téléphone', 'Telephone')
+    raw_phone = anyv('Phone', 'Phone Number', 'Telephone Number', 'Téléphone', 'Telephone', 'Numéro de téléphone')
     phone = _digits(raw_phone)
-    move_date = anyv('Moving Date', 'Date du déménagement', 'Date de déménagement')
+    move_date = anyv('Moving Date', 'Move Date', 'Preferred Moving Date', 'Date du déménagement', 'Date de déménagement', 'Date souhaitée')
     pickup = anyv('Pickup Address', 'Pickup Address or Postal Code', 'Pickup', 'Adresse de départ', 'Code postal de départ')
     dropoff = anyv('Destination Address', 'Destination Address or Postal Code', 'Destination', 'Adresse de destination', 'Adresse d’arrivée', "Adresse d'arrivée")
-    home = anyv('Home Size', 'Taille du logement')
+    home = anyv('Home Size', 'Move Size', 'Number of Bedrooms', 'Bedrooms', 'Taille du logement', 'Nombre de chambres')
     boxes = anyv('Approximate Boxes', 'Approximate Number of Boxes', 'Boxes', 'Nombre approximatif de boîtes', 'Boîtes')
     pickup_access = anyv('Pickup Access', 'Accès au départ')
     dropoff_access = anyv('Drop-off Access', 'Accès à destination')
     pickup_walk = anyv('Pickup Walking Distance', 'Walk at Pickup', 'Distance de marche au départ')
     dropoff_walk = anyv('Drop-off Walking Distance', 'Walk at Drop-off', 'Distance de marche à destination')
     heavy = anyv('Heavy Items', 'Heavy / Specialty Items', 'Objets lourds', 'Articles lourds ou spéciaux')
-    details = anyv('Additional Details', 'Additional Details or Other Services', 'Details / Notes', 'Détails supplémentaires')
+    details = anyv('Additional Details', 'Additional Details or Other Services', 'Details / Notes', 'Notes', 'Message', 'Détails supplémentaires', 'Commentaires')
+    inventory = anyv('Inventory', 'Furniture / Inventory', 'Furniture', 'Inventaire', 'Meubles')
     photo = anyv('Photo / Video Link', 'Photo or Video Link', 'Client photo or video link', 'Lien photos / vidéos')
     labels=['Client Name','Email','Phone','Moving Date','Pickup Address','Destination Address','Greater Montreal Move','Home Size','Pickup Access','Drop-off Access','Pickup Walking Distance','Drop-off Walking Distance','Approximate Boxes','Heavy Items','Additional Details','Photo / Video Link','Submission ID']
     boundary='|'.join(re.escape(x) for x in labels)
@@ -221,6 +240,9 @@ def _quote_fields(body, subject):
     local_area=anyv('Greater Montreal Move','Local Montreal','Déménagement dans le Grand Montréal')
     local_area={'oui':'Yes','non':'No','incertain':'Not sure','pas certain':'Not sure'}.get(local_area.casefold(),local_area)
     local_area=local_area if local_area in ('Yes','No','Not sure') else ''
+    start_window=anyv('Preferred Arrival Window','Arrival Window','Plage d’arrivée',"Plage d'arrivee").casefold()
+    start_window={'matin':'morning','après-midi':'afternoon','apres-midi':'afternoon','not sure':'unknown'}.get(start_window,start_window)
+    if start_window not in ('morning','afternoon','unknown'):start_window=''
     if photo.startswith('END_CROWN_'):photo=''
     if not move_date:
         date_match=re.search(r'(\d{4}-\d{2}-\d{2})\s*$',subject)
@@ -236,7 +258,7 @@ def _quote_fields(body, subject):
     if explicit_language in ('fr','fr-ca','french','français','francais'):language='French'
     elif explicit_language in ('en','en-ca','english','anglais'):language='English'
     else:
-        french_marker=re.search(r'\b(?:QuickQuoteForm|QuoteForm|InstantEstimateForm)[ _-]*FR\b|/fr/(?:demenagement-montreal|calculateur-cout-demenagement-montreal)/',subject+'\n'+text,re.I)
+        french_marker=re.search(r'\b(?:Quick\s*Quote\s*Form|Quote\s*Form|Instant\s*Estimate\s*Form)[ _-]*FR\b|\bFree Quote FR\b|/fr/(?:demenagement-montreal|calculateur-cout-demenagement-montreal)/',subject+'\n'+text,re.I)
         french_fields=re.search(r'(?im)^\s*(?:Nom du client|Date du déménagement|Date de déménagement|Taille du logement)\s*:',text)
         language='French' if french_marker or french_fields else 'English'
     return {
@@ -255,8 +277,11 @@ def _quote_fields(body, subject):
         'heavy_items': heavy,
         'photo_link': photo,
         'notes': notes,
-        'inventory': details,
-        'intake': {'local_area':local_area,'service_details':details},
+        'inventory': inventory or details,
+        'intake': {'local_area':local_area,'service_details':details,'start_window':start_window,
+                   'between_stops_minutes':anyv('Driving Minutes Between Stops','Minutes de conduite entre les adresses'),
+                   'pickup_base_minutes':anyv('Base to Pickup Minutes','Minutes du dépôt au départ'),
+                   'return_base_minutes':anyv('Return to Base Minutes','Minutes de retour au dépôt')},
         'source': 'Gmail',
         'lead_type': 'Instant estimate' if subject.startswith('New Instant') else 'Form',
         'stage': 'New Lead',
@@ -471,6 +496,8 @@ def _quote_inquiry(db,data,payload,actor,event_key,new_lead,matched=None):
         add_task(db,lead_id,'Review client photo / folder reference in the original quote form',selected.get('assigned_to') or '',key='gmail-photo:'+event_key)
     if not created:
         add_task(db,lead_id,'Review new quote form details for this service',selected.get('assigned_to') or '',key='quote-form:'+event_key)
+    from .sales_crm_v6 import sync_unlinked_clients
+    sync_unlinked_clients(db)
     return lead_id,created
 
 
@@ -686,6 +713,10 @@ def _review_details(db,event):
     try:payload=json.loads(event['payload_json'])
     except (ValueError,TypeError):raise ValueError('The original inquiry needs a technical review before it can be matched.')
     if not isinstance(payload,dict) or not isinstance(payload.get('parsed'),dict):raise ValueError('The original inquiry does not contain usable client details.')
+    if event['event_type']=='gmail_quote' and payload.get('body'):
+        # Both manual match/new and automated recovery use the same parser.
+        # Keep the original event unchanged until a reviewed resolution commits.
+        payload['parsed']=_quote_fields(payload['body'],payload.get('subject',''))
     kind='quote' if event['event_type']=='gmail_quote' else 'email' if event['event_type']=='gmail_email' else 'call'
     match=match_inquiry_project(db,payload['parsed'],kind)
     return payload,match

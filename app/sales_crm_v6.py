@@ -130,6 +130,8 @@ def ensure_tentative_job(db,q,lead,actor):
     """Create the accepted-estimate schedule hold using the sold arrival window."""
     existing=one(db,"SELECT * FROM jobs WHERE quote_id=? ORDER BY created_at DESC LIMIT 1",(q["id"],))
     if existing:return existing
+    if one(db,"SELECT id FROM jobs WHERE lead_id=? AND status!='Cancelled'",(lead['id'],)):
+        raise HTTPException(409,'This service already has a job. Review it before accepting a replacement estimate; no second booking was created.')
     inp=json.loads(q["inputs_json"]);day=inp.get("move_date") or lead.get("move_date")
     if not day:return None
     start_text,label=quote_start_window(inp)
@@ -396,12 +398,14 @@ def account_for_lead(db,lid):
     return one(db,"SELECT * FROM client_accounts WHERE id=?",(x["client_id"],)) if x else None
 
 def rate_for(db,day,movers):
+    a=rows(db,"SELECT * FROM annual_rate_periods WHERE active=1 AND start_date<=? AND end_date>=? AND (?<'2027-01-01' OR approved_by!='migration') ORDER BY version DESC",(day,day,day))
+    if len(a)>1:raise HTTPException(409,"This date matches more than one active rate period. Fix Pricing & rates first.")
     d=one(db,"SELECT * FROM daily_rates WHERE service_date=? AND movers=? ORDER BY version DESC LIMIT 1",(day,movers))
     if d:return Decimal(d["hourly_cents"])/100,"Exact-day rate"
-    a=rows(db,"SELECT * FROM annual_rate_periods WHERE active=1 AND start_date<=? AND end_date>=? ORDER BY version DESC",(day,day))
-    if len(a)>1:raise HTTPException(409,"This date matches more than one active rate period. Fix Pricing & rates first.")
     if a:return Decimal(a[0][f"rate_{movers}_cents"])/100,a[0]["label"]
-    p=one(db,"SELECT * FROM pricing_versions ORDER BY approved DESC,created_at DESC LIMIT 1")
+    if date.fromisoformat(day).year>=2027:
+        raise HTTPException(422,'Approve an effective-dated rate period for this service year. Current rates are not automatically reused for 2027 or later.')
+    p=one(db,"SELECT * FROM pricing_versions WHERE approved=1 ORDER BY created_at DESC LIMIT 1")
     if not p:raise HTTPException(422,"No pricing calendar is available.")
     try:
         r,label=seasonal_rate(json.loads(p["rates_json"]),day,movers);return Decimal(r),label
@@ -837,8 +841,11 @@ def register_sales_crm_v6(app,path,auth,public_url):
     @app.post("/api/crm/quotes/{qid}/finalize")
     def finalize(qid:str,data:dict,u=Depends(auth)):
         require_role(u,SALES);invite_url="";mid=None
+        from .quote_booking_workflow import workflow,check_delivery
+        with closing(connect(path)) as db:combined=bool(workflow(db,qid))
+        if combined:check_delivery(path,qid,data)
         with transaction(path) as db:
-            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):
+            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)) and not combined:
                 raise HTTPException(409,'This estimate uses QuickBooks delivery. Open that action to review, send or check acceptance.')
             q=one(db,"SELECT * FROM quotes WHERE id=?",(qid,))
             if not q or q["status"] not in ("Draft","Approved"):raise HTTPException(409,"Only a draft or approved estimate can be finalized.")
@@ -924,6 +931,9 @@ def register_sales_crm_v6(app,path,auth,public_url):
             except Exception as ex:qbo_error=str(getattr(ex,"detail",ex))[:250]
         return {"ok":True,"quote_status":"Approved","mail_id":mid,"sent":sent,"send_error":err,"portal_url":invite_url,
                 "quickbooks":qbo_result,"quickbooks_error":qbo_error}
+
+    from .quote_booking_workflow import register_quote_booking_workflow
+    register_quote_booking_workflow(app,path,auth,finalize)
 
     @app.post("/api/crm/quotes/{qid}/manual-deposit")
     def manual_deposit(qid:str,data:dict,u=Depends(auth)):

@@ -134,7 +134,7 @@ def register_portal(app,path,auth,public_url,secure):
                 from .availability import date_status
                 from .quote_options import expired_quote
                 quotes.append({'id':q['id'],'revision':q['revision'],'status':q['status'],
-                    'acceptance_provider':'QuickBooks' if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(q['id'],)) else 'CrownOps',
+                    'acceptance_provider':'QuickBooks' if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(q['id'],)) and not one(db,'SELECT quote_id FROM quote_booking_workflows WHERE quote_id=?',(q['id'],)) else 'CrownOps',
                     'expired':q['status']!='Accepted' and expired_quote(q),
                     'booking_confirmed':bool(one(db,"SELECT id FROM jobs WHERE quote_id=? AND status IN ('Confirmed','In progress','Completed')",(q['id'],))),
                     'stale':not quote_scope_current(db,q,l) or pending_scope_changes(db,l['id']),
@@ -249,7 +249,7 @@ def register_portal(app,path,auth,public_url,secure):
             q=one(db,'SELECT * FROM quotes WHERE id=? AND lead_id=?',(qid,c['lead_id']))
             if not q:raise HTTPException(404,'Quote not found.')
             if q['status']=='Accepted':return {'ok':True,'already_accepted':True,'booking_confirmed':bool(one(db,"SELECT id FROM jobs WHERE quote_id=? AND status IN ('Confirmed','In progress','Completed')",(qid,)))}
-            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):
+            if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)) and not one(db,'SELECT quote_id FROM quote_booking_workflows WHERE quote_id=?',(qid,)):
                 raise HTTPException(409,'Please accept this estimate using the QuickBooks email. If you cannot find it, request a callback here or call 514-606-4030.')
             from .quote_options import expired_quote
             if expired_quote(q):raise HTTPException(409,'This estimate has expired. Request a callback so Crown can review and renew it.')
@@ -260,6 +260,7 @@ def register_portal(app,path,auth,public_url,secure):
             ref=dumps({'name':data['signed_name'],'portal_email':c['email'],'terms_version':terms['version'],'terms_text':terms['text'],'accepted_at':now()})
             db.execute("UPDATE quotes SET status='Accepted',acceptance_ref=?,accepted_at=? WHERE id=?",(ref,now(),qid))
             db.execute("UPDATE leads SET stage='Accepted' WHERE id=?",(c['lead_id'],))
+            db.execute("UPDATE quote_booking_workflows SET acceptance_state='Pending',updated_at=? WHERE quote_id=?",(now(),qid))
             # Put the accepted estimate on the working schedule using the sold arrival window.
             # It remains tentative until the deposit or a manager-approved exception confirms the booking.
             from .sales_crm_v6 import ensure_tentative_job

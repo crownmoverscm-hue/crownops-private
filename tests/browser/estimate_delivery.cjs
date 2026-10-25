@@ -5,6 +5,17 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
  const context=await browser.newContext(),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await context.addCookies([{name:'crownops_session',value:'sales-token',url:'http://127.0.0.1:8095'}]);
  let state='Not prepared',sends=0;
+ let bridgePrepared=false,bridgeReviewed=false,bridgeSent=false,bridgeSends=0;
+ await page.route('**/api/quotes/TEST-BRIDGE/booking-workflow**',async route=>{
+  const url=route.request().url();let result;
+  if(url.endsWith('/prepare')){assert.equal(route.request().postDataJSON().confirm,true);bridgePrepared=true;result={prepared:true};}
+  else if(url.endsWith('/preview'))result=preview();
+  else if(url.endsWith('/review')){assert.equal(route.request().postDataJSON().review_hash,'fixture-hash');bridgeReviewed=true;result={sent:false};}
+  else if(url.endsWith('/send-email')){assert.equal(route.request().postDataJSON().confirm,true);bridgeSent=true;bridgeSends++;result={sent:true};}
+  else result={available:true,workflow_enabled:bridgePrepared,quickbooks_estimate:{id:bridgePrepared?'88':null},email:{status:bridgeSent?'Sent':bridgeReviewed?'Draft':'Not prepared'},acceptance:{client_status:'Approved',quickbooks_sync:'Not accepted'}};
+  await route.fulfill({json:result});
+ });
+ await page.route('**/api/quotes/TEST-QBO/booking-workflow',route=>route.fulfill({json:{available:false,workflow_enabled:false}}));
  const preview=()=>({state,enabled:true,external_id:'88',recipient:'fictional@example.invalid',basis:'high',expiry:'2026-11-14',
   provider_status:state==='Accepted'?'Accepted':'Pending',provider_email_status:state==='Sent'?'EmailSent':'NotSet',
   subtotal_cents:63600,tax_cents:9524,total_cents:73124,taxes:[{name:'TPS',amount_cents:3180},{name:'TVQ',amount_cents:6344}],
@@ -64,7 +75,18 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await page.getByRole('button',{name:'Check QuickBooks connection',exact:true}).click();
   await page.getByText('Account verified',{exact:true}).waitFor();
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'connection page overflow '+width);
+  assert.match(await page.locator('#content').innerText(),/Configured environment: sandbox/);
+  bridgePrepared=false;bridgeReviewed=false;bridgeSent=false;
+  await page.evaluate(()=>openQuickBooksEstimate('TEST-BRIDGE'));
+  await page.getByRole('heading',{name:'CrownOps email + QuickBooks sandbox',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Send through QuickBooks',exact:true}).count(),0);
+  await page.getByRole('button',{name:'Prepare sandbox estimate',exact:true}).click();
+  await page.getByRole('button',{name:'Approve totals and prepare email draft',exact:true}).click();
+  await page.getByRole('button',{name:'Send approved test email',exact:true}).click();
+  await page.getByText('Email: Sent',{exact:false}).waitFor();
+  assert(await page.locator('#modal').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'combined modal overflow '+width);
+  await page.locator('#modal [data-action="close"]').first().click();
  }
- assert.equal(sends,4);assert.equal(invoiceSends,4);assert.deepEqual(errors,[]);await browser.close();
+ assert.equal(sends,4);assert.equal(invoiceSends,4);assert.equal(bridgeSends,4);assert.deepEqual(errors,[]);await browser.close();
  console.log('PASS: mocked quote send/acceptance, invoice email and company verification at four widths. No real provider, email or payment.');
 })().catch(error=>{console.error(error);process.exit(1);});

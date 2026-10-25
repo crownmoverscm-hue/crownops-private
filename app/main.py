@@ -521,7 +521,7 @@ def create_app(database_path=None):
         record['intake_json']=dumps(intake_values(data.get('intake',{})))
         if not record['client_name']:
             raise HTTPException(422,'A client name is required.')
-        if record['email']:valid_email(record['email'])
+        if record['email']:record['email']=valid_email(record['email'])
         record.update(id=uid('LEAD'),external_id=external_id,stage=record['stage'] or 'New Lead',
             source=record['source'] or 'Manual',lead_type=record['lead_type'] or 'Form',language=record['language'] or 'English',
             priority=record['priority'] or 'Normal',created_at=t,updated_at=t,notifications_suppressed=suppressed)
@@ -532,6 +532,8 @@ def create_app(database_path=None):
         if prepare_estimate and record['lead_type'] not in ('Missed Call','Voicemail','Email'):
             from .automatic_intake import prepare_draft
             prepare_draft(db,one(db,'SELECT * FROM leads WHERE id=?',(record['id'],)),actor)
+        from .sales_crm_v6 import sync_unlinked_clients
+        sync_unlinked_clients(db)
         return record
 
     @app.post('/api/leads')
@@ -1467,17 +1469,38 @@ def create_app(database_path=None):
             raise HTTPException(401,'Invalid webhook signature.')
         try:data=json.loads(content)
         except Exception:raise HTTPException(422,'Invalid JSON.')
+        if not isinstance(data,dict) or set(data)-{'event_id','lead'} or not isinstance(data.get('lead'),dict):
+            raise HTTPException(422,'Supply a JSON object containing event_id and lead.')
+        allowed=LEAD_FIELDS-{'stage','assigned_to','priority','source','lead_type'}
+        if set(data['lead'])-allowed-{'intake'}:
+            raise HTTPException(422,'Website forms cannot set workflow status, assignments or unknown fields.')
+        from .gmail_sync import _digits
+        if not data['lead'].get('email') and not _digits(data['lead'].get('phone')):
+            raise HTTPException(422,'Supply a usable client email or phone.')
+        day=data['lead'].get('move_date')
+        if day:
+            try:
+                if not isinstance(day,str) or datetime.strptime(day,'%Y-%m-%d').date().isoformat()!=day:raise ValueError()
+            except (TypeError,ValueError):raise HTTPException(422,'move_date must be an exact YYYY-MM-DD date.')
+        if data['lead'].get('language','English') not in ('English','French'):
+            raise HTTPException(422,'Choose English or French.')
         event_id=bounded(data.get('event_id',''),'Event ID',180)
         if not event_id:raise HTTPException(422,'A stable source event_id is required.')
         bh=hashlib.sha256(content).hexdigest()
+        def intake_result(db,lid,duplicate):
+            client=one(db,'SELECT client_id FROM client_account_leads WHERE lead_id=?',(lid,)) or {}
+            draft=one(db,'SELECT quote_id,status,missing_json FROM intake_drafts WHERE lead_id=?',(lid,)) or {}
+            return {'lead_id':lid,'client_id':client.get('client_id'),'duplicate':duplicate,'messages_sent':0,
+                    'quote_id':draft.get('quote_id'),'draft_status':draft.get('status'),
+                    'missing':json.loads(draft.get('missing_json') or '[]')}
         with transaction(path) as db:
             previous=one(db,'SELECT * FROM intake_events WHERE event_id=?',(event_id,))
             if previous:
                 if previous['body_hash']!=bh:raise HTTPException(409,'Event ID reused with different content.')
-                return {'lead_id':previous['lead_id'],'duplicate':True,'messages_sent':0}
-            l=new_lead(db,data.get('lead',{}),'signed-intake',external_id='webhook:'+event_id)
+                return intake_result(db,previous['lead_id'],True)
+            l=new_lead(db,{**data['lead'],'source':'Website','lead_type':'Form'},'signed-intake',external_id='webhook:'+event_id)
             insert(db,'intake_events',dict(event_id=event_id,body_hash=bh,lead_id=l['id'],created_at=now()))
-        return {'lead_id':l['id'],'duplicate':False,'messages_sent':0}
+            return intake_result(db,l['id'],False)
 
     @app.get('/api/schema')
     def schema(u=Depends(auth)):
@@ -1551,6 +1574,12 @@ def create_app(database_path=None):
     register_availability(app,path,auth)
     from .automatic_intake import register_automatic_intake
     register_automatic_intake(app,path,auth,new_lead)
+    from .intake_recovery import register_intake_recovery
+    register_intake_recovery(app,path,auth,new_lead)
+    from .launch_previews import register_launch_previews
+    register_launch_previews(app,path,auth)
+    from .sender_proof import register_sender_proof
+    register_sender_proof(app,path,auth)
     from .sales_journey import register_sales_journey
     register_sales_journey(app,path,auth,public_url)
     from .payroll_adjustments import register_payroll_adjustments

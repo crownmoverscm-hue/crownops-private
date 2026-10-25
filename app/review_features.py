@@ -86,7 +86,8 @@ def seed_review_defaults(path):
                         for st,en in ranges:
                             insert(db,'annual_rate_periods',dict(id=uid('RATEPERIOD'),label=str(row['Season / Date Range']),start_date=st.isoformat(),end_date=en.isoformat(),
                                 rate_2_cents=cents(row['2 movers']),rate_3_cents=cents(row['3 movers']),rate_4_cents=cents(row['4 movers']),rate_5_cents=cents(row['5 movers']),rate_6_cents=cents(row['6 movers']),
-                                active=1,version=1,note='Imported from approved CrownOps pricing snapshot for review.',approved_by='migration',created_at=now()))
+                                active=int(bool(pv['approved']) and year==base_year),version=1,
+                                note='Copied pricing for review only; next-year values require separate owner approval.',approved_by='migration',created_at=now()))
         # Provide test-only document shells so the workflow can be reviewed before legal wording is approved.
         if not one(db,'SELECT id FROM document_templates LIMIT 1'):
             samples=[
