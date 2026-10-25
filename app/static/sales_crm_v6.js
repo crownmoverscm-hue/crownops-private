@@ -198,7 +198,6 @@ async function crmQuoteBuilder(leadId='',options={}){
    field('fixed_transport','OR fixed transportation fee','','number','step="0.01" min="0"')+
    field('distance_km','Actual round-trip road km',0,'number','step="1" min="0"')+
    field('distance_rate','Long-distance rate / km',0.94,'number','step="0.01" min="0"')+
-   (firstSetup.local_pricing_policy?.version?'<div id="crm-local-fuel-wrap" class="full">'+field('local_fuel_rate','Local Moving fuel fee per truck',firstSetup.defaults.local_fuel_per_truck,'number','step="0.01" min="0"')+'<p class="small muted full">Local Moving default: $35.99 per truck for up to 40 km, from 700 rue Hodge through every stop and back. Review longer routes manually; no mileage surcharge is automatic. Transportation is separate.</p></div>':'')+
    '</div></div>'+
    '<div class="panel panel-body" id="crm-junk-fields" style="display:none"><div class="eyebrow">JUNK REMOVAL</div><div class="grid2">'+
    select('junk_tier','Truck space',[['single','$175 · Single item'],['quarter','$400 · 1/4 truck · approx. 5 ft'],['half','$800 · 1/2 truck · approx. 10 ft'],['three_quarter','$1,200 · 3/4 truck · approx. 15 ft'],['full','$1,600 · Full 20 ft truck']],'quarter')+
@@ -250,7 +249,6 @@ function crmToggleServiceFields(){
  toggle('crm-junk-fields',type!=='Junk Removal');
  toggle('crm-moving-fields',type==='Junk Removal');
  toggle('crm-transport-fields',type==='Junk Removal');
- toggle('crm-local-fuel-wrap',type!=='Moving');
  const smallWrap=document.getElementById('crm-small-afternoon-wrap'),small=f.elements.small_afternoon_job;
  const smallAllowed=['Moving','Packing'].includes(type);
  if(smallWrap)smallWrap.style.display=smallAllowed?'flex':'none';
