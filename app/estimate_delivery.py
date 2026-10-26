@@ -29,6 +29,10 @@ def enabled():
 def source(db, qid, allow_accepted=False):
     q = one(db, 'SELECT * FROM quotes WHERE id=?', (qid,))
     if not q: raise HTTPException(404, 'Estimate not found.')
+    if json.loads(q['result_json']).get('test_only'):
+        from .quote_test_fixture import rate as test_rate
+        if test_rate(json.loads(q['inputs_json']).get('move_date')) is None:
+            raise HTTPException(409,'This TEST-only quote cannot leave its isolated pricing fixture.')
     lead = one(db, 'SELECT * FROM leads WHERE id=?', (q['lead_id'],))
     if q['status'] not in (('Draft', 'Approved', 'Accepted') if allow_accepted else ('Draft', 'Approved')):
         raise HTTPException(409, 'Use a current draft or approved estimate.')
