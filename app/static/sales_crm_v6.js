@@ -227,6 +227,7 @@ function crmQuoteData(){
 }
 function crmRenderCalc(r){
  CRM.lastCalc=r;const el=document.getElementById('crm-quote-result');if(!el)return;
+ const error=document.getElementById('modal-error');if(error)error.textContent='';
  el.innerHTML='<div class="eyebrow">ESTIMATED RANGE · CAD</div><div class="quote-price">'+crmCash(r.low_cents)+' – '+crmCash(r.high_cents)+'</div>'+
  '<p class="muted">Before applicable taxes</p><div class="quote-line"><span>Service</span><strong>'+crmCash(r.service_low_cents)+' – '+crmCash(r.service_high_cents)+'</strong></div>'+
  '<div class="quote-line"><span>'+(r.service_type==='Long Distance'?'Long Distance Transportation Fee':'Transportation Fee')+'</span><strong>'+crmCash(r.transport_cents)+'</strong></div>'+
@@ -326,7 +327,7 @@ document.addEventListener('click',async e=>{
   if(a==='quote-from-service')return crmQuoteBuilder(id);
   if(a==='quote-open')return crmOpenQuote(id);
   if(a==='templates')return crmTemplates();
-  if(a==='quote-calc'){const d=crmQuoteData();if(!d)return;const form=document.getElementById('crm-quote-form');const result=await api('/crm/quotes/calculate',{method:'POST',data:d});if(!modal.open||document.getElementById('crm-quote-form')!==form)return;crmRenderCalc(result);const error=document.getElementById('modal-error');if(error){error.textContent='';}return;}
+  if(a==='quote-calc'){const d=crmQuoteData();if(!d)return;const form=document.getElementById('crm-quote-form'),inputState=JSON.stringify([...new FormData(form)]);const result=await api('/crm/quotes/calculate',{method:'POST',data:d});if(!modal.open||document.getElementById('crm-quote-form')!==form||JSON.stringify([...new FormData(form)])!==inputState)return;crmRenderCalc(result);return;}
   if(a==='quote-finalize')return crmFinalize(id);
   if(a==='deposit-record')return crmDepositDialog(id);
   if(a==='deposit-remind'){const r=await api('/crm/quotes/'+encodeURIComponent(id)+'/deposit-reminder',{method:'POST'});toast('Friendly deposit reminder drafted in Communications.');return;}

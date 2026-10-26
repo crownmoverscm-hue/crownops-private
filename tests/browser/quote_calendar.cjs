@@ -35,6 +35,7 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await p.locator('#crm-quote-form input[name=fixed_transport]').fill('150');
   await p.getByRole('button',{name:'Calculate',exact:true}).click();
   await p.locator('#crm-quote-result .quote-price').waitFor();
+  await p.locator('#modal-error').waitFor({state:'hidden'});
   assert.equal(await p.locator('#modal-error').textContent(),'','corrected calculation clears stale validation');
   assert.equal(await p.locator('#modal-error').isVisible(),false);
   assert.equal(await p.getByRole('dialog').isVisible(),true);
@@ -59,6 +60,7 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   }
   // Read-only sandbox send preflight renders linkage and separate gates.
   let preflightMutations=0;
+  await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/booking-workflow',r=>r.fulfill({json:{available:false,workflow_enabled:false}}));
   await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/quickbooks-delivery',r=>{
    if(r.request().method()!=='GET')preflightMutations++;
    return r.fulfill({json:{send_only_preflight:true,test_only:true,state:'Ready',company_name:'Sandbox Company CA 5634',country:'CA',environment:'sandbox',realm_id:'9341458310238189',external_id:'185',quote_id:'QUOTE-08dd48a364a34f66',revision:2,service_id:'TEST-SERVICE',customer_id:'10',revisions:[{id:'TEST-R1',revision:1},{id:'QUOTE-08dd48a364a34f66',revision:2}],subtotal_cents:48599,gst_cents:2430,qst_cents:4848,total_cents:55877,snapshot_hash:'TEST-SNAPSHOT',customer_email:'testonly.fictional@example.com',bill_email:'testonly.fictional@example.com',recipient:'jonathanprobonas15@gmail.com',send_to_warning:'Intuit sendTo can update Estimate.BillEmail.Address.',cc_bcc:{provider_defaults_verified_absent:false},sender:'Unknown — QuickBooks controls sender',reply_to:'Unknown — verify actual headers',message_preview_note:'Saved estimate only; exact email preview unavailable.',memo:'TEST ONLY',lines:[],operation:'POST existing Estimate 185 send',duplicate_protection:'Durable one-send slot; no automatic retry.',send_attempt:{},provider_status:'Pending',provider_email_status:'NotSet',blockers:['Separate owner approval required.']}});

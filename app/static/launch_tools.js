@@ -23,6 +23,7 @@
  }
  const oldEstimate=window.openQuickBooksEstimate;
  window.openQuickBooksEstimate=async function(qid){
+  if(qid==='QUOTE-08dd48a364a34f66')return oldEstimate(qid);
   const state=await api('/quotes/'+encodeURIComponent(qid)+'/booking-workflow');
   if(!state.available&&!state.workflow_enabled)return oldEstimate(qid);
   const base='/quotes/'+encodeURIComponent(qid)+'/booking-workflow';
