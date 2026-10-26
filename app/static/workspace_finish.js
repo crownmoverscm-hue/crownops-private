@@ -135,10 +135,26 @@
  document.addEventListener('input',markEdited);document.addEventListener('change',markEdited);
  const hasEdits=()=>modal.open&&[...modal.querySelectorAll('form')].some(form=>dirtyForms.has(form));
  function allowClose(){return !hasEdits()||confirm('Discard the changes in this form? Choose Cancel to keep editing.');}
+ // Quote editing must not depend on a browser-native confirm that can be hidden
+ // or dismissed by an installed/mobile browser or an acceptance-test runner.
+ function quoteClose(event){
+  if(!modal.querySelector('#crm-quote-form')||!hasEdits())return false;
+  event.preventDefault();event.stopImmediatePropagation();
+  let warning=modal.querySelector('[data-quote-discard-warning]');
+  if(!warning){
+   warning=document.createElement('div');warning.dataset.quoteDiscardWarning='1';
+   warning.className='callout orange';warning.setAttribute('role','alert');
+   warning.innerHTML='<strong>Discard unsaved quote changes?</strong><p>Your last saved draft will remain unchanged.</p><div class="row wrap"><button type="button" data-quote-keep>Keep editing</button><button type="button" class="btn-danger" data-quote-discard>Discard changes</button></div>';
+   modal.querySelector('.modal-body').prepend(warning);
+   warning.querySelector('[data-quote-keep]').onclick=()=>warning.remove();
+   warning.querySelector('[data-quote-discard]').onclick=()=>{modal.querySelectorAll('form').forEach(form=>dirtyForms.delete(form));modal.close();};
+  }
+  warning.scrollIntoView({block:'nearest'});warning.querySelector('[data-quote-keep]').focus();return true;
+ }
  window.addEventListener('click',event=>{
-  if(event.target.closest('#modal [data-action=close],#modal [data-move-return]')&&!allowClose()){event.preventDefault();event.stopImmediatePropagation();}
+  if(event.target.closest('#modal [data-action=close],#modal [data-move-return]')){if(quoteClose(event))return;if(!allowClose()){event.preventDefault();event.stopImmediatePropagation();}}
  },true);
- window.addEventListener('cancel',event=>{if(event.target===modal&&!allowClose()){event.preventDefault();event.stopImmediatePropagation();}},true);
+ window.addEventListener('cancel',event=>{if(event.target===modal){if(quoteClose(event))return;if(!allowClose()){event.preventDefault();event.stopImmediatePropagation();}}},true);
  window.addEventListener('beforeunload',event=>{if(hasEdits()){event.preventDefault();event.returnValue='';}});
  function fitDialog(){
   const viewport=window.visualViewport;

@@ -3,6 +3,19 @@ window.openQuickBooksEstimate = async function(qid){
  const base='/quotes/'+encodeURIComponent(qid)+'/quickbooks-delivery';
  const r=await api(base);
  const close='<button data-action="close">Close</button>';
+ if(r.test_only&&r.state==='Not prepared'){
+  showModal('TEST ONLY · create one unsent sandbox estimate',
+   '<p><strong>'+h(r.company_name)+' · '+h(r.realm_id)+' · '+h(r.country)+'</strong></p>'+
+   '<p>Service parent: '+h(r.service_id)+' · quote '+h(r.quote_id)+' · revision '+h(r.revision)+'</p>'+
+   '<p>Revision history: '+r.revisions.map(q=>h(q.id)+' (r'+h(q.revision)+')').join(' → ')+'</p>'+
+   '<p>Exact fictional amount: 3 × $100 labour + $150 transportation + $35.99 fuel.</p>'+
+   '<p>Subtotal $485.99 · TPS $24.30 · TVQ $48.48 · <strong>CAD $558.77</strong></p>'+
+   '<div class="message-draft" style="white-space:pre-wrap">'+h(r.terms.text)+'</div>'+
+   '<h3>Proposed QuickBooks writes</h3><ul>'+r.proposed_writes.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul>'+
+   (r.requires_customer_create_confirmation?'<label><input type="checkbox" id="test-customer-confirm"> I explicitly confirm the required creation of one fictional sandbox customer shown above.</label>':'<p>Existing QuickBooks customer: '+h(r.customer_id)+'</p>')+
+   '<p>No email, acceptance, booking, invoice or payment is enabled. A timeout consumes the attempt until reconciled.</p>',
+   close+'<button class="btn-primary" data-qbo-delivery="test-prepare" data-id="'+h(qid)+'" data-review="'+h(r.review_hash)+'" data-customer-required="'+h(r.requires_customer_create_confirmation)+'">Create one unsent sandbox estimate</button>');return;
+ }
  if(r.state==='Not prepared'){
   showModal('Send estimate through QuickBooks',
    '<p>QuickBooks will email the client an estimate they can accept. Acceptance returns to CrownOps as a tentative service, ready for your team to schedule and confirm.</p>'+
@@ -24,10 +37,10 @@ window.openQuickBooksEstimate = async function(qid){
   (r.total_cents!==undefined?'<div class="panel panel-body"><p>Before tax: <strong>'+money(r.subtotal_cents)+'</strong></p>'+
    (r.taxes||[]).map(t=>'<p>'+h(t.name)+': <strong>'+money(t.amount_cents)+'</strong></p>').join('')+
    '<p>Total tax: '+money(r.tax_cents)+'</p><p style="font-size:1.25rem">Total: <strong>'+money(r.total_cents)+'</strong></p></div>':'')+
-  '<p>Client acceptance creates a tentative service. Your team still checks the date, deposit, crew and truck before confirming.</p>'+
+  (r.test_only?'<p><strong>TEST ONLY: sending, acceptance and booking remain disabled.</strong> QuickBooks Estimate ID: '+h(r.external_id)+'</p>':'<p>Client acceptance creates a tentative service. Your team still checks the date, deposit, crew and truck before confirming.</p>')+
   (r.state==='Accepted'?'<button data-page="schedule" class="btn-primary">Open schedule</button>':''),
-  close+'<button data-qbo-delivery="sync" data-id="'+h(qid)+'">Check acceptance</button>'+
-  (r.state==='Ready'&&r.provider_status==='Pending'&&r.provider_email_status!=='EmailSent'?'<button class="btn-primary" data-qbo-delivery="send" data-id="'+h(qid)+'" data-review="'+h(r.review_hash)+'" data-recipient="'+h(r.recipient)+'">Send through QuickBooks</button>':''));
+  close+(r.test_only?'':'<button data-qbo-delivery="sync" data-id="'+h(qid)+'">Check acceptance</button>')+
+  (!r.test_only&&r.state==='Ready'&&r.provider_status==='Pending'&&r.provider_email_status!=='EmailSent'?'<button class="btn-primary" data-qbo-delivery="send" data-id="'+h(qid)+'" data-review="'+h(r.review_hash)+'" data-recipient="'+h(r.recipient)+'">Send through QuickBooks</button>':''));
 };
 document.addEventListener('click',async event=>{
  const b=event.target.closest('[data-qbo-delivery]');if(!b)return;event.preventDefault();
@@ -35,7 +48,12 @@ document.addEventListener('click',async event=>{
  const qid=b.dataset.id,base='/quotes/'+encodeURIComponent(qid)+'/quickbooks-delivery';
  try{
   if(b.dataset.qboDelivery==='open'){await openQuickBooksEstimate(qid);return;}
-  if(b.dataset.qboDelivery==='prepare'){
+  if(b.dataset.qboDelivery==='test-prepare'){
+   const customer=document.getElementById('test-customer-confirm')?.checked===true;
+   if(b.dataset.customerRequired==='true'&&!customer)throw Error('Review and explicitly confirm the required fictional customer creation first.');
+   await api(base+'/prepare',{method:'POST',timeoutMs:95000,data:{confirm:true,review_hash:b.dataset.review,confirm_customer_create:customer}});
+   toast('One sandbox estimate created and read back. Not sent.');
+  }else if(b.dataset.qboDelivery==='prepare'){
    await api(base+'/prepare',{method:'POST',data:{basis:document.querySelector('[name="qbo_basis"]').value,confirm:true}});
    toast('QuickBooks draft prepared. No email sent.');
   }else if(b.dataset.qboDelivery==='send'){

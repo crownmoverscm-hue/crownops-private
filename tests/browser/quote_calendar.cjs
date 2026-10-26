@@ -20,6 +20,20 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   const timeoutResult=await p.evaluate(async()=>{try{await api('/test-stalled-save',{method:'POST',data:{},timeoutMs:25});return 'unexpected';}catch(e){return e.message;}});
   assert.match(timeoutResult,/completion is unknown/);
   await p.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal(await p.getByRole('dialog').isVisible(),false);
+  // Muse reproduction: a native required-field failure followed by restored input.
+  // Exercise the unsaved-change confirmation explicitly; automation otherwise
+  // dismisses native confirm dialogs and intentionally leaves the editor open.
+  for(const close of ['Cancel','Close dialog','Escape']){
+   await p.evaluate(()=>crmQuoteBuilder('FINISH-L0'));
+   const date=p.locator('#crm-quote-form input[name=move_date]');
+   const original=await date.inputValue();await date.fill('');
+   await p.getByRole('button',{name:'Save draft',exact:true}).click();
+   await p.locator('#modal-error').filter({hasText:'Draft was not saved'}).waitFor();
+   await date.fill(original);
+   const dismiss=()=>close==='Escape'?p.keyboard.press('Escape'):p.getByRole('button',{name:close,exact:true}).click();
+   await dismiss();await p.getByRole('button',{name:'Keep editing',exact:true}).click();assert.equal(await p.getByRole('dialog').isVisible(),true,'Keep editing preserves the form');
+   await dismiss();await p.getByRole('button',{name:'Discard changes',exact:true}).click();assert.equal(await p.getByRole('dialog').isVisible(),false,'Discard closes after validation recovery: '+close);
+  }
   await ctx.close();console.log(JSON.stringify({width,missingCalendar:'PASS',timeout:'PASS',dismissal:'PASS'}));
  }
  await browser.close();

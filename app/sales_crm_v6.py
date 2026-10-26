@@ -129,6 +129,8 @@ def quoted_block_hours(inputs):
 
 def ensure_tentative_job(db,q,lead,actor):
     """Create the accepted-estimate schedule hold using the sold arrival window."""
+    from .sandbox_estimate_test import deny_actions
+    deny_actions(q['id'])
     existing=one(db,"SELECT * FROM jobs WHERE quote_id=? ORDER BY created_at DESC LIMIT 1",(q["id"],))
     if existing:return existing
     if one(db,"SELECT id FROM jobs WHERE lead_id=? AND status!='Cancelled'",(lead['id'],)):
@@ -836,6 +838,21 @@ def register_sales_crm_v6(app,path,auth,public_url):
                 raise HTTPException(422,"Choose the active quote template that matches this service and language.")
             start_time,start_label=quote_start_window(inp);inp["start_time"]=start_time;inp["start_window_label"]=start_label
             inp["template_snapshot"]={"template_key":tmpl["template_key"],"name":tmpl["name"],**json.loads(tmpl["body_json"])}
+            # Editing an unchanged draft is not a new business revision. Ignore
+            # request/session metadata, but compare the complete saved scope.
+            source_id=data.get('source_quote_id')
+            if source_id:
+                previous=one(db,"SELECT * FROM quotes WHERE id=? AND lead_id=?",(source_id,lid))
+                if not previous or previous['status']!='Draft':raise HTTPException(409,'The source draft changed. Reopen the latest estimate.')
+                newest=one(db,'SELECT id FROM quotes WHERE lead_id=? ORDER BY revision DESC LIMIT 1',(lid,))
+                if newest['id']!=source_id:raise HTTPException(409,'A newer revision exists. Reopen the latest draft.')
+                ignored={'draft_key','draft_request_hash','source_quote_id','lead_version','client_id'}
+                def scope(value):
+                    return {k:v for k,v in value.items() if k not in ignored}
+                if (scope(json.loads(previous['inputs_json']))==scope(inp)
+                        and json.loads(previous['result_json'])==result
+                        and previous['lead_version']==l['version']):
+                    return payload(previous)
             qid=uid("QUOTE");snapshot={k:l[k] for k in l.keys() if k!="raw_json"}
             insert(db,"quotes",dict(id=qid,lead_id=lid,revision=rev,status="Draft",inputs_json=dumps(inp),result_json=dumps(result),
               pricing_id=p["id"],lead_snapshot_json=dumps(snapshot),lead_version=l["version"],created_by=u["id"],created_at=now()))
@@ -853,7 +870,9 @@ def register_sales_crm_v6(app,path,auth,public_url):
             paid=db.execute("SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE lead_id=? AND purpose='Deposit' AND verified=1",(q["lead_id"],)).fetchone()[0]
             from .sales_journey import quote_delivery
             delivery=quote_delivery(db,q)
-        return {"quote":payload(q),"lead":l,"client":a,"job":j,"verified_deposit_cents":paid,"delivery":delivery}
+            revisions=rows(db,'SELECT id,lead_id,revision,status FROM quotes WHERE lead_id=? ORDER BY revision',(q['lead_id'],))
+        return {"quote":payload(q),"lead":l,"client":a,"job":j,"verified_deposit_cents":paid,"delivery":delivery,
+                "quote_family":{"service_id":q['lead_id'],"client_id":a['id'] if a else None,"revisions":revisions}}
 
     @app.post("/api/crm/quotes/{qid}/finalize")
     def finalize(qid:str,data:dict,u=Depends(auth)):

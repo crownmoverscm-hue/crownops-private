@@ -40,7 +40,8 @@ def source(db, qid, allow_accepted=False):
         raise HTTPException(409, 'Review the changed client information and save a current estimate first.')
     if one(db, "SELECT id FROM quotes WHERE lead_id=? AND revision>? AND status IN ('Approved','Accepted')", (lead['id'], q['revision'])):
         raise HTTPException(409, 'A newer approved estimate exists. Review that revision instead.')
-    terms = settings(db, 'client_terms', {}) or {}
+    from .sandbox_estimate_test import selected, terms_for
+    terms = terms_for(q) if selected(qid) else (settings(db, 'client_terms', {}) or {})
     if not terms.get('approved') or not terms.get('version') or not terms.get('text'):
         raise HTTPException(409, 'An owner or manager must approve the client booking terms first.')
     fingerprint = digest({'quote': {k: q[k] for k in ('id','revision','inputs_json','result_json','lead_snapshot_json')},
@@ -203,6 +204,12 @@ def prepare(path, qid, basis, actor):
 
 
 def preview(path, qid):
+    from .sandbox_estimate_test import selected, public_preflight
+    if selected(qid):
+        test = public_preflight(path,qid)
+        with closing(connect(path)) as db:
+            stored=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,))
+        if not stored or not stored['external_id']:return test
     with closing(connect(path)) as db:
         row=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,))
     if not row:return {'state':'Not prepared','enabled':os.getenv('CROWNOPS_ALLOW_QBO_ESTIMATE_DELIVERY')=='1'}
@@ -217,7 +224,7 @@ def preview(path, qid):
         if not rate_id.isdigit():raise HTTPException(409,'Review the QuickBooks tax breakdown.')
         rate=qbo_read(path,'taxrate/'+rate_id)['TaxRate']
         tax_lines.append({'name':rate.get('Name','Tax'),'amount_cents':int(round(line['Amount']*100))})
-    return {'state':row['state'],'provider_status':remote.get('TxnStatus'),'provider_email_status':remote.get('EmailStatus'),
+    return {'test_only':selected(qid),'state':row['state'],'provider_status':remote.get('TxnStatus'),'provider_email_status':remote.get('EmailStatus'),
         'external_id':row['external_id'],'recipient':row['recipient'],'basis':row['basis'],
         'subtotal_cents':total-tax,'tax_cents':tax,'taxes':tax_lines,'total_cents':total,
         'expiry':remote.get('ExpirationDate'),'memo':remote.get('CustomerMemo',{}).get('value'),
@@ -228,6 +235,8 @@ def preview(path, qid):
 
 
 def send(path,qid,data,actor):
+    from .sandbox_estimate_test import deny_actions
+    deny_actions(qid)
     enabled();quickbooks_gate()
     from .quote_booking_workflow import workflow
     with closing(connect(path)) as db:
@@ -269,6 +278,8 @@ def send(path,qid,data,actor):
 
 
 def synchronize(path,qid,actor='quickbooks-sync'):
+    from .sandbox_estimate_test import deny_actions
+    deny_actions(qid)
     from .quote_booking_workflow import workflow
     with closing(connect(path)) as db:
         if workflow(db,qid):raise HTTPException(409,'This quote accepts through the CrownOps portal. Use its explicit sandbox acceptance synchronization.')
@@ -348,8 +359,18 @@ def register_estimate_delivery(app,path,auth):
     @app.post('/api/quotes/{qid}/quickbooks-delivery/prepare')
     def prepare_route(qid:str,data:dict,u=Depends(auth)):
         require_role(u,SALES)
+        from .sandbox_estimate_test import selected, prepare as test_prepare
+        if selected(qid):
+            require_role(u,{'owner'})
+            return test_prepare(path,qid,data,u['id'])
         if data.get('confirm') is not True:raise HTTPException(422,'Confirm preparation of an unsent QuickBooks estimate.')
         return prepare(path,qid,data.get('basis'),u['id'])
+
+    @app.get('/api/quotes/{qid}/sandbox-test-preflight')
+    def test_preflight(qid:str,u=Depends(auth)):
+        require_role(u,{'owner'})
+        from .sandbox_estimate_test import public_preflight
+        return public_preflight(path,qid)
 
     @app.post('/api/quotes/{qid}/quickbooks-delivery/send')
     def send_route(qid:str,data:dict,u=Depends(auth)):

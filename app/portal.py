@@ -242,6 +242,8 @@ def register_portal(app,path,auth,public_url,secure):
 
     @app.post('/api/portal/quotes/{qid}/accept')
     def accept(qid:str,data:dict,c=Depends(client_auth)):
+        from .sandbox_estimate_test import deny_actions
+        deny_actions(qid)
         if data.get('agree') is not True or not text(data.get('signed_name',''),'Name',200):raise HTTPException(422,'Read the terms and confirm your agreement.')
         with transaction(path) as db:
             terms=settings(db,'client_terms',{})

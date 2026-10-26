@@ -792,6 +792,8 @@ def create_app(database_path=None):
     @app.post('/api/quotes/{qid}/accept')
     def record_acceptance(qid:str,data:dict,u=Depends(auth)):
         require(u,QUOTERS)
+        from .sandbox_estimate_test import deny_actions
+        deny_actions(qid)
         ref=bounded(data.get('reference',''),'Acceptance evidence',2000)
         if not ref:raise HTTPException(422,'Provide an email, document or external acceptance reference.')
         with transaction(path) as db:

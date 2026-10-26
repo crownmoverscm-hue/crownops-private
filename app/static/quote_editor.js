@@ -67,6 +67,7 @@ crmQuoteBuilder=async function(leadId='',options={}){
  const lead=CRM.currentLead||{},seed=options.seed||{};
  QE.client=leadId?{client_name:lead.client_name,email:lead.email,phone:lead.phone}:null;
  QE.mode=leadId?'existing':'';QE.locked=Boolean(leadId);QE.busy=false;QE.key=crypto.randomUUID();++QE.searchVersion;++QE.serviceVersion;
+ QE.sourceQuoteId=options.sourceQuoteId||'';
  f.insertAdjacentHTML('afterbegin','<input type="hidden" name="lead_version" value="'+h(lead.version??'')+'">'+
   '<section class="panel panel-body qe-client"><h3>Client</h3>'+
   (leadId?'<div class="callout teal"><strong>'+h(lead.client_name)+'</strong>'+h([lead.email,uxPhoneLabel(lead.phone)].filter(Boolean).join(' · '))+'</div><p class="tiny muted">This quote is attached to this inquiry. Saving edits creates a new draft revision.</p>':
@@ -97,7 +98,7 @@ document.addEventListener('click',async e=>{
   if(action==='edit'){
    const d=await api('/crm/quotes/'+encodeURIComponent(b.dataset.id));
    if(d.quote.status!=='Draft')throw Error('Open the latest draft before editing.');
-   return crmQuoteBuilder(d.lead.id,{templateKey:d.quote.inputs.template_key,seed:d.quote.inputs,result:d.quote.result});
+   return crmQuoteBuilder(d.lead.id,{templateKey:d.quote.inputs.template_key,seed:d.quote.inputs,result:d.quote.result,sourceQuoteId:d.quote.id});
   }
   if(action==='client')return qeSelectClient(b.dataset.id);
   const f=document.getElementById('crm-quote-form');if(!f||QE.locked)return;
@@ -149,6 +150,7 @@ document.addEventListener('submit',async e=>{
   if(f.elements.selected_service&&f.elements.selected_service.value!=='new'&&f.elements.lead_id.value!==f.elements.selected_service.value)throw Error('Wait for the selected inquiry to load, or choose New service.');
   const data=crmQuoteData();if(!data)return;
   data.draft_key=QE.key;data.lead_version=data.lead_version===''?undefined:Number(data.lead_version);
+  if(QE.sourceQuoteId)data.source_quote_id=QE.sourceQuoteId;
   if(QE.client?.id)data.client_id=QE.client.id;
   if(QE.mode==='new')data.new_client={client_name:f.elements.client_name.value,email:f.elements.client_email.value,phone:f.elements.client_phone.value};
   if(!data.lead_id)data.service_details=Object.fromEntries(qeServiceFields.map(k=>[k,f.elements[k].value]));

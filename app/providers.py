@@ -101,6 +101,8 @@ def qbo_query(path,statement):
 
 def qbo_send_estimate(path,estimate_id,recipient):
     """Intuit's explicit email endpoint; never automatically retry this operation."""
+    if os.getenv('CROWNOPS_QBO_TEST_CREATE_QUOTE'):
+        raise HTTPException(409,'The isolated create-only test does not authorize email sending.')
     quickbooks_gate()
     if not str(estimate_id).isdigit():raise ValueError('Invalid QuickBooks estimate ID.')
     t,realm,host=_qbo_connection(path)
