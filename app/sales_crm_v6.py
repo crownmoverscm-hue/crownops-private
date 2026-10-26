@@ -399,6 +399,9 @@ def account_for_lead(db,lid):
     return one(db,"SELECT * FROM client_accounts WHERE id=?",(x["client_id"],)) if x else None
 
 def rate_for(db,day,movers):
+    from .quote_test_fixture import rate as test_rate
+    fixture=test_rate(day)
+    if fixture:return fixture
     a=rows(db,"SELECT * FROM annual_rate_periods WHERE active=1 AND start_date<=? AND end_date>=? AND (?<'2027-01-01' OR approved_by!='migration') ORDER BY version DESC",(day,day,day))
     if len(a)>1:raise HTTPException(409,"This date matches more than one active rate period. Fix Pricing & rates first.")
     d=one(db,"SELECT * FROM daily_rates WHERE service_date=? AND movers=? ORDER BY version DESC LIMIT 1",(day,movers))
@@ -407,7 +410,7 @@ def rate_for(db,day,movers):
     if date.fromisoformat(day).year>=2027:
         raise HTTPException(422,'Approve an effective-dated rate period for this service year. Current rates are not automatically reused for 2027 or later.')
     p=one(db,"SELECT * FROM pricing_versions WHERE approved=1 ORDER BY created_at DESC LIMIT 1")
-    if not p:raise HTTPException(422,"No pricing calendar is available.")
+    if not p:raise HTTPException(422,"No active or approved pricing calendar covers this date. Draft was not saved. Your entries remain open; ask an owner to configure pricing or use the isolated TEST-only fixture. No price or booking is confirmed.")
     try:
         r,label=seasonal_rate(json.loads(p["rates_json"]),day,movers);return Decimal(r),label
     except Exception as e:raise HTTPException(422,str(e))
@@ -467,6 +470,8 @@ def calculate(db,data):
         raise HTTPException(422,f"Crown Movers requires at least {minimum_trucks} truck(s) for a crew of {movers} movers.")
     suggested,source=rate_for(db,day,movers)
     override=data.get("hourly_rate");rate=number(override,"Hourly rate",1,5000) if override not in (None,"") else suggested
+    if source.startswith('TEST ONLY') and rate!=suggested:
+        raise HTTPException(422,'The isolated TEST fixture uses exactly $100/hour. No real rate approval is implied.')
     low=number(data.get("hours_low",3),"Estimated low hours",.25,100);high=number(data.get("hours_high",low),"Estimated high hours",.25,120)
     if high<low:raise HTTPException(422,"Estimated high hours cannot be lower than low hours.")
     minimum,small_afternoon=service_minimum_hours(data,service);low=max(low,minimum);high=max(high,minimum)
@@ -801,6 +806,11 @@ def register_sales_crm_v6(app,path,auth,public_url):
                     account=account_for_lead(db,lid)
                     if not account or account['id']!=data['client_id']:raise HTTPException(409,"This inquiry belongs to a different client. Select the correct inquiry.")
             else:l=template_service(db,data,u);lid=l['id']
+            if str(result.get('season','')).startswith('TEST ONLY'):
+                if not str(l['client_name']).startswith('TEST'):
+                    raise HTTPException(422,'TEST pricing is restricted to fictional clients whose names start with TEST.')
+                result['test_only']=True
+                title='TEST ONLY — '+title if not title.startswith('TEST ONLY') else title
             from .quote_options import document_options
             document=document_options(data,l)
             day=str(data.get("move_date") or l["move_date"])

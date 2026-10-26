@@ -117,7 +117,7 @@ document.addEventListener('change',e=>{
 });
 
 let qsTimer,qsCalculation=0;
-document.addEventListener('input',e=>{const f=e.target.closest('#crm-quote-form');if(!f)return;const sequence=++qsCalculation;clearTimeout(qsTimer);qsTimer=setTimeout(async()=>{if(document.getElementById('crm-quote-form')!==f||!f.checkValidity())return;try{const d=crmQuoteData();if(!d)return;const r=await api('/crm/quotes/calculate',{method:'POST',data:d});if(sequence===qsCalculation&&document.getElementById('crm-quote-form')===f)crmRenderCalc(r);}catch{}},350);});
+document.addEventListener('input',e=>{const f=e.target.closest('#crm-quote-form');if(!f)return;const sequence=++qsCalculation;clearTimeout(qsTimer);qsTimer=setTimeout(async()=>{if(document.getElementById('crm-quote-form')!==f||!f.checkValidity())return;try{const d=crmQuoteData();if(!d)return;const r=await api('/crm/quotes/calculate',{method:'POST',data:d});if(sequence===qsCalculation&&document.getElementById('crm-quote-form')===f)crmRenderCalc(r);}catch(ex){if(sequence===qsCalculation&&modal.open&&document.getElementById('crm-quote-form')===f){document.getElementById('crm-quote-result').textContent='Price unavailable — no draft saved. '+ex.message;}}},350);});
 
 const qsOldRefresh=crmRefreshRate;
 crmRefreshRate=async function(){await qsOldRefresh();qsSyncDocument();};

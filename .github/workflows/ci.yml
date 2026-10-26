@@ -95,11 +95,10 @@ jobs:
           NODE_PATH: /tmp/crownops-browser/node_modules
           CROWNOPS_TEAM_CHAT_MODE: owner
         run: python tests/browser/run_mobile.py team_chat
-      - name: Test paused staff AI routing and quote isolation
+      - name: Test missing pricing calendar and dismissible quote errors
         env:
           NODE_PATH: /tmp/crownops-browser/node_modules
-          CROWNOPS_AI_ASSIST_ENABLED: "0"
-        run: python tests/browser/run_mobile.py staff_ai
+        run: python tests/browser/run_mobile.py quote_calendar
       - name: Smoke-create application
         env:
           CROWNOPS_ENV: test

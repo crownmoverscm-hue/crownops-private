@@ -19,8 +19,12 @@ async function api(path,options={}){
  if(options.form)init.body=options.form;
  if(init.method!=='GET')init.headers['X-CSRF-Token']=S.csrf;
  if(!navigator.onLine)throw new Error('You are offline. Keep this screen open and reconnect before saving.');
- let resp;try{resp=await fetch('/api'+path,init);}catch{throw new Error(init.method==='GET'?'Connection interrupted. Reconnect and try loading this section again.':'Connection interrupted. This save was not confirmed. Reconnect and check the record before trying again.');}
- let body;try{body=await resp.json();}catch{body={detail:'Server returned an unreadable response.'};}
+ const controller=new AbortController();init.signal=controller.signal;
+ const timeout=setTimeout(()=>controller.abort(),options.timeoutMs||30000);
+ let resp,body;
+ try{resp=await fetch('/api'+path,init);try{body=await resp.json();}catch(ex){if(ex.name==='AbortError')throw ex;body={detail:'Server returned an unreadable response.'};}}
+ catch(ex){throw new Error(ex.name==='AbortError'?(init.method==='GET'?'Loading timed out. You can close this dialog and try again.':'Save timed out; completion is unknown. Check the record before retrying. No automatic retry was made.'):(init.method==='GET'?'Connection interrupted. Reconnect and try loading this section again.':'Connection interrupted. This save was not confirmed. Reconnect and check the record before trying again.'));}
+ finally{clearTimeout(timeout);}
  if(!resp.ok){const error=new Error(typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));error.status=resp.status;throw error;}
  return body;
 }
@@ -36,7 +40,7 @@ function empty(title,text,action=''){return `<div class="empty">${icon('box')}<s
 function field(name,label,value='',type='text',extra=''){return `<div class="form-field"><label for="f-${name}">${label}</label><input id="f-${name}" name="${name}" type="${type}" value="${h(value)}" ${extra}></div>`;}
 function select(name,label,options,value='',extra=''){return `<div class="form-field"><label for="f-${name}">${label}</label><select id="f-${name}" name="${name}" ${extra}>${options.map(o=>{const a=Array.isArray(o)?o:[o,o];return `<option value="${h(a[0])}" ${String(value)===String(a[0])?'selected':''}>${h(a[1])}</option>`;}).join('')}</select></div>`;}
 function textArea(name,label,value='',rows=4){return `<div class="form-field full"><label for="f-${name}">${label}</label><textarea id="f-${name}" name="${name}" rows="${rows}">${h(value)}</textarea></div>`;}
-function showModal(title,body,footer='',wide=false){modal.style.width=wide?'1060px':'850px';modal.innerHTML=`<div class="modal-head"><h2>${title}</h2><div class="grow"></div>${btn('close',icon('close'),'btn-icon','aria-label="Close dialog"')}</div><div class="modal-body"><div class="modal-error" id="modal-error"></div>${body}</div>${footer?'<div class="modal-foot">'+footer+'</div>':''}`;if(!modal.open)modal.showModal();modal.scrollTop=0;}
+function showModal(title,body,footer='',wide=false){modal.style.width=wide?'1060px':'850px';modal.innerHTML=`<div class="modal-head"><h2>${title}</h2><div class="grow"></div>${btn('close',icon('close'),'btn-icon','aria-label="Close dialog"')}</div><div class="modal-body"><div class="modal-error" id="modal-error" role="alert" aria-live="assertive"></div>${body}</div>${footer?'<div class="modal-foot">'+footer+'</div>':''}`;if(!modal.open)modal.showModal();modal.scrollTop=0;}
 function modalError(e){const box=document.getElementById('modal-error');if(box){box.textContent=e.message||String(e);box.scrollIntoView({block:'nearest'});}else toast(e.message||String(e));}
 function readForm(form){return Object.fromEntries(new FormData(form));}
 function checked(form,name){return [...form.querySelectorAll(`input[name="${name}"]:checked`)].map(x=>x.value);}

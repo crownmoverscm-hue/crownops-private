@@ -152,8 +152,14 @@ document.addEventListener('submit',async e=>{
   if(QE.mode==='new')data.new_client={client_name:f.elements.client_name.value,email:f.elements.client_email.value,phone:f.elements.client_phone.value};
   if(!data.lead_id)data.service_details=Object.fromEntries(qeServiceFields.map(k=>[k,f.elements[k].value]));
   for(const key of ['client_name','client_email','client_phone','selected_service',...qeServiceFields])delete data[key];
-  QE.busy=true;const buttons=[...modal.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);
-  try{const quote=await api('/crm/quotes',{method:'POST',data});toast('Draft estimate saved.');await crmOpenQuote(quote.id);}
-  finally{QE.busy=false;buttons.filter(b=>b.isConnected).forEach(b=>b.disabled=false);}
+  QE.busy=true;const editorKey=QE.key;f.setAttribute('aria-busy','true');const buttons=[...modal.querySelectorAll('button:not([data-action=close])')];buttons.forEach(b=>b.disabled=true);
+  try{const quote=await api('/crm/quotes',{method:'POST',data});toast('Draft estimate saved.');if(modal.open&&document.getElementById('crm-quote-form')===f)await crmOpenQuote(quote.id);}
+  finally{if(QE.key===editorKey)QE.busy=false;f.removeAttribute('aria-busy');buttons.filter(b=>b.isConnected).forEach(b=>b.disabled=false);}
  }catch(ex){modalError(ex);}
 });
+
+// Native validation may target a field hidden by the document-style view.
+document.addEventListener('invalid',e=>{
+ if(!e.target.closest('#crm-quote-form'))return;
+ modalError(new Error('Draft was not saved. Complete '+(e.target.labels?.[0]?.textContent||e.target.name||'the required fields')+'. If no hourly rate is available, ask an owner to configure pricing.'));
+},true);
