@@ -27,6 +27,8 @@ def selected(qid):
 
 
 def deny_actions(qid):
+    from .quote_staging import deny_side_effects
+    deny_side_effects()
     if selected(qid):
         raise HTTPException(409, 'TEST ONLY create-only permission: sending, acceptance and booking are disabled.')
 
@@ -156,6 +158,9 @@ def prepare(path, qid, data, actor):
         if attempt.get('quote_id') == qid and attempt.get('state') == 'Ready':
             return {'prepared': True, 'state': 'Ready', 'external_id': attempt['external_id'], 'duplicate': True}
         raise HTTPException(409, 'The one-estimate attempt is consumed or unresolved. Reconcile provider records; do not retry creation.')
+    from .quote_staging import QUOTE
+    if qid == QUOTE:
+        raise HTTPException(409, 'Estimate 185 already exists. Reconcile the existing attempt; customer and estimate creation are retired for this quote.')
     p = preflight(path, qid)
     if data.get('confirm') is not True or data.get('review_hash') != p['review_hash']:
         raise HTTPException(409, 'Review the current test-only terms, exact amounts and proposed writes before confirming.')

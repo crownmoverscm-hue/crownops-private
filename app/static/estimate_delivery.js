@@ -3,6 +3,31 @@ window.openQuickBooksEstimate = async function(qid){
  const base='/quotes/'+encodeURIComponent(qid)+'/quickbooks-delivery';
  const r=await api(base);
  const close='<button data-action="close">Close</button>';
+ if(r.send_only_preflight){
+  const detail=(name,value)=>'<div class="quote-line" style="gap:12px;overflow-wrap:anywhere"><span>'+h(name)+'</span><strong>'+h(value)+'</strong></div>';
+  showModal('TEST ONLY · Estimate 185 send preflight',
+   '<div class="callout orange"><strong>Email sending is disabled.</strong> No acceptance, booking, invoice, deposit or payment is authorized.</div>'+
+   detail('Company',r.company_name+' · '+r.country+' · '+r.environment)+detail('Realm ID',r.realm_id)+
+   detail('QuickBooks Estimate ID',r.external_id)+detail('CrownOps quote',r.quote_id+' · r'+r.revision)+
+   detail('Logical service parent',r.service_id)+detail('QuickBooks Customer ID',r.customer_id)+
+   '<p style="overflow-wrap:anywhere">Revision history: '+r.revisions.map(q=>h(q.id)+' (r'+h(q.revision)+')').join(' → ')+'</p>'+
+   '<div class="panel panel-body"><strong>Immutable synced financial snapshot</strong>'+detail('Subtotal',money(r.subtotal_cents))+
+   detail('GST / TPS',money(r.gst_cents))+detail('QST / TVQ',money(r.qst_cents))+detail('Total CAD',money(r.total_cents))+
+   '<p class="small" style="overflow-wrap:anywhere">Snapshot: '+h(r.snapshot_hash)+'</p></div>'+
+   detail('Fictional customer email',r.customer_email)+detail('Current Estimate BillEmail',r.bill_email)+detail('Proposed sendTo recipient',r.recipient)+
+   '<p class="callout orange">'+h(r.send_to_warning)+'</p>'+
+   detail('CC / BCC requested','None')+detail('Provider-default CC / BCC',r.cc_bcc.provider_defaults_verified_absent?'Verified absent':'Unknown — sending blocked')+
+   detail('Sender',r.sender)+detail('Reply-To',r.reply_to)+
+   '<p>'+h(r.message_preview_note)+'</p><div class="message-draft" style="white-space:pre-wrap;overflow-wrap:anywhere">'+h(r.memo)+'</div>'+
+   '<details><summary>Saved estimate content</summary>'+(r.lines||[]).map(x=>'<p style="white-space:pre-wrap;overflow-wrap:anywhere">'+h(x.description)+(x.amount_cents?' · '+money(x.amount_cents):'')+'</p>').join('')+'</details>'+
+   '<p style="overflow-wrap:anywhere"><strong>Intended external action:</strong> '+h(r.operation)+'</p>'+
+   '<p>'+h(r.duplicate_protection)+'</p>'+detail('Existing send attempt',r.send_attempt.state||'None recorded')+
+   '<p><strong>Effective gates:</strong> Customer CREATE OFF · Estimate CREATE OFF · Acceptance OFF · Booking OFF · Invoice OFF · Deposit OFF · Payment OFF · Gmail OFF</p>'+
+   '<p>Provider email status: '+h(r.provider_email_status||'NotSet')+' · estimate status: '+h(r.provider_status)+'. Neither sent nor Accepted status proves inbox receipt or a customer click.</p>'+
+   '<ul>'+r.blockers.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul>',close+'<button disabled>Send disabled — owner approval required</button>');
+  return;
+ }
+
  if(r.test_only&&r.state==='Not prepared'){
   showModal('TEST ONLY · create one unsent sandbox estimate',
    '<p><strong>'+h(r.company_name)+' · '+h(r.realm_id)+' · '+h(r.country)+'</strong></p>'+

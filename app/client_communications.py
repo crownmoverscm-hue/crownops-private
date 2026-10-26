@@ -126,6 +126,8 @@ def settings_for_deposit(db):
 
 def prepare_deposit_request(db, qid, actor):
     """Prepare one reviewable EN/FR request. Never create a checkout or send mail."""
+    from .quote_staging import deny_side_effects
+    deny_side_effects()
     from .platform_common import queue_message
     context=deposit_request_context(db,qid)
     if not context:return None

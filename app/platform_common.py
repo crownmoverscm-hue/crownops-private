@@ -138,6 +138,8 @@ def quickbooks_write_enabled():
     return os.getenv('CROWNOPS_ENV','test')=='production' and os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES','0')=='1'
 
 def quickbooks_gate():
+    from .quote_staging import deny_side_effects
+    deny_side_effects()
     env=quickbooks_environment()
     if not quickbooks_write_enabled():
         flag='CROWNOPS_ALLOW_QBO_SANDBOX_WRITES' if env=='sandbox' else 'CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES'

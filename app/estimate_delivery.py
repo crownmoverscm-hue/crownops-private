@@ -204,6 +204,10 @@ def prepare(path, qid, basis, actor):
 
 
 def preview(path, qid):
+    from .quote_staging import isolated, QUOTE
+    if isolated() and qid == QUOTE:
+        from .sandbox_estimate_send import preflight
+        return {**preflight(path, qid), 'send_only_preflight': True}
     from .sandbox_estimate_test import selected, public_preflight
     if selected(qid):
         test = public_preflight(path,qid)

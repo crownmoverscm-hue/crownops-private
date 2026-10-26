@@ -326,7 +326,7 @@ document.addEventListener('click',async e=>{
   if(a==='quote-from-service')return crmQuoteBuilder(id);
   if(a==='quote-open')return crmOpenQuote(id);
   if(a==='templates')return crmTemplates();
-  if(a==='quote-calc'){const d=crmQuoteData();if(!d)return;return crmRenderCalc(await api('/crm/quotes/calculate',{method:'POST',data:d}));}
+  if(a==='quote-calc'){const d=crmQuoteData();if(!d)return;const form=document.getElementById('crm-quote-form');const result=await api('/crm/quotes/calculate',{method:'POST',data:d});if(!modal.open||document.getElementById('crm-quote-form')!==form)return;crmRenderCalc(result);const error=document.getElementById('modal-error');if(error){error.textContent='';}return;}
   if(a==='quote-finalize')return crmFinalize(id);
   if(a==='deposit-record')return crmDepositDialog(id);
   if(a==='deposit-remind'){const r=await api('/crm/quotes/'+encodeURIComponent(id)+'/deposit-reminder',{method:'POST'});toast('Friendly deposit reminder drafted in Communications.');return;}

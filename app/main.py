@@ -232,6 +232,9 @@ def create_app(database_path=None):
 
     @app.middleware('http')
     async def safety(request,call_next):
+        from .quote_staging import blocked_mutation
+        if request.method not in ('GET','HEAD','OPTIONS') and blocked_mutation(request.url.path):
+            return JSONResponse({'detail':'Quote staging permits draft editing and read-only preflight only. Acceptance, booking, invoices, deposits and payments are disabled.'},409)
         # API mutations must originate from this app. Non-browser signed webhooks
         # are authenticated independently and cannot use cookie access.
         if request.method not in ('GET','HEAD','OPTIONS') and request.url.path.startswith('/api/'):
@@ -1552,6 +1555,14 @@ def create_app(database_path=None):
     register_extensions(app,path,auth,public_url)
     from .estimate_delivery import register_estimate_delivery
     register_estimate_delivery(app,path,auth)
+    from .sandbox_estimate_send import register as register_sandbox_send
+    from .sandbox_estimate_events import register as register_sandbox_events
+    from .quote_staging_review import register as register_staging_review
+    register_sandbox_send(app,path,auth)
+    register_sandbox_events(app,path,auth)
+    register_staging_review(app,path,auth)
+    from .quote_staging_review import startup_report
+    startup_report(path)
     from .invoice_quickbooks_delivery import register_invoice_quickbooks_delivery
     register_invoice_quickbooks_delivery(app,path,auth)
     from .invoice_payments import register_invoice_reconciliation

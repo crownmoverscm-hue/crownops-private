@@ -83,6 +83,8 @@ def gmail_read_failure(exc):
 
 
 def _api(token, path, params=None):
+    from .quote_staging import deny_mailbox
+    deny_mailbox()
     last = None
     for attempt in range(3):
         try:
@@ -551,6 +553,8 @@ def promote_pending_call_events(db, actor, new_lead, limit=120):
 
 
 def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_feed=30, fluid=False, feed_names=None):
+    from .quote_staging import deny_mailbox
+    deny_mailbox()
     days = max(1, min(int(days), 60))
     max_per_feed = max(1, min(int(max_per_feed), 50))
     summary = {'scanned': 0, 'new_events': 0, 'new_leads': 0, 'duplicates': 0, 'ignored': 0, 'needs_review':0, 'feeds': {}, 'errors': [], 'fluid': bool(fluid), 'promoted_existing_calls': 0}

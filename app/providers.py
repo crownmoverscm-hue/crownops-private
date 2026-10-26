@@ -28,6 +28,9 @@ def token_save(db,provider,body):
     db.execute('INSERT INTO oauth_credentials(provider,ciphertext,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at',(provider,encrypt(body),now()))
 
 def provider_token(path,provider,require_external=True):
+    if provider=='gmail':
+        from .quote_staging import deny_mailbox
+        deny_mailbox()
     if require_external: external_gate()
     cfg=PROVIDERS[provider]
     with transaction(path) as db:

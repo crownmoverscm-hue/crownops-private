@@ -100,6 +100,8 @@ def prepare_draft(db,lead,actor):
     return {'lead_id':lead['id'],'quote_id':qid,'status':status,'missing':missing,'inputs':inputs}
 
 def run_intake(path,new_lead,force=False):
+    from .quote_staging import deny_mailbox
+    deny_mailbox()
     if not SYNC_LOCK.acquire(blocking=False):return {'running':True}
     try:
         with transaction(path) as db:
