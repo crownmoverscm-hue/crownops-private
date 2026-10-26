@@ -42,6 +42,7 @@ def preflight(path, qid):
         attempt = settings(db, 'sandbox_estimate_test_attempt_v1', {}) or {}
         send_attempt = settings(db, SEND_SLOT, {}) or {}
         approval = settings(db, APPROVAL, {}) or {}
+        approving_owner = one(db, "SELECT id FROM users WHERE id=? AND role='owner' AND active=1", (approval.get('approved_by', ''),))
         if not q or not row or str(row['external_id']) != scope.ESTIMATE:
             raise HTTPException(409, 'Existing quote / Estimate 185 mapping is missing. Reconcile; do not CREATE.')
         lead = one(db, 'SELECT * FROM leads WHERE id=?', (q['lead_id'],))
@@ -92,6 +93,9 @@ def preflight(path, qid):
         blockers.append(source_error)
     if history[-1]['id'] != qid:
         blockers.append('A newer revision exists; the synced revision cannot be used for a valid booking or send.')
+    from .quote_options import expired_quote
+    if expired_quote(q):
+        blockers.append('The synced estimate has expired; do not send or recreate it.')
     if not any(x['id'] == 'QUOTE-8a7b31fbc00e4302' and x['revision'] == 1 for x in history):
         blockers.append('Reported r1/r2 logical service parent is not verified.')
     if unresolved or attempt.get('state') != 'Ready' or row['state'] != 'Ready':
@@ -110,7 +114,7 @@ def preflight(path, qid):
                    and bool(evidence.get('evidence_reference')) and not cc)
     if not evidence_ok:
         blockers.append('Sender, Reply-To and absence of provider-default CC/BCC require independent sandbox evidence.')
-    owner_approved = (approval.get('owner_approved') is True and bool(approval.get('approved_by'))
+    owner_approved = (approval.get('owner_approved') is True and bool(approving_owner)
                       and approval.get('review_hash') == review and approval.get('recipient') == RECIPIENT
                       and str(approval.get('estimate_id')) == scope.ESTIMATE)
     if owner_approved:
@@ -153,9 +157,10 @@ def send(path, qid, data, actor):
         if settings(db, SEND_SLOT):
             raise HTTPException(409, 'Send already claimed; reconcile instead of retrying.')
         approval = settings(db, APPROVAL, {}) or {}
+        approving_owner = one(db, "SELECT id FROM users WHERE id=? AND role='owner' AND active=1", (approval.get('approved_by', ''),))
         row = one(db, 'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?', (qid,))
         latest = one(db, 'SELECT id FROM quotes WHERE lead_id=(SELECT lead_id FROM quotes WHERE id=?) ORDER BY revision DESC LIMIT 1', (qid,))
-        if (digest(approval) != p['approval_hash'] or approval.get('review_hash') != p['review_hash'] or not approval.get('owner_approved')
+        if (not approving_owner or digest(approval) != p['approval_hash'] or approval.get('review_hash') != p['review_hash'] or not approval.get('owner_approved')
                 or not row or row['state'] != 'Ready' or not latest or latest['id'] != qid or source(db, qid)[3] != row['source_hash']):
             raise HTTPException(409, 'Approval or source changed during review. No send claimed.')
         put_setting(db, SEND_SLOT, {'state': 'Sending', 'quote_id': qid, 'estimate_id': scope.ESTIMATE, 'recipient': RECIPIENT,

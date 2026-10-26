@@ -32,6 +32,7 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   await correctedDate.fill('2026-11-15');await restoredRate;
   // Keep this a calculator/UI test: no quote-save route or provider is called.
   await p.locator('#crm-quote-form input[name=hourly_rate]').fill('100');
+  await p.locator('#crm-quote-form input[name=fixed_transport]').fill('150');
   await p.getByRole('button',{name:'Calculate',exact:true}).click();
   await p.locator('#crm-quote-result .quote-price').waitFor();
   assert.equal(await p.locator('#modal-error').textContent(),'','corrected calculation clears stale validation');

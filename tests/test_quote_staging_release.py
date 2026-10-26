@@ -140,6 +140,16 @@ class QuoteStagingReleaseTests(unittest.TestCase):
         self.assertEqual(self.f.count('jobs'), 0)
         self.assertEqual(self.f.count('outbound_messages'), 0)
 
+    def test_expiry_and_retired_approving_owner_block_send(self):
+        self.approve_simulated_send()
+        with patch('app.quote_options.expired_quote', return_value=True):
+            p = self.review(); self.assertFalse(p['can_send'])
+            self.assertTrue(any('expired' in x for x in p['blockers']))
+        with transaction(self.path) as db:
+            db.execute("UPDATE users SET active=0 WHERE id='owner'")
+        p = delivery.preflight(self.path, scope.QUOTE)
+        self.assertFalse(p['owner_approved']); self.assertFalse(p['can_send'])
+
     def test_simulated_send_keeps_original_snapshot_and_never_books(self):
         data = self.approve_simulated_send()
         with closing(connect(self.path)) as db:
