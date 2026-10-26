@@ -87,6 +87,7 @@ crmQuoteBuilder=async function(leadId='',options={}){
  const deposit=f.elements.deposit_required.closest('.form-field');document.querySelector('.qe-quote-info .grid2').append(deposit);f.elements.deposit_required.disabled=false;
  crmToggleServiceFields();crmToggleStartTime();qeUpdateClientCard();
  if(options.result)crmRenderCalc(options.result);
+ if(CRM.quoteSetup?.pricing_error)modalError(new Error(CRM.quoteSetup.pricing_error));
 };
 
 document.addEventListener('click',async e=>{

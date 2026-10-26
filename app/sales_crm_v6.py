@@ -760,8 +760,12 @@ def register_sales_crm_v6(app,path,auth,public_url):
         with closing(connect(path)) as db:
             l=one(db,"SELECT * FROM leads WHERE id=?",(lead_id,)) if lead_id else None
             if lead_id and not l:raise HTTPException(404,"Service record not found.")
-            day=move_date or (l or {}).get("move_date","");rate=source=None
-            if day:rate,source=rate_for(db,day,int(movers))
+            day=move_date or (l or {}).get("move_date","");rate=source=None;pricing_error=''
+            if day:
+                try:rate,source=rate_for(db,day,int(movers))
+                except HTTPException as error:
+                    if error.status_code not in (409,422):raise
+                    pricing_error=str(error.detail)
             mats=rows(db,"SELECT code,name,category,sell_cents FROM material_catalog WHERE active=1 ORDER BY category,name")
             a=account_for_lead(db,lead_id) if lead_id else None
             policy=settings(db,'billing_policy',{}) or {}
@@ -771,7 +775,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
             presets.append({"key":(city+"-"+province).lower().replace(" ","-").replace(".",""),"city":city,"province":province,
               "one_way_km":float(one_way),"round_trip_km":float(round_trip),"adjusted_km":float(adjusted),
               "gas_one_truck_cents":money(adjusted*LONG_KM)})
-        return {"client":a,"lead":l,"suggested_hourly_rate":float(rate) if rate is not None else None,"rate_source":source or "",
+        return {"client":a,"lead":l,"suggested_hourly_rate":float(rate) if rate is not None else None,"rate_source":source or "","pricing_error":pricing_error,
           "materials":mats,"long_distance_presets":presets,"can_manage_materials":u['role'] in ('owner','manager'),
           "billing_taxes":(policy.get('terms') or {}).get('taxes',[]) if policy.get('approved') else [],
           "local_pricing_policy":local_pricing_policy.snapshot(),

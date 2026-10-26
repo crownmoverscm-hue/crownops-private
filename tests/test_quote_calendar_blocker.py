@@ -30,6 +30,13 @@ class QuoteCalendarBlockerTests(TemplateQuoteTests):
             self.assertEqual(self.count('quotes'),1)
             self.assertEqual(self.count('outbound_messages'),0);self.assertEqual(self.count('jobs'),0)
 
+    def test_missing_calendar_setup_opens_without_price_or_side_effect(self):
+        r=self.client.get('/api/crm/quote-setup?move_date=2026-11-15')
+        self.assertEqual(r.status_code,200,r.text)
+        self.assertIsNone(r.json()['suggested_hourly_rate'])
+        self.assertIn('Draft was not saved',r.json()['pricing_error'])
+        self.assertEqual(self.count('quotes'),0)
+
     @staticmethod
     def fixture_env():
         return {'CROWNOPS_QUOTE_TEST_FIXTURE':DAY,'CROWNOPS_ENV':'staging','QBO_ENV':'sandbox',
