@@ -156,7 +156,10 @@ def preflight(path, qid):
     configured = os.getenv('CROWNOPS_QBO_TEST_SEND_ESTIMATE', '') == scope.ESTIMATE
     if not configured:
         blockers.append('The dedicated Estimate 185 SEND capability is disabled on this deployment.')
-    return {'test_only': True, 'existing_estimate_only': True, 'state': row['state'],
+    from .sandbox_estimate_observation import baseline, history_and_integrity
+    with closing(connect(path)) as db:
+        postsend = history_and_integrity(db, local, reconciliation, approval, send_attempt, remote, company, customer, saved, snapshot_hash) if send_attempt else None
+    return {'test_only': True, 'existing_estimate_only': True, 'state': send_attempt.get('state') or row['state'],
             'company_name': company['CompanyName'], 'country': 'CA', 'realm_id': realm, 'environment': 'sandbox',
             'quote_id': qid, 'revision': q['revision'], 'service_id': q['lead_id'], 'client_ids': [x['client_id'] for x in clients],
             'revisions': history, 'customer_id': customer_id, 'customer_name': customer.get('DisplayName', ''),
@@ -183,7 +186,8 @@ def preflight(path, qid):
             'family_context_hash': local['context_hash'], 'provider_hash': provider_hash,
             'reconciliation': reconciliation, 'reconciliation_blockers': reconciliation_blockers,
             'reconciliation_can_record': not reconciliation['recorded'] and not reconciliation_blockers,
-            'send_attempt': send_attempt, 'blockers': blockers, 'review_hash': review,
+            'send_attempt': send_attempt, 'postsend': postsend, 'provider_lifecycle_baseline': baseline(remote),
+            'blockers': blockers, 'review_hash': review,
             'approval_hash': digest(approval),
             'gates': {'create_customer': False, 'create_estimate': False, 'acceptance': False, 'booking': False,
                       'invoice': False, 'deposit': False, 'payment': False, 'gmail_mailbox': False,
@@ -235,6 +239,8 @@ def send(path, qid, data, actor):
     scope.require_isolated()
     with closing(connect(path)) as db:
         require_master(db, actor)
+        if settings(db, SEND_SLOT):
+            raise HTTPException(409, 'Send slot permanently consumed. Observe the existing attempt; never resend.')
     if os.getenv('CROWNOPS_QBO_TEST_SEND_ESTIMATE', '') != scope.ESTIMATE:
         raise HTTPException(403, 'SEND disabled. A separate owner-approved test release is required; no email requested.')
     p = preflight(path, qid)
@@ -253,18 +259,33 @@ def send(path, qid, data, actor):
                 or row['state'] != 'Ready' or not current_for_delivery(db, qid, p['provider_hash'], p['family_context_hash'])
                 or source(db, qid)[3] != row['source_hash']):
             raise HTTPException(409, 'Approval or source changed during review. No send claimed.')
+        authorization = {'approval_hash': digest(approval), 'reconciliation_hash': p['reconciliation']['record_hash'],
+                         'context_hash': p['family_context_hash'], 'provider_hash': p['provider_hash'],
+                         'snapshot_hash': p['snapshot_hash'], 'provider_baseline': p['provider_lifecycle_baseline']}
         put_setting(db, SEND_SLOT, {'state': 'Sending', 'quote_id': qid, 'estimate_id': scope.ESTIMATE, 'recipient': RECIPIENT,
-                                  'review_hash': p['review_hash'], 'actor': actor, 'at': now()})
-        audit(db, actor, 'Claimed one separately approved sandbox email; no acceptance authorized', 'quotes', qid)
+                                  'review_hash': p['review_hash'], 'actor': actor, 'at': now(), 'authorization_at_claim': authorization})
+        audit(db, actor, 'Claimed one separately approved sandbox email; no acceptance authorized', 'quotes', qid,
+              {'authorization_at_claim': authorization})
     try:
+        from .sandbox_estimate_observation import sanitized_response, retain_exchange
         token, realm, host = _qbo_connection(path)
         scope.require_isolated()
         if realm != scope.REALM or host != 'https://sandbox-quickbooks.api.intuit.com':
             raise ValueError('Provider identity changed')
+        version = os.getenv('QBO_MINOR_VERSION', '75')
+        requested_at = now()
+        retain_exchange(path, actor, 'SEND_REQUEST', {'operation': 'SEND', 'method': 'POST', 'resource': 'estimate/185/send',
+                        'realm_id': realm, 'recipient': RECIPIENT, 'minorversion': version, 'requested_at': requested_at,
+                        'body_bytes': 0, 'approval_hash': digest(approval), 'http_status': None, 'intuit_tid': None})
         response = requests.post(host + '/v3/company/' + realm + '/estimate/185/send',
-                                 params={'sendTo': RECIPIENT, 'minorversion': os.getenv('QBO_MINOR_VERSION', '75')}, data=b'',
+                                 params={'sendTo': RECIPIENT, 'minorversion': version}, data=b'',
                                  headers={'Authorization': 'Bearer ' + token['access_token'], 'Accept': 'application/json',
-                                          'Content-Type': 'application/octet-stream'}, timeout=30)
+                                          'Content-Type': 'application/octet-stream'}, timeout=30, allow_redirects=False)
+        # Retain status/trace BEFORE raise_for_status or JSON parsing. Never retain
+        # a raw exception, arbitrary headers or response body containing secrets.
+        retain_exchange(path, actor, 'SEND', {'operation': 'SEND', 'method': 'POST', 'resource': 'estimate/185/send',
+                        'realm_id': realm, 'recipient': RECIPIENT, 'minorversion': version, 'requested_at': requested_at,
+                        'received_at': now(), **sanitized_response(response)})
         response.raise_for_status()
         remote = response.json()['Estimate']
         if str(remote.get('Id')) != scope.ESTIMATE or remote.get('EmailStatus') != 'EmailSent':
@@ -279,6 +300,13 @@ def send(path, qid, data, actor):
         state = 'Sent'
     except Exception:
         state = 'Unknown'
+        from .sandbox_estimate_observation import retain_exchange
+        try:
+            retain_exchange(path, actor, 'TRANSPORT_FAILURE', {'operation': 'SEND', 'outcome': 'Unknown',
+                            'observed_at': now(), 'http_status': None, 'intuit_tid': None,
+                            'note': 'Completion or evidence retention uncertain; inspect SEND evidence if present. Slot consumed; never retry.'})
+        except Exception:
+            pass  # The durable claim already exists even if diagnostic storage fails.
     with transaction(path) as db:
         attempt = settings(db, SEND_SLOT, {})
         put_setting(db, SEND_SLOT, {**attempt, 'state': state, 'checked_at': now()})
@@ -291,6 +319,10 @@ def send(path, qid, data, actor):
 def register(app, path, auth):
     from .sandbox_revision_reconciliation import register as register_reconciliation
     register_reconciliation(app, path, auth)
+    @app.get('/api/quotes/{qid}/sandbox-provider-readback')
+    def provider_readback(qid: str, u=Depends(auth)):
+        from .sandbox_estimate_observation import raw_readback
+        return raw_readback(path, qid, u['id'])
     @app.get('/api/quotes/{qid}/sandbox-send-preflight')
     def preview(qid: str, u=Depends(auth)):
         require_role(u, SALES)

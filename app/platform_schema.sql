@@ -483,6 +483,23 @@ CREATE TABLE IF NOT EXISTS sandbox_revision_reconciliations (
  context_hash TEXT NOT NULL, provider_hash TEXT NOT NULL, decision_json TEXT NOT NULL,
  audit_id INTEGER NOT NULL UNIQUE REFERENCES audit(id)
 );
+CREATE TABLE IF NOT EXISTS sandbox_provider_exchanges (
+ id TEXT PRIMARY KEY, quote_id TEXT NOT NULL, actor TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('SEND_REQUEST','SEND','TRANSPORT_FAILURE')),
+ created_at TEXT NOT NULL, ciphertext TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS sandbox_exchange_no_update BEFORE UPDATE ON sandbox_provider_exchanges
+ BEGIN SELECT RAISE(ABORT,'Provider exchange evidence is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS sandbox_exchange_no_delete BEFORE DELETE ON sandbox_provider_exchanges
+ BEGIN SELECT RAISE(ABORT,'Provider exchange evidence is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS sandbox_send_audit_no_update BEFORE UPDATE ON audit
+ WHEN OLD.action IN ('Approved ONE Estimate 185 sandbox email; no email sent; acceptance and booking remain disabled',
+ 'Claimed one separately approved sandbox email; no acceptance authorized') OR OLD.action LIKE 'Sandbox email result:%'
+ BEGIN SELECT RAISE(ABORT,'Sandbox send authorization audit is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS sandbox_send_audit_no_delete BEFORE DELETE ON audit
+ WHEN OLD.action IN ('Approved ONE Estimate 185 sandbox email; no email sent; acceptance and booking remain disabled',
+ 'Claimed one separately approved sandbox email; no acceptance authorized') OR OLD.action LIKE 'Sandbox email result:%'
+ BEGIN SELECT RAISE(ABORT,'Sandbox send authorization audit is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS sandbox_reconciliation_no_update BEFORE UPDATE ON sandbox_revision_reconciliations
  BEGIN SELECT RAISE(ABORT, 'Revision reconciliation is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS sandbox_reconciliation_no_delete BEFORE DELETE ON sandbox_revision_reconciliations

@@ -69,12 +69,11 @@ def local_review(db):
 def inspect(db, local, provider_hash):
     from .sandbox_estimate_send import require_master
     row = one(db, 'SELECT * FROM sandbox_revision_reconciliations WHERE id=?', (KEY,))
-    result = {'recorded': bool(row), 'valid': False, 'record_hash': None}
+    result = {'recorded': bool(row), 'valid': False, 'historical_intact': False, 'record_hash': None}
     if not row:
         return result
     result.update(owner_id=row['owner_id'], recorded_at=row['created_at'], reason=row['reason'], audit_id=row['audit_id'])
     try:
-        owner = require_master(db, row['owner_id'])
         decision = json.loads(row['decision_json'])
         event = one(db, 'SELECT * FROM audit WHERE id=?', (row['audit_id'],))
         intact = (event and event['action'] == ACTION and event['object_id'] == R3 and event['actor'] == row['owner_id']
@@ -82,6 +81,9 @@ def inspect(db, local, provider_hash):
                   and decision['recorded_at'] == row['created_at'] and decision['reason'] == row['reason']
                   and decision['context_hash'] == row['context_hash'] and decision['provider_hash'] == row['provider_hash']
                   and decision['id'] == KEY and decision['retained_quote_id'] == scope.QUOTE and decision['withdrawn_quote_id'] == R3)
+        result.update(historical_intact=bool(intact), owner_name=decision.get('owner_name', row['owner_id']),
+                      local_matches=row['context_hash'] == local['context_hash'], record_hash=digest(dict(row)))
+        owner = require_master(db, row['owner_id'])
         valid = (intact and local['eligible_difference'] and row['context_hash'] == local['context_hash']
                  and row['provider_hash'] == provider_hash)
         result.update(valid=bool(valid), record_hash=digest(dict(row)), owner_name=owner['name'])

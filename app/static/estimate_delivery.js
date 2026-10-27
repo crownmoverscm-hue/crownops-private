@@ -7,6 +7,7 @@ window.openQuickBooksEstimate = async function(qid){
   const detail=(name,value)=>'<div class="quote-line" style="gap:12px;overflow-wrap:anywhere"><span>'+h(name)+'</span><strong>'+h(value)+'</strong></div>';
   const master=S.user.role==='owner'&&S.user.is_master_owner===true;
   const reconciliation=r.reconciliation;
+  const postsend=r.postsend, terminal=!!r.send_attempt.state;
   const reconcileForm=master&&r.reconciliation_can_record?'<section class="panel panel-body"><h3>Resolve r3 billing email change</h3>'+
    '<p>'+h(reconciliation.before)+'</p>'+detail('Keep linked to Estimate 185',reconciliation.retained_quote_id+' · r2')+
    detail('Withdraw from delivery use only',reconciliation.withdrawn_quote_id+' · r3')+
@@ -15,11 +16,11 @@ window.openQuickBooksEstimate = async function(qid){
    '<label for="qbo-reconciliation-reason">Reason for withdrawing this billing change</label><textarea id="qbo-reconciliation-reason" maxlength="1000" placeholder="Explain that the intentional r3 edit was meant to select the test email recipient, while fictional billing stays unchanged."></textarea>'+
    '<p><label><input type="checkbox" id="qbo-reconciliation-preserve"> I explicitly withdraw this r3 Bill-to change from Estimate 185 delivery use only. Preserve all three revisions, their original contents and audit history. This does not approve or send an email.</label></p></section>':'';
   const reconciliationNote=reconciliation?.recorded?'<section class="panel panel-body"><h3>Recorded r3 reconciliation</h3>'+
-   detail('Status',reconciliation.valid?'Valid for this exact reviewed history':'Invalidated — r2 delivery remains blocked')+
+   detail('Status',terminal&&reconciliation.historical_intact?'Original reconciliation preserved; pre-send review used':reconciliation.valid?'Valid for this exact reviewed history':'Invalidated — r2 delivery remains blocked')+
    detail('Recorded by',reconciliation.owner_name||reconciliation.owner_id)+detail('Recorded at',reconciliation.recorded_at)+
    detail('Audit event',reconciliation.audit_id)+detail('Reason',reconciliation.reason)+
    '<p>r1, r2 and r3 are preserved. Estimate 185 remains linked to r2. Email approval and SEND remain separate actions.</p></section>':'';
-  const approval=master&&r.approval_eligible?'<div class="panel panel-body"><h3>Approve one sandbox email</h3>'+
+  const approval=master&&r.approval_eligible&&!terminal?'<div class="panel panel-body"><h3>Approve one sandbox email</h3>'+
    '<p>Records your approval only. Sending requires a separate click after review.</p>'+
    '<label for="qbo-approval-reference">Where did you check the sandbox email settings?</label><textarea id="qbo-approval-reference" maxlength="1000" placeholder="Describe the QuickBooks screen or evidence reference; no passwords."></textarea>'+
    '<p><label><input type="checkbox" id="qbo-approval-copies"> I checked this sandbox’s email defaults and Estimate 185: no CC, BCC or send-me-a-copy recipient is configured.</label></p>'+
@@ -27,11 +28,11 @@ window.openQuickBooksEstimate = async function(qid){
    '<p><label><input type="checkbox" id="qbo-approval-unknown"> I understand the exact sender, Reply-To, inbox delivery and online approval link remain unverified until the controlled test. Acceptance and booking stay disabled.</label></p></div>':'';
   const actionData=' data-id="'+h(qid)+'" data-review="'+h(r.review_hash)+'" data-recipient="'+h(r.recipient)+'"';
   const reconciliationButton=master&&r.reconciliation_can_record?'<button type="button" class="btn-primary" data-qbo-delivery="reconcile-r3" data-id="'+h(qid)+'" data-review="'+h(reconciliation.review_hash)+'" data-withdraw="'+h(reconciliation.withdrawn_quote_id)+'" data-recipient="'+h(r.recipient)+'">Record r3 withdrawal — no email approval</button>':'';
-  const approvalButton=master&&r.approval_eligible?'<button type="button" class="btn-primary" data-qbo-delivery="sandbox-approve"'+actionData+'>Approve one test email — do not send</button>':'';
-  const sendButton=master&&r.can_send?'<button type="button" class="btn-primary" data-qbo-delivery="sandbox-send"'+actionData+'>Send ONE QuickBooks test email</button>':
+  const approvalButton=master&&r.approval_eligible&&!terminal?'<button type="button" class="btn-primary" data-qbo-delivery="sandbox-approve"'+actionData+'>Approve one test email — do not send</button>':'';
+  const sendButton=master&&r.can_send&&!terminal?'<button type="button" class="btn-primary" data-qbo-delivery="sandbox-send"'+actionData+'>Send ONE QuickBooks test email</button>':
    '<button disabled>'+(r.send_attempt.state?'Send locked — reconcile existing attempt':!master?'Send disabled — Master owner required':r.owner_approved?'Send unavailable — review blockers':'Send disabled — owner approval required')+'</button>';
   showModal('TEST ONLY · Estimate 185 send preflight',
-   '<div class="callout orange"><strong>'+(r.send_attempt.state?'Send attempt: '+h(r.send_attempt.state)+'. Do not resend.':r.owner_approved?'One test email approved; not sent by approval.':'No current email approval recorded in CrownOps.')+'</strong> No acceptance, booking, invoice, deposit or payment is authorized.</div>'+
+   '<div class="callout orange"><strong>'+(postsend?h(postsend.delivery_label)+' Existing send slot permanently consumed.':r.send_attempt.state?'Send attempt: '+h(r.send_attempt.state)+'. Do not resend.':r.owner_approved?'One test email approved; not sent by approval.':'No current email approval recorded in CrownOps.')+'</strong> No acceptance, booking, invoice, deposit or payment is authorized.</div>'+
    reconciliationNote+reconcileForm+
    detail('Company',r.company_name+' · '+r.country+' · '+r.environment)+detail('Realm ID',r.realm_id)+
    detail('QuickBooks Estimate ID',r.external_id)+detail('CrownOps quote',r.quote_id+' · r'+r.revision)+
@@ -40,7 +41,7 @@ window.openQuickBooksEstimate = async function(qid){
    '<div class="panel panel-body"><strong>Immutable synced financial snapshot</strong>'+detail('Subtotal',money(r.subtotal_cents))+
    detail('GST / TPS',money(r.gst_cents))+detail('QST / TVQ',money(r.qst_cents))+detail('Total CAD',money(r.total_cents))+
    '<p class="small" style="overflow-wrap:anywhere">Snapshot: '+h(r.snapshot_hash)+'</p></div>'+
-   detail('Fictional customer email',r.customer_email)+detail('Current Estimate BillEmail',r.bill_email)+detail('Proposed sendTo recipient',r.recipient)+
+   detail('Fictional customer email',r.customer_email)+detail('Current Estimate BillEmail',r.bill_email)+detail(terminal?'Authorized test recipient':'Proposed sendTo recipient',r.recipient)+
    '<p class="callout orange">'+h(r.send_to_warning)+'</p>'+
    detail('CC / BCC requested','None')+detail('Provider-default CC / BCC',r.cc_bcc.owner_confirmed_absent?'Master owner confirmed absent in sandbox settings; actual headers unverified':'Owner must check sandbox settings; absent API fields are not proof')+
    detail('Sender',r.sender)+detail('Reply-To',r.reply_to)+detail('Company contact email (not verified Reply-To)',r.company_contact_email||'Not returned')+
@@ -48,10 +49,15 @@ window.openQuickBooksEstimate = async function(qid){
    '<details><summary>Saved estimate content</summary>'+(r.lines||[]).map(x=>'<p style="white-space:pre-wrap;overflow-wrap:anywhere">'+h(x.description)+(x.amount_cents?' · '+money(x.amount_cents):'')+'</p>').join('')+'</details>'+
    '<p style="overflow-wrap:anywhere"><strong>Intended external action:</strong> '+h(r.operation)+'</p>'+
    '<p>'+h(r.duplicate_protection)+'</p>'+detail('Existing send attempt',r.send_attempt.state||'None recorded')+
-   (r.approval?.approved_at?detail('Approval recorded',r.approval.approved_name+' · '+r.approval.approved_at)+detail('Approval status',r.approval.current?'Current':'Stale — review again')+detail('Settings evidence',r.approval.evidence_reference):'')+
+   (r.approval?.approved_at?detail('Approval recorded',r.approval.approved_name+' · '+r.approval.approved_at)+detail('Approval status',terminal?'Historical approval preserved; no new send permitted':r.approval.current?'Current':'Stale — review again')+detail('Settings evidence',r.approval.evidence_reference):'')+
+   (postsend?'<section class="panel panel-body"><h3>Existing send — observation only</h3>'+detail('Historical authorization',postsend.historical_authorization.evidence)+
+    detail('Original approval audit event',postsend.historical_authorization.approval_audit_id||'Evidence incomplete')+
+    detail('Current business integrity',postsend.current_integrity.valid?'Protected snapshot matches; observation only':'Review required — no further action')+
+    '<ul>'+postsend.current_integrity.blockers.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul>'+
+    (master?'<a href="/api/quotes/'+encodeURIComponent(qid)+'/sandbox-provider-readback" target="_blank" rel="noopener">Read raw sandbox delivery evidence (GET only)</a>':'')+'</section>':'')+
    '<p><strong>Effective gates:</strong> Customer CREATE OFF · Estimate CREATE OFF · Acceptance OFF · Booking OFF · Invoice OFF · Deposit OFF · Payment OFF · Gmail OFF</p>'+
    '<p>Provider email status: '+h(r.provider_email_status||'NotSet')+' · estimate status: '+h(r.provider_status)+'. Neither sent nor Accepted status proves inbox receipt or a customer click.</p>'+
-   '<ul>'+r.blockers.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul>'+approval,close+reconciliationButton+approvalButton+sendButton);
+   (terminal?'<p>Historical approval is consumed. Opening this view only reads provider status; it cannot grant another send or apply customer acceptance.</p>':'<ul>'+r.blockers.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul>')+approval,close+reconciliationButton+approvalButton+sendButton);
   return;
  }
 

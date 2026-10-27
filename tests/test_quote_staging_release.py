@@ -23,6 +23,7 @@ class QuoteStagingReleaseTests(unittest.TestCase):
         self.f = fixture.TemplateQuoteTests(); self.f.setUp(); self.addCleanup(self.f.doCleanups)
         self.path, self.client = self.f.path, self.f.client
         self.env = {'CROWNOPS_ENV': 'staging', 'QBO_ENV': 'sandbox', 'QBO_SANDBOX_REALM_ID': scope.REALM,
+                    'CROWNOPS_SECRET_KEY': base64.urlsafe_b64encode(os.urandom(32)).decode(),
                     'CROWNOPS_PUBLIC_URL': 'https://' + scope.HOST, 'CROWNOPS_DB': scope.DATABASE,
                     'RAILWAY_SERVICE_ID': scope.SERVICE, 'RAILWAY_ENVIRONMENT_ID': scope.ENVIRONMENT,
                     'CROWNOPS_QUOTE_TEST_FIXTURE': '2026-11-15', 'CROWNOPS_QBO_TEST_CREATE_QUOTE': scope.QUOTE,
