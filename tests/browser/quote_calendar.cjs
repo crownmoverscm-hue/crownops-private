@@ -136,6 +136,28 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   assert.equal(await p.getByRole('link',{name:'Read raw sandbox delivery evidence (GET only)',exact:true}).count(),1);
   assert.equal(sendCalls,0);assert.equal(preflightMutations,0);
   assert(await p.locator('#modal').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'postsend modal overflow '+width);
+  // Broader summary must use the terminal QuickBooks fact, never claim inbox
+  // delivery or conflate it with the separately unsent CrownOps workflow.
+  await p.getByRole('button',{name:'Close',exact:true}).last().click();
+  let summaryMutations=0;
+  await p.route('**/api/documents/quotes',r=>{
+   if(r.request().method()!=='GET')summaryMutations++;
+   return r.fulfill({json:[
+    {id:'QUOTE-08dd48a364a34f66',lead_id:'SUMMARY-ONLY',revision:2,status:'Draft',display_state:'Draft',client_name:'SIMULATED QuickBooks send',inputs:{},result:{},delivery_provider:'QuickBooks',email_status:'Sent',crownops_email_status:'Not sent',opens:0},
+    {id:'SUMMARY-CROWNOPS',lead_id:'SUMMARY-OTHER',revision:1,status:'Draft',display_state:'Draft',client_name:'SIMULATED CrownOps only',inputs:{},result:{},delivery_provider:'CrownOps',email_status:'Not sent',opens:0}
+   ]});
+  });
+  await p.evaluate(()=>navigate('quotes'));
+  await p.locator('.doc-browser').waitFor();
+  const sentRow=p.locator('tr').filter({hasText:'QUOTE-08dd48a364a34f66'});
+  assert.match(await sentRow.innerText(),/QuickBooks: Provider reports sent — inbox receipt unconfirmed/);
+  assert.match(await sentRow.innerText(),/CrownOps email: Not sent/);
+  assert.doesNotMatch(await sentRow.innerText(),/Email: Ready|delivered/i);
+  const otherRow=p.locator('tr').filter({hasText:'SUMMARY-CROWNOPS'});
+  assert.match(await otherRow.innerText(),/Email not sent/);
+  assert.doesNotMatch(await otherRow.innerText(),/QuickBooks|Provider reports sent/);
+  assert.equal(summaryMutations,0);assert.equal(sendCalls,0);
+  assert(await p.locator('body').evaluate(el=>el.scrollWidth<=innerWidth+1),'summary overflow '+width);
   await ctx.close();console.log(JSON.stringify({width,missingCalendar:'PASS',timeout:'PASS',dismissal:'PASS',validationRecovery:'PASS',sendPreflight:'PASS',revisionReconciliation:'PASS'}));
  }
  await browser.close();

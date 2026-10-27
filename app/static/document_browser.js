@@ -17,7 +17,11 @@
  function metric(label,value,detail){return `<div class="doc-metric"><strong>${value}</strong><span>${h(label)}</span><small>${h(detail||'')}</small></div>`;}
  function menuButton(kind,d){return `<button type="button" class="doc-more" data-doc-menu="${kind}" data-id="${h(d.id)}" aria-label="Actions for ${h(kind==='quotes'?d.client_name+' revision '+d.revision:d.number)}" aria-haspopup="menu" aria-expanded="false">⋯</button>`;}
  function rowActions(kind,d){return `<div class="doc-row-actions"><button class="btn-small" data-doc-action="open" data-kind="${kind}" data-id="${h(d.id)}">Open</button>${menuButton(kind,d)}</div>`;}
- function delivery(d){return `<div class="doc-delivery">${h(d.email_status==='Sent'?(d.delivery_provider==='QuickBooks'?'Sent through QuickBooks':'Email sent'):d.email_status==='Not sent'?'Email not sent':'Email: '+d.email_status)}${d.sent_at?'<span>'+showDay(d.sent_at)+'</span>':''}${d.delivery_error?'<span class="pill orange">Review needed</span>':''}</div>`;}
+ function delivery(d){
+  const qbo=d.delivery_provider==='QuickBooks';
+  const label=qbo?'QuickBooks: '+(d.email_status==='Sent'?'Provider reports sent — inbox receipt unconfirmed.':d.email_status):d.email_status==='Sent'?'Email sent':d.email_status==='Not sent'?'Email not sent':'Email: '+d.email_status;
+  return `<div class="doc-delivery">${h(label)}${qbo&&d.crownops_email_status?'<span>CrownOps email: '+h(d.crownops_email_status)+'</span>':''}${d.sent_at?'<span>'+showDay(d.sent_at)+'</span>':''}${d.delivery_error?'<span class="pill orange">Review needed</span>':''}</div>`;
+ }
  async function render(kind){
   closeMenu(false);
   records[kind]=await api(kind==='quotes'?'/documents/quotes':'/invoices');

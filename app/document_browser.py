@@ -6,7 +6,7 @@ import json
 from fastapi import Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from .store import connect, transaction, rows, one, audit, now, dumps
-from .platform_common import OFFICE, SALES, MANAGERS, require_role, invoice_job, invoice_current, business_day
+from .platform_common import OFFICE, SALES, MANAGERS, require_role, invoice_job, invoice_current, business_day, settings
 from .invoice_checks import allocated_credits
 
 
@@ -76,7 +76,12 @@ def register_document_browser(app,path,auth,public_url):
         from .quote_options import expired_quote
         with closing(connect(path)) as db:
             messages={m['event_key']:m for m in rows(db,"SELECT event_key,status,sent_at FROM outbound_messages WHERE event_key LIKE 'quote-delivery:%'")}
-            qbo_deliveries={d['quote_id']:d for d in rows(db,'SELECT quote_id,state,sent_at,error FROM qbo_estimate_deliveries')}
+            qbo_deliveries={d['quote_id']:d for d in rows(db,'SELECT quote_id,environment,realm_id,external_id,state,sent_at,error FROM qbo_estimate_deliveries')}
+            # Read the dedicated terminal send fact; never update the immutable
+            # reviewed delivery row, authorization, quote status or provider.
+            from .sandbox_estimate_send import SEND_SLOT
+            from .quote_staging import QUOTE, ESTIMATE, REALM
+            sandbox_send=settings(db,SEND_SLOT,{}) or {}
             views={v['quote_id']:v for v in rows(db,'SELECT quote_id,count(*) opens,max(viewed_at) last_viewed_at FROM quote_views GROUP BY quote_id')}
             invoices={}
             for i in rows(db,'SELECT j.quote_id,i.id,i.number,i.status,EXISTS(SELECT 1 FROM invoice_revisions r WHERE r.invoice_id=i.id) has_issued FROM job_invoices i JOIN jobs j ON j.id=i.job_id ORDER BY i.created_at'):
@@ -85,7 +90,14 @@ def register_document_browser(app,path,auth,public_url):
             for raw in rows(db,'SELECT q.*,l.client_name,l.email FROM quotes q JOIN leads l ON l.id=q.lead_id ORDER BY q.created_at DESC,q.revision DESC'):
                 q=payload(raw);m=messages.get('quote-delivery:'+q['id']+':'+str(q['revision']),{});v=views.get(q['id'],{})
                 qbo=qbo_deliveries.get(q['id'])
-                if qbo:m={'status':'Sent' if qbo['sent_at'] else qbo['state'],'sent_at':qbo['sent_at']}
+                crownops_status=m.get('status','Not sent')
+                if qbo:
+                    m={'status':'Sent' if qbo['sent_at'] else qbo['state'],'sent_at':qbo['sent_at']}
+                    if (q['id']==QUOTE and sandbox_send.get('quote_id')==QUOTE
+                            and sandbox_send.get('estimate_id')==ESTIMATE and sandbox_send.get('state')=='Sent'
+                            and qbo['external_id']==ESTIMATE and qbo['environment']=='sandbox' and qbo['realm_id']==REALM):
+                        m={'status':'Sent','sent_at':sandbox_send.get('checked_at') or sandbox_send.get('at')}
+                q['crownops_email_status']=crownops_status
                 linked=invoices.get(q['id'],[])
                 issued=any(i['has_issued'] for i in linked)
                 state='Invoiced' if issued else 'Accepted' if q['status']=='Accepted' else 'Expired' if q['status']=='Approved' and expired_quote(raw) else 'Sent' if q['status']=='Approved' and m.get('status')=='Sent' else 'Ready' if q['status']=='Approved' else q['status']

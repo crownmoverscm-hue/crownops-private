@@ -53,6 +53,35 @@ class PostSendTests(unittest.TestCase):
             self.assertEqual(self.client.post(self.f.base+'/sandbox-send',json=self.data).status_code,409)
             read.assert_not_called();post.assert_not_called()
         for t in ('jobs','payments','outbound_messages'):self.assertEqual(self.f.f.count(t),0)
+    def test_document_summary_reads_terminal_send_without_writes_or_provider_calls(self):
+        self.sent();before=self.saved()
+        with closing(connect(self.path)) as db:
+            original_slot=settings(db,delivery.SEND_SLOT)
+            original_approval=settings(db,delivery.APPROVAL)
+        with patch('requests.get') as get,patch('requests.post') as post:
+            records=self.client.get('/api/documents/quotes').json()
+            get.assert_not_called();post.assert_not_called()
+        r2=next(q for q in records if q['id']==scope.QUOTE)
+        self.assertEqual((r2['delivery_provider'],r2['email_status'],r2['crownops_email_status']),('QuickBooks','Sent','Not sent'))
+        self.assertEqual(r2['sent_at'],original_slot['checked_at'])
+        self.assertEqual(r2['status'],'Draft')  # Delivery display grants no quote approval.
+        for other in records:
+            if other['id']!=scope.QUOTE:self.assertEqual(other['email_status'],'Not sent')
+        self.assertEqual(self.saved(),before)
+        with closing(connect(self.path)) as db:
+            self.assertEqual(settings(db,delivery.SEND_SLOT),original_slot)
+            self.assertEqual(settings(db,delivery.APPROVAL),original_approval)
+        for table in ('jobs','payments','outbound_messages'):self.assertEqual(self.f.f.count(table),0)
+
+    def test_document_summary_does_not_invent_sent_from_ready_unknown_or_wrong_linkage(self):
+        self.assertEqual(next(q for q in self.client.get('/api/documents/quotes').json() if q['id']==scope.QUOTE)['email_status'],'Ready')
+        for changes in ({'state':'Unknown'},{'quote_id':'OTHER'},{'estimate_id':'186'}):
+            with self.subTest(changes=changes):
+                with transaction(self.path) as db:
+                    put_setting(db,delivery.SEND_SLOT,{'state':'Sent','quote_id':scope.QUOTE,'estimate_id':'185',**changes})
+                r2=next(q for q in self.client.get('/api/documents/quotes').json() if q['id']==scope.QUOTE)
+                self.assertEqual(r2['email_status'],'Ready')
+
     def test_legacy_completed_attempt_is_reconstructed_without_rewriting_it(self):
         self.sent()
         with transaction(self.path) as db:
