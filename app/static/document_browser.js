@@ -19,7 +19,7 @@
  function rowActions(kind,d){return `<div class="doc-row-actions"><button class="btn-small" data-doc-action="open" data-kind="${kind}" data-id="${h(d.id)}">Open</button>${menuButton(kind,d)}</div>`;}
  function delivery(d){
   const qbo=d.delivery_provider==='QuickBooks';
-  const label=qbo?'QuickBooks: '+(d.email_status==='Sent'?'Provider reports sent — inbox receipt unconfirmed.':d.email_status):d.email_status==='Sent'?'Email sent':d.email_status==='Not sent'?'Email not sent':'Email: '+d.email_status;
+  const label=qbo&&d.crownops_email_status!==undefined?'QuickBooks: '+(d.email_status==='Sent'?'Provider reports sent — inbox receipt unconfirmed.':d.email_status):d.email_status==='Sent'?(qbo?'Sent through QuickBooks':'Email sent'):d.email_status==='Not sent'?'Email not sent':'Email: '+d.email_status;
   return `<div class="doc-delivery">${h(label)}${qbo&&d.crownops_email_status?'<span>CrownOps email: '+h(d.crownops_email_status)+'</span>':''}${d.sent_at?'<span>'+showDay(d.sent_at)+'</span>':''}${d.delivery_error?'<span class="pill orange">Review needed</span>':''}</div>`;
  }
  async function render(kind){
