@@ -44,14 +44,14 @@ class QuoteStagingReleaseTests(unittest.TestCase):
             from app.estimate_delivery import delivery_source, estimate_payload
             q, self.lead, terms, source_hash = delivery_source(db, scope.QUOTE)
             self.payload = estimate_payload(q, self.lead, terms, 'low', '1', '2', '')
-            self.payload['CustomerRef'] = {'value': '10'}
+            self.payload['CustomerRef'] = {'value': '70'}
             self.remote = deepcopy(self.payload)
             self.remote.update(Id='185', SyncToken='0', TotalAmt=558.77, TxnTaxDetail={'TotalTax': 72.78,
                 'TaxLine': [{'Amount': 24.30}, {'Amount': 48.48}]})
             insert(db, 'qbo_estimate_deliveries', dict(quote_id=scope.QUOTE, environment='sandbox', realm_id=scope.REALM,
                    external_id='185', basis='low', state='Ready', source_hash=source_hash, payload_json=dumps(self.payload),
                    remote_json=dumps(self.remote), recipient=delivery.CUSTOMER_EMAIL, created_by='owner', created_at=now()))
-            for kind, oid, eid, revision in [('Customer', self.lead['id'], '10', 0), ('Estimate', scope.QUOTE, '185', 2)]:
+            for kind, oid, eid, revision in [('Customer', self.lead['id'], '70', 0), ('Estimate', scope.QUOTE, '185', 2)]:
                 insert(db, 'external_records', dict(provider='quickbooks', kind=kind, object_id=oid, external_id=eid, revision=revision, updated_at=now()))
             put_setting(db, 'sandbox_estimate_test_attempt_v1', {'quote_id': scope.QUOTE, 'state': 'Ready', 'external_id': '185'})
         self.client.cookies.set('crownops_session', 'owner-token'); self.client.headers['x-csrf-token'] = 'owner-csrf'
@@ -64,8 +64,8 @@ class QuoteStagingReleaseTests(unittest.TestCase):
     def read(self, path, resource):
         if resource.startswith('companyinfo/'):
             return {'CompanyInfo': {'CompanyName': 'Sandbox Company CA 5634', 'Country': 'CA'}}
-        if resource == 'customer/10':
-            return {'Customer': {'Id': '10', 'DisplayName': 'TEST Customer', 'PrimaryEmailAddr': {'Address': delivery.CUSTOMER_EMAIL}}}
+        if resource == 'customer/70':
+            return {'Customer': {'Id': '70', 'DisplayName': 'TEST Customer', 'PrimaryEmailAddr': {'Address': delivery.CUSTOMER_EMAIL}}}
         if resource == 'estimate/185':
             return {'Estimate': deepcopy(self.remote)}
         raise AssertionError(resource)
@@ -75,24 +75,86 @@ class QuoteStagingReleaseTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.text)
         return result.json()
 
-    def approve_simulated_send(self):
-        # Local fixture only: no approval route exists in the deployed application.
-        evidence = {'realm_id': scope.REALM, 'no_cc_bcc_verified': True, 'sender': 'TEST Intuit sender',
-                    'reply_to': 'test@example.invalid', 'evidence_reference': 'SIMULATED headers'}
-        with transaction(self.path) as db:
-            put_setting(db, delivery.APPROVAL, {'delivery_evidence': evidence})
+    def approval_data(self):
         p = self.review()
-        with transaction(self.path) as db:
-            put_setting(db, delivery.APPROVAL, {'delivery_evidence': evidence, 'owner_approved': True, 'approved_by': 'owner',
-                       'review_hash': p['review_hash'], 'recipient': delivery.RECIPIENT, 'estimate_id': '185'})
+        return {'confirm': True, 'review_hash': p['review_hash'], 'recipient': delivery.RECIPIENT,
+                'estimate_id': '185', 'no_cc_bcc_confirmed': True, 'ack_bill_email_change': True,
+                'ack_unknown_delivery': True, 'evidence_reference': 'SIMULATED sandbox email settings review'}
+
+    def approve_simulated_send(self):
+        data = self.approval_data()
+        result = self.client.post(self.base + '/sandbox-send-approval', json=data)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertFalse(result.json()['email_sent'])
         os.environ['CROWNOPS_QBO_TEST_SEND_ESTIMATE'] = '185'
         p = self.review(); self.assertTrue(p['can_send'], p['blockers'])
         return {'confirm': True, 'review_hash': p['review_hash'], 'recipient': delivery.RECIPIENT}
 
+    def test_owner_approval_is_separate_durable_idempotent_and_snapshot_bound(self):
+        data = self.approval_data()
+        with closing(connect(self.path)) as db:
+            original = one(db, 'SELECT payload_json,remote_json,source_hash FROM qbo_estimate_deliveries')
+        with patch('app.sandbox_estimate_send.requests.post') as post:
+            result = self.client.post(self.base + '/sandbox-send-approval', json=data)
+            self.assertEqual(result.status_code, 200, result.text)
+            again = self.client.post(self.base + '/sandbox-send-approval', json=data)
+            self.assertTrue(again.json()['duplicate'])
+            self.assertEqual(result.json()['approved_at'], again.json()['approved_at'])
+            post.assert_not_called()
+        p = self.review(); self.assertTrue(p['owner_approved']); self.assertFalse(p['can_send'])
+        self.assertFalse(p['cc_bcc']['provider_defaults_verified_absent'])
+        self.assertTrue(p['cc_bcc']['owner_confirmed_absent'])
+        self.assertIn('unverified', p['sender']); self.assertIn('unverified', p['reply_to'])
+        with closing(connect(self.path)) as db:
+            a = settings(db, delivery.APPROVAL)
+            self.assertEqual((a['approved_by'], a['estimate_id'], a['recipient'], a['total_cents']),
+                             ('owner', '185', delivery.RECIPIENT, 55877))
+            self.assertEqual(one(db, 'SELECT payload_json,remote_json,source_hash FROM qbo_estimate_deliveries'), original)
+            self.assertFalse(settings(db, delivery.SEND_SLOT))
+        os.environ['CROWNOPS_QBO_TEST_SEND_ESTIMATE'] = '185'
+        self.assertTrue(self.review()['can_send'])
+        self.remote['SyncToken'] = '1'
+        self.assertFalse(self.review()['owner_approved'])
+        self.assertFalse(self.review()['can_send'])
+        for table in ('jobs','payments','outbound_messages'):
+            self.assertEqual(self.f.count(table), 0)
+
+    def test_approval_requires_master_csrf_confirmations_and_exact_review(self):
+        data = self.approval_data()
+        for key, wrong in [('recipient','other@example.invalid'), ('estimate_id','186'), ('review_hash','forged')]:
+            self.assertEqual(self.client.post(self.base+'/sandbox-send-approval',json={**data,key:wrong}).status_code,409)
+        for key in ('confirm','no_cc_bcc_confirmed','ack_bill_email_change','ack_unknown_delivery'):
+            self.assertIn(self.client.post(self.base+'/sandbox-send-approval',json={**data,key:False}).status_code,(409,422))
+        self.assertEqual(self.client.post(self.base+'/sandbox-send-approval',json={**data,'evidence_reference':''}).status_code,422)
+        self.client.headers['x-csrf-token']='forged'
+        self.assertEqual(self.client.post(self.base+'/sandbox-send-approval',json=data).status_code,403)
+        self.client.headers['x-csrf-token']='owner-csrf'
+        with transaction(self.path) as db:
+            insert(db,'users',dict(id='other-owner',email='other@example.invalid',name='Other owner',role='owner',password_hash='unused',active=1,created_at=now()))
+            insert(db,'sessions',dict(token_hash=sha('other-token'),user_id='other-owner',csrf='other-csrf',expires_at='2099-01-01T00:00:00+00:00'))
+            put_setting(db,'master_owner',{'user_id':'owner'})
+        for token, csrf in [('sales-token','sales-csrf'),('crew-token','crew-csrf'),('other-token','other-csrf')]:
+            self.client.cookies.set('crownops_session',token); self.client.headers['x-csrf-token']=csrf
+            self.assertEqual(self.client.post(self.base+'/sandbox-send-approval',json=data).status_code,403)
+            self.assertEqual(self.client.post(self.base+'/sandbox-send',json=data).status_code,403)
+        with closing(connect(self.path)) as db:
+            self.assertFalse(settings(db,delivery.APPROVAL)); self.assertFalse(settings(db,delivery.SEND_SLOT))
+
+    def test_cc_bcc_stale_revision_and_consumed_slot_prevent_approval(self):
+        data = self.approval_data()
+        self.remote['BillEmailCc']={'Address':'unexpected@example.invalid'}
+        p=self.review(); self.assertFalse(p['approval_eligible'])
+        self.assertEqual(self.client.post(self.base+'/sandbox-send-approval',json={**data,'review_hash':p['review_hash']}).status_code,409)
+        self.remote.pop('BillEmailCc')
+        with transaction(self.path) as db:
+            put_setting(db,delivery.SEND_SLOT,{'state':'Unknown'})
+        self.assertEqual(self.client.post(self.base+'/sandbox-send-approval',json=data).status_code,409)
+        self.assertFalse(self.review()['approval_eligible'])
+
     def test_readonly_existing_snapshot_linkage_and_gates(self):
         before = self.f.count('quotes')
         p = self.review()
-        self.assertEqual((p['customer_id'], p['external_id'], p['revision']), ('10', '185', 2))
+        self.assertEqual((p['customer_id'], p['external_id'], p['revision']), ('70', '185', 2))
         self.assertEqual(p['service_id'], self.lead['id'])
         self.assertEqual([x['revision'] for x in p['revisions']], [1, 2])
         self.assertEqual([p[k] for k in ('subtotal_cents', 'gst_cents', 'qst_cents', 'total_cents')], [48599, 2430, 4848, 55877])
@@ -139,6 +201,33 @@ class QuoteStagingReleaseTests(unittest.TestCase):
             self.assertEqual(settings(db, delivery.SEND_SLOT)['state'], 'Unknown')
         self.assertEqual(self.f.count('jobs'), 0)
         self.assertEqual(self.f.count('outbound_messages'), 0)
+
+    def test_concurrent_sends_claim_only_one_durable_slot(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        from unittest.mock import Mock
+        data = self.approve_simulated_send()
+        barrier = Barrier(2)
+        real_preflight = delivery.preflight
+        def simultaneous_review(*args):
+            result = real_preflight(*args)
+            barrier.wait(timeout=10)
+            return result
+        def post(*args, **kwargs):
+            self.remote.update(EmailStatus='EmailSent', BillEmail={'Address': delivery.RECIPIENT})
+            response = Mock(); response.json.return_value = {'Estimate': deepcopy(self.remote)}
+            return response
+        def call():
+            try:
+                return delivery.send(self.path, scope.QUOTE, data, 'owner')['state']
+            except HTTPException as error:
+                return error.status_code
+        with patch('app.sandbox_estimate_send.preflight', side_effect=simultaneous_review), patch('app.sandbox_estimate_send.requests.post', side_effect=post) as posted:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(lambda _: call(), range(2)))
+            self.assertCountEqual(results, ['Sent', 409])
+            self.assertEqual(posted.call_count, 1)
+        self.assertEqual(self.client.post(self.base+'/sandbox-send-approval', json=self.approval_data()).status_code,409)
 
     def test_expiry_and_retired_approving_owner_block_send(self):
         self.approve_simulated_send()

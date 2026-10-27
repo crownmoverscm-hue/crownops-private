@@ -5,8 +5,19 @@ window.openQuickBooksEstimate = async function(qid){
  const close='<button data-action="close">Close</button>';
  if(r.send_only_preflight){
   const detail=(name,value)=>'<div class="quote-line" style="gap:12px;overflow-wrap:anywhere"><span>'+h(name)+'</span><strong>'+h(value)+'</strong></div>';
+  const master=S.user.role==='owner'&&S.user.is_master_owner===true;
+  const approval=master&&r.approval_eligible?'<div class="panel panel-body"><h3>Approve one sandbox email</h3>'+
+   '<p>Records your approval only. Sending requires a separate click after review.</p>'+
+   '<label for="qbo-approval-reference">Where did you check the sandbox email settings?</label><textarea id="qbo-approval-reference" maxlength="1000" placeholder="Describe the QuickBooks screen or evidence reference; no passwords."></textarea>'+
+   '<p><label><input type="checkbox" id="qbo-approval-copies"> I checked this sandbox’s email defaults and Estimate 185: no CC, BCC or send-me-a-copy recipient is configured.</label></p>'+
+   '<p><label><input type="checkbox" id="qbo-approval-bill"> I approve one email to '+h(r.recipient)+' and understand sendTo may change Estimate BillEmail from '+h(r.bill_email)+'.</label></p>'+
+   '<p><label><input type="checkbox" id="qbo-approval-unknown"> I understand the exact sender, Reply-To, inbox delivery and online approval link remain unverified until the controlled test. Acceptance and booking stay disabled.</label></p></div>':'';
+  const actionData=' data-id="'+h(qid)+'" data-review="'+h(r.review_hash)+'" data-recipient="'+h(r.recipient)+'"';
+  const approvalButton=master&&r.approval_eligible?'<button type="button" class="btn-primary" data-qbo-delivery="sandbox-approve"'+actionData+'>Approve one test email — do not send</button>':'';
+  const sendButton=master&&r.can_send?'<button type="button" class="btn-primary" data-qbo-delivery="sandbox-send"'+actionData+'>Send ONE QuickBooks test email</button>':
+   '<button disabled>'+(r.send_attempt.state?'Send locked — reconcile existing attempt':!master?'Send disabled — Master owner required':r.owner_approved?'Send unavailable — review blockers':'Send disabled — owner approval required')+'</button>';
   showModal('TEST ONLY · Estimate 185 send preflight',
-   '<div class="callout orange"><strong>Email sending is disabled.</strong> No acceptance, booking, invoice, deposit or payment is authorized.</div>'+
+   '<div class="callout orange"><strong>'+(r.send_attempt.state?'Send attempt: '+h(r.send_attempt.state)+'. Do not resend.':r.owner_approved?'One test email approved; not sent by approval.':'No current email approval recorded in CrownOps.')+'</strong> No acceptance, booking, invoice, deposit or payment is authorized.</div>'+
    detail('Company',r.company_name+' · '+r.country+' · '+r.environment)+detail('Realm ID',r.realm_id)+
    detail('QuickBooks Estimate ID',r.external_id)+detail('CrownOps quote',r.quote_id+' · r'+r.revision)+
    detail('Logical service parent',r.service_id)+detail('QuickBooks Customer ID',r.customer_id)+
@@ -16,15 +27,16 @@ window.openQuickBooksEstimate = async function(qid){
    '<p class="small" style="overflow-wrap:anywhere">Snapshot: '+h(r.snapshot_hash)+'</p></div>'+
    detail('Fictional customer email',r.customer_email)+detail('Current Estimate BillEmail',r.bill_email)+detail('Proposed sendTo recipient',r.recipient)+
    '<p class="callout orange">'+h(r.send_to_warning)+'</p>'+
-   detail('CC / BCC requested','None')+detail('Provider-default CC / BCC',r.cc_bcc.provider_defaults_verified_absent?'Verified absent':'Unknown — sending blocked')+
-   detail('Sender',r.sender)+detail('Reply-To',r.reply_to)+
+   detail('CC / BCC requested','None')+detail('Provider-default CC / BCC',r.cc_bcc.owner_confirmed_absent?'Master owner confirmed absent in sandbox settings; actual headers unverified':'Owner must check sandbox settings; absent API fields are not proof')+
+   detail('Sender',r.sender)+detail('Reply-To',r.reply_to)+detail('Company contact email (not verified Reply-To)',r.company_contact_email||'Not returned')+
    '<p>'+h(r.message_preview_note)+'</p><div class="message-draft" style="white-space:pre-wrap;overflow-wrap:anywhere">'+h(r.memo)+'</div>'+
    '<details><summary>Saved estimate content</summary>'+(r.lines||[]).map(x=>'<p style="white-space:pre-wrap;overflow-wrap:anywhere">'+h(x.description)+(x.amount_cents?' · '+money(x.amount_cents):'')+'</p>').join('')+'</details>'+
    '<p style="overflow-wrap:anywhere"><strong>Intended external action:</strong> '+h(r.operation)+'</p>'+
    '<p>'+h(r.duplicate_protection)+'</p>'+detail('Existing send attempt',r.send_attempt.state||'None recorded')+
+   (r.approval?.approved_at?detail('Approval recorded',r.approval.approved_name+' · '+r.approval.approved_at)+detail('Approval status',r.approval.current?'Current':'Stale — review again')+detail('Settings evidence',r.approval.evidence_reference):'')+
    '<p><strong>Effective gates:</strong> Customer CREATE OFF · Estimate CREATE OFF · Acceptance OFF · Booking OFF · Invoice OFF · Deposit OFF · Payment OFF · Gmail OFF</p>'+
    '<p>Provider email status: '+h(r.provider_email_status||'NotSet')+' · estimate status: '+h(r.provider_status)+'. Neither sent nor Accepted status proves inbox receipt or a customer click.</p>'+
-   '<ul>'+r.blockers.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul>',close+'<button disabled>Send disabled — owner approval required</button>');
+   '<ul>'+r.blockers.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul>'+approval,close+approvalButton+sendButton);
   return;
  }
 
@@ -73,7 +85,20 @@ document.addEventListener('click',async event=>{
  const qid=b.dataset.id,base='/quotes/'+encodeURIComponent(qid)+'/quickbooks-delivery';
  try{
   if(b.dataset.qboDelivery==='open'){await openQuickBooksEstimate(qid);return;}
-  if(b.dataset.qboDelivery==='test-prepare'){
+  if(b.dataset.qboDelivery==='sandbox-approve'){
+   const copies=document.getElementById('qbo-approval-copies')?.checked===true;
+   const bill=document.getElementById('qbo-approval-bill')?.checked===true;
+   const unknown=document.getElementById('qbo-approval-unknown')?.checked===true;
+   const reference=document.getElementById('qbo-approval-reference')?.value.trim()||'';
+   if(!copies||!bill||!unknown||reference.length<10)throw Error('Complete all three confirmations and record where you checked the sandbox settings. Approval sends nothing.');
+   await api('/quotes/'+encodeURIComponent(qid)+'/sandbox-send-approval',{method:'POST',data:{confirm:true,estimate_id:'185',recipient:b.dataset.recipient,review_hash:b.dataset.review,no_cc_bcc_confirmed:copies,ack_bill_email_change:bill,ack_unknown_delivery:unknown,evidence_reference:reference}});
+   toast('One test email approved. No email sent.');
+  }else if(b.dataset.qboDelivery==='sandbox-send'){
+   if(!confirm('Send ONE QuickBooks sandbox email of existing Estimate 185, CAD $558.77, to '+b.dataset.recipient+'? This may update Estimate BillEmail. No acceptance or booking is authorized.'))return;
+   // The transport never retries. An unknown result consumes the durable server slot.
+   const result=await api('/quotes/'+encodeURIComponent(qid)+'/sandbox-send',{method:'POST',timeoutMs:95000,data:{confirm:true,recipient:b.dataset.recipient,review_hash:b.dataset.review}});
+   toast(result.state==='Sent'?'QuickBooks reports sent. Inbox delivery and customer approval remain unverified.':'Send outcome unresolved. Do not retry.');
+  }else if(b.dataset.qboDelivery==='test-prepare'){
    const customer=document.getElementById('test-customer-confirm')?.checked===true;
    if(b.dataset.customerRequired==='true'&&!customer)throw Error('Review and explicitly confirm the required fictional customer creation first.');
    await api(base+'/prepare',{method:'POST',timeoutMs:95000,data:{confirm:true,review_hash:b.dataset.review,confirm_customer_create:customer}});
@@ -89,5 +114,9 @@ document.addEventListener('click',async event=>{
    const r=await api(base+'/sync',{method:'POST',data:{}});toast(r.message);
   }
   await openQuickBooksEstimate(qid);
- }catch(error){toast(error.message);}finally{if(b.isConnected)b.disabled=false;}
+ }catch(error){
+  if(b.dataset.qboDelivery==='sandbox-approve')modalError(error);
+  else if(b.dataset.qboDelivery==='sandbox-send')modalError(new Error(error.message+' Do not resend an uncertain attempt. Reopen this preflight for reconciliation.'));
+  else toast(error.message);
+ }finally{if(b.isConnected)b.disabled=false;}
 });

@@ -1,7 +1,7 @@
 'use strict';
 const {chromium}=require('playwright'),assert=require('node:assert/strict');
 (async()=>{
- const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CROWNOPS_CHROMIUM_PATH||undefined,args:['--no-sandbox']});
  for(const width of [320,390,768,1440]){
   const ctx=await browser.newContext({viewport:{width,height:900}});await ctx.addCookies([{name:'crownops_session',value:'owner-token',url:'http://127.0.0.1:8095'}]);const p=await ctx.newPage();
   await p.goto('http://127.0.0.1:8095');await p.locator('#content h1').waitFor();
@@ -59,12 +59,21 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
    await dismiss();await p.getByRole('button',{name:'Discard changes',exact:true}).click();assert.equal(await p.getByRole('dialog').isVisible(),false,'Discard closes after validation recovery: '+close);
   }
   // Read-only sandbox send preflight renders linkage and separate gates.
-  let preflightMutations=0;
+  let preflightMutations=0, approvalCalls=0, sendCalls=0, approved=false;
+  await p.evaluate(()=>{S.user.role="owner";S.user.is_master_owner=true;});
   await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/booking-workflow',r=>r.fulfill({json:{available:false,workflow_enabled:false}}));
   await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/quickbooks-delivery',r=>{
    if(r.request().method()!=='GET')preflightMutations++;
-   return r.fulfill({json:{send_only_preflight:true,test_only:true,state:'Ready',company_name:'Sandbox Company CA 5634',country:'CA',environment:'sandbox',realm_id:'9341458310238189',external_id:'185',quote_id:'QUOTE-08dd48a364a34f66',revision:2,service_id:'TEST-SERVICE',customer_id:'10',revisions:[{id:'TEST-R1',revision:1},{id:'QUOTE-08dd48a364a34f66',revision:2}],subtotal_cents:48599,gst_cents:2430,qst_cents:4848,total_cents:55877,snapshot_hash:'TEST-SNAPSHOT',customer_email:'testonly.fictional@example.com',bill_email:'testonly.fictional@example.com',recipient:'jonathanprobonas15@gmail.com',send_to_warning:'Intuit sendTo can update Estimate.BillEmail.Address.',cc_bcc:{provider_defaults_verified_absent:false},sender:'Unknown — QuickBooks controls sender',reply_to:'Unknown — verify actual headers',message_preview_note:'Saved estimate only; exact email preview unavailable.',memo:'TEST ONLY',lines:[],operation:'POST existing Estimate 185 send',duplicate_protection:'Durable one-send slot; no automatic retry.',send_attempt:{},provider_status:'Pending',provider_email_status:'NotSet',blockers:['Separate owner approval required.']}});
+   return r.fulfill({json:{send_only_preflight:true,test_only:true,state:'Ready',company_name:'Sandbox Company CA 5634',country:'CA',environment:'sandbox',realm_id:'9341458310238189',external_id:'185',quote_id:'QUOTE-08dd48a364a34f66',revision:2,service_id:'TEST-SERVICE',customer_id:'10',revisions:[{id:'TEST-R1',revision:1},{id:'QUOTE-08dd48a364a34f66',revision:2}],subtotal_cents:48599,gst_cents:2430,qst_cents:4848,total_cents:55877,snapshot_hash:'TEST-SNAPSHOT',customer_email:'testonly.fictional@example.com',bill_email:'testonly.fictional@example.com',recipient:'jonathanprobonas15@gmail.com',send_to_warning:'Intuit sendTo can update Estimate.BillEmail.Address.',cc_bcc:{provider_defaults_verified_absent:false},sender:'Unknown — QuickBooks controls sender',reply_to:'Unknown — verify actual headers',message_preview_note:'Saved estimate only; exact email preview unavailable.',memo:'TEST ONLY',lines:[],operation:'POST existing Estimate 185 send',duplicate_protection:'Durable one-send slot; no automatic retry.',send_attempt:{},provider_status:'Pending',provider_email_status:'NotSet',review_hash:'TEST-REVIEW',approval_eligible:!approved,owner_approved:approved,can_send:approved,send_configured:true,approval:approved?{approved_name:'TEST Owner',approved_at:'2026-10-26T22:00:00Z',current:true,evidence_reference:'SIMULATED sandbox settings'}:{},blockers:approved?[]:['Separate owner approval required.']}});
   });
+  await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/sandbox-send-approval',r=>{
+   approvalCalls++;const data=r.request().postDataJSON();
+   assert.equal(data.estimate_id,'185');assert.equal(data.recipient,'jonathanprobonas15@gmail.com');
+   assert.equal(data.review_hash,'TEST-REVIEW');assert.equal(data.no_cc_bcc_confirmed,true);
+   assert.equal(data.ack_unknown_delivery,true);assert.equal(data.ack_bill_email_change,true);
+   approved=true;return r.fulfill({json:{approved:true,email_sent:false}});
+  });
+  await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/sandbox-send',r=>{sendCalls++;return r.fulfill({status:409,json:{detail:'SIMULATED safety block'}});});
   await p.evaluate(()=>openQuickBooksEstimate('QUOTE-08dd48a364a34f66'));
   await p.getByRole('heading',{name:'TEST ONLY · Estimate 185 send preflight',exact:true}).waitFor();
   assert.match(await p.locator('#modal').innerText(),/QuickBooks Customer ID/);
@@ -74,6 +83,20 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   assert.equal(await p.getByRole('button',{name:'Send disabled — owner approval required',exact:true}).isEnabled(),false);
   assert(await p.locator('#modal').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'preflight modal overflow '+width);
   assert.equal(preflightMutations,0);
+  const approve=p.getByRole('button',{name:'Approve one test email — do not send',exact:true});
+  await approve.click();assert.equal(approvalCalls,0,'unchecked approval stays local');
+  await p.locator('#qbo-approval-reference').fill('SIMULATED sandbox settings review');
+  for(const id of ['qbo-approval-copies','qbo-approval-bill','qbo-approval-unknown'])await p.locator('#'+id).check();
+  await approve.click();
+  const send=p.getByRole('button',{name:'Send ONE QuickBooks test email',exact:true});await send.waitFor();
+  assert.equal(await send.isEnabled(),true);assert.equal(approvalCalls,1);assert.equal(sendCalls,0,'approval never sends');
+  assert.match(await p.locator('#modal').innerText(),/Approval recorded/);
+  assert(await p.locator('#modal').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'approved preflight overflow '+width);
+  p.once('dialog',d=>d.dismiss());await send.click();assert.equal(sendCalls,0,'cancelled send never submits');
+  await p.evaluate(()=>{S.user.is_master_owner=false;});
+  await p.evaluate(()=>openQuickBooksEstimate('QUOTE-08dd48a364a34f66'));
+  assert.equal(await p.getByRole('button',{name:'Send disabled — Master owner required',exact:true}).isEnabled(),false);
+  assert.equal(await p.getByRole('button',{name:'Approve one test email — do not send',exact:true}).count(),0);
   await p.getByRole('button',{name:'Close',exact:true}).last().click();
   await ctx.close();console.log(JSON.stringify({width,missingCalendar:'PASS',timeout:'PASS',dismissal:'PASS',validationRecovery:'PASS',sendPreflight:'PASS'}));
  }

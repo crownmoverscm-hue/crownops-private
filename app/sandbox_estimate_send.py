@@ -1,7 +1,7 @@
 """Readback and separately gated delivery of the EXISTING Canadian test estimate.
 
-Never creates an entity. No route grants approval. Provider uncertainty consumes
-the durable send slot, which has no reset/retry API. All defaults are disabled.
+Never creates an entity. Explicit Master-owner approval does not send. Provider
+uncertainty consumes the durable send slot, which has no reset/retry API.
 """
 from contextlib import closing
 from decimal import Decimal
@@ -14,11 +14,14 @@ from .platform_common import settings, put_setting, require_role, SALES
 from . import quote_staging as scope
 from .providers import _qbo_connection, qbo_read
 from .estimate_delivery import digest, validate_remote, source, review_hash
+from .account_access import master_owner_id
 
 RECIPIENT = 'jonathanprobonas15@gmail.com'
 CUSTOMER_EMAIL = 'testonly.fictional@example.com'
+CUSTOMER_ID = '70'
 SEND_SLOT = 'sandbox_estimate_185_send_attempt_v1'
 APPROVAL = 'sandbox_estimate_185_send_approval_v1'
+APPROVAL_VERSION = 2
 OFF = ('CROWNOPS_ALLOW_EXTERNAL', 'CROWNOPS_ALLOW_QBO_SANDBOX_WRITES',
        'CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES', 'CROWNOPS_ALLOW_QBO_ESTIMATE_DELIVERY',
        'CROWNOPS_ALLOW_QBO_INVOICE_DELIVERY', 'CROWNOPS_ALLOW_QBO_RECEIPT_SYNC',
@@ -32,6 +35,18 @@ def _read_json(value):
         raise HTTPException(409, 'Stored estimate evidence is unreadable. Reconcile; never recreate it.')
 
 
+def require_master(db, actor):
+    owner = one(db, "SELECT id,name FROM users WHERE id=? AND role='owner' AND active=1", (actor,))
+    if not owner or master_owner_id(db) != actor:
+        raise HTTPException(403, 'Only the active Master owner may approve or send this one sandbox email.')
+    return owner
+
+
+def stored_review(row):
+    return digest({k: row[k] for k in ('quote_id','environment','realm_id','external_id','state',
+                                     'payload_json','remote_json','source_hash','sent_at')})
+
+
 def preflight(path, qid):
     scope.require_isolated()
     if qid != scope.QUOTE:
@@ -42,7 +57,9 @@ def preflight(path, qid):
         attempt = settings(db, 'sandbox_estimate_test_attempt_v1', {}) or {}
         send_attempt = settings(db, SEND_SLOT, {}) or {}
         approval = settings(db, APPROVAL, {}) or {}
-        approving_owner = one(db, "SELECT id FROM users WHERE id=? AND role='owner' AND active=1", (approval.get('approved_by', ''),))
+        approving_owner = one(db, "SELECT id,name FROM users WHERE id=? AND role='owner' AND active=1", (approval.get('approved_by', ''),))
+        if approving_owner and master_owner_id(db) != approving_owner['id']:
+            approving_owner = None
         if not q or not row or str(row['external_id']) != scope.ESTIMATE:
             raise HTTPException(409, 'Existing quote / Estimate 185 mapping is missing. Reconcile; do not CREATE.')
         lead = one(db, 'SELECT * FROM leads WHERE id=?', (q['lead_id'],))
@@ -62,7 +79,7 @@ def preflight(path, qid):
         raise HTTPException(409, 'Stored sandbox / quote revision / attempt linkage differs. Reconcile without recreating.')
     payload, saved = _read_json(row['payload_json']), _read_json(row['remote_json'])
     customer_id = str(payload.get('CustomerRef', {}).get('value') or '')
-    if not customer_id.isdigit() or not customer_map or customer_map['external_id'] != customer_id:
+    if customer_id != CUSTOMER_ID or not customer_map or customer_map['external_id'] != customer_id:
         raise HTTPException(409, 'Persisted QuickBooks Customer ID linkage is missing or inconsistent.')
     _, realm, host = _qbo_connection(path)
     if realm != scope.REALM or host != 'https://sandbox-quickbooks.api.intuit.com':
@@ -86,8 +103,11 @@ def preflight(path, qid):
     if (remote.get('TotalAmt') != saved.get('TotalAmt') or remote.get('TxnTaxDetail') != saved.get('TxnTaxDetail')):
         raise HTTPException(409, 'Remote financial/tax snapshot changed. Stop and reconcile.')
     snapshot_hash = digest({'payload': payload, 'taxes': saved.get('TxnTaxDetail'), 'total': saved.get('TotalAmt'), 'source': row['source_hash']})
+    cc = {k: remote[k] for k in ('BillEmailCc', 'BillEmailBcc') if remote.get(k)}
+    company_email = company.get('CustomerCommunicationEmailAddr', {}).get('Address', '')
     review = digest({'snapshot': snapshot_hash, 'provider': review_hash(remote), 'to': RECIPIENT, 'realm': realm,
-                     'estimate': scope.ESTIMATE, 'delivery_evidence': approval.get('delivery_evidence') or {}})
+                     'estimate': scope.ESTIMATE, 'cc_bcc': cc, 'company_contact_email': company_email,
+                     'stored_review': stored_review(row)})
     blockers = ['Email sending requires separate owner approval.']
     if source_error:
         blockers.append(source_error)
@@ -106,20 +126,22 @@ def preflight(path, qid):
         blockers.append('Estimate is already sent or its status changed.')
     if any(os.getenv(k, '0') != '0' for k in OFF):
         blockers.append('Broad external/write/delivery/worker gates must all remain OFF.')
-    cc = {k: remote[k] for k in ('BillEmailCc', 'BillEmailBcc') if remote.get(k)}
     # The API contract does not provide a full rendered email/header preview.
     evidence = approval.get('delivery_evidence') or {}
-    evidence_ok = (evidence.get('realm_id') == realm and evidence.get('no_cc_bcc_verified') is True
-                   and bool(evidence.get('sender')) and bool(evidence.get('reply_to'))
-                   and bool(evidence.get('evidence_reference')) and not cc)
-    if not evidence_ok:
-        blockers.append('Sender, Reply-To and absence of provider-default CC/BCC require independent sandbox evidence.')
-    owner_approved = (approval.get('owner_approved') is True and bool(approving_owner)
+    if cc:
+        blockers.append('Estimate contains CC/BCC fields. Remove them in QuickBooks and review again; CrownOps will not change them.')
+    approval_blockers = [x for x in blockers if x != 'Email sending requires separate owner approval.']
+    owner_approved = (approval.get('version') == APPROVAL_VERSION and approval.get('owner_approved') is True and bool(approving_owner)
                       and approval.get('review_hash') == review and approval.get('recipient') == RECIPIENT
-                      and str(approval.get('estimate_id')) == scope.ESTIMATE)
+                      and str(approval.get('estimate_id')) == scope.ESTIMATE and bool(approval.get('approved_at'))
+                      and evidence.get('realm_id') == realm and evidence.get('no_cc_bcc_confirmed') is True
+                      and bool(evidence.get('evidence_reference')) and approval.get('ack_bill_email_change') is True
+                      and approval.get('ack_unknown_delivery') is True and not cc)
     if owner_approved:
         blockers.remove('Email sending requires separate owner approval.')
     configured = os.getenv('CROWNOPS_QBO_TEST_SEND_ESTIMATE', '') == scope.ESTIMATE
+    if not configured:
+        blockers.append('The dedicated Estimate 185 SEND capability is disabled on this deployment.')
     return {'test_only': True, 'existing_estimate_only': True, 'state': row['state'],
             'company_name': company['CompanyName'], 'country': 'CA', 'realm_id': realm, 'environment': 'sandbox',
             'quote_id': qid, 'revision': q['revision'], 'service_id': q['lead_id'], 'client_ids': [x['client_id'] for x in clients],
@@ -130,13 +152,20 @@ def preflight(path, qid):
             'lines': [{'description': x.get('Description', ''), 'amount_cents': round(Decimal(str(x.get('Amount', 0)))*100)} for x in payload['Line']],
             'memo': payload.get('CustomerMemo', {}).get('value', ''), 'expiry': payload.get('ExpirationDate'),
             'recipient': RECIPIENT, 'send_to_warning': 'Intuit sendTo can update Estimate.BillEmail.Address; it does not change Customer.PrimaryEmailAddr.',
-            'cc_bcc': {'requested': [], 'estimate_fields': cc, 'provider_defaults_verified_absent': evidence_ok},
-            'sender': evidence.get('sender') if evidence_ok else 'Unknown — QuickBooks controls the sender; not CrownOps Gmail.',
-            'reply_to': evidence.get('reply_to') if evidence_ok else 'Unknown — verify sandbox company customer-facing email and actual headers.',
+            'cc_bcc': {'requested': [], 'estimate_fields': cc, 'provider_defaults_verified_absent': False,
+                       'owner_confirmed_absent': owner_approved},
+            'sender': 'QuickBooks controls the sender. Exact From address/header is unverified before this test.',
+            'reply_to': 'Actual Reply-To header is unverified before this test.',
+            'company_contact_email': company_email or 'Not returned by CompanyInfo; this is not verified Reply-To.',
             'message_preview': None, 'message_preview_note': 'Saved estimate content only. API does not expose an exact rendered message/header preview here.',
             'operation': 'POST https://sandbox-quickbooks.api.intuit.com/v3/company/' + realm + '/estimate/185/send?sendTo=' + RECIPIENT,
             'provider_email_status': remote.get('EmailStatus'), 'provider_status': remote.get('TxnStatus'),
             'send_configured': configured, 'owner_approved': owner_approved, 'can_send': configured and not blockers,
+            'approval_eligible': not approval_blockers and not owner_approved, 'approval_blockers': approval_blockers,
+            'approval': {'approved_by': approval.get('approved_by'), 'approved_name': approving_owner['name'] if approving_owner else None,
+                         'approved_at': approval.get('approved_at'), 'current': owner_approved,
+                         'evidence_reference': evidence.get('evidence_reference', '')},
+            'stored_review': stored_review(row),
             'send_attempt': send_attempt, 'blockers': blockers, 'review_hash': review,
             'approval_hash': digest(approval),
             'gates': {'create_customer': False, 'create_estimate': False, 'acceptance': False, 'booking': False,
@@ -146,8 +175,48 @@ def preflight(path, qid):
             'duplicate_protection': 'One durable send slot claimed before provider POST; Sending/Unknown/Sent cannot be reset or retried via API.'}
 
 
+def approve(path, qid, data, actor):
+    scope.require_isolated()
+    with closing(connect(path)) as db:
+        require_master(db, actor)
+    p = preflight(path, qid)
+    if (data.get('confirm') is not True or data.get('recipient') != RECIPIENT
+            or data.get('estimate_id') != scope.ESTIMATE or data.get('review_hash') != p['review_hash']):
+        raise HTTPException(409, 'Approval review changed or targets differ. Refresh the existing preflight.')
+    reference = data.get('evidence_reference')
+    if (any(data.get(k) is not True for k in ('ack_bill_email_change','ack_unknown_delivery','no_cc_bcc_confirmed'))
+            or not isinstance(reference, str) or not 10 <= len(reference.strip()) <= 1000):
+        raise HTTPException(422, 'Confirm the billing-email change, delivery unknowns and no CC/BCC or self-copy in the sandbox. Record where you checked those settings.')
+    if p['approval_blockers']:
+        raise HTTPException(409, 'Approval blocked: ' + ' '.join(p['approval_blockers']))
+    with transaction(path) as db:
+        owner = require_master(db, actor)
+        row = one(db, 'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?', (qid,))
+        latest = one(db, 'SELECT id FROM quotes WHERE lead_id=(SELECT lead_id FROM quotes WHERE id=?) ORDER BY revision DESC LIMIT 1', (qid,))
+        if (settings(db, SEND_SLOT) or not row or stored_review(row) != p['stored_review']
+                or not latest or latest['id'] != qid or source(db, qid)[3] != row['source_hash']):
+            raise HTTPException(409, 'Estimate changed or send already claimed. Reconcile without retrying.')
+        existing = settings(db, APPROVAL, {}) or {}
+        if existing.get('review_hash') == p['review_hash'] and p['owner_approved']:
+            return {'approved': True, 'duplicate': True, 'approved_by': existing['approved_by'],
+                    'approved_at': existing['approved_at'], 'email_sent': False}
+        approval = {'version': APPROVAL_VERSION, 'owner_approved': True, 'approved_by': owner['id'], 'approved_at': now(),
+                    'quote_id': qid, 'estimate_id': scope.ESTIMATE, 'realm_id': scope.REALM,
+                    'recipient': RECIPIENT, 'bill_email': p['bill_email'], 'total_cents': p['total_cents'],
+                    'snapshot_hash': p['snapshot_hash'], 'review_hash': p['review_hash'],
+                    'ack_bill_email_change': True, 'ack_unknown_delivery': True,
+                    'delivery_evidence': {'realm_id': scope.REALM, 'no_cc_bcc_confirmed': True,
+                                          'evidence_reference': reference.strip()}}
+        put_setting(db, APPROVAL, approval)
+        audit(db, actor, 'Approved ONE Estimate 185 sandbox email; no email sent; acceptance and booking remain disabled',
+              'quotes', qid, approval)
+    return {'approved': True, 'approved_by': actor, 'approved_at': approval['approved_at'], 'email_sent': False}
+
+
 def send(path, qid, data, actor):
     scope.require_isolated()
+    with closing(connect(path)) as db:
+        require_master(db, actor)
     if os.getenv('CROWNOPS_QBO_TEST_SEND_ESTIMATE', '') != scope.ESTIMATE:
         raise HTTPException(403, 'SEND disabled. A separate owner-approved test release is required; no email requested.')
     p = preflight(path, qid)
@@ -157,11 +226,13 @@ def send(path, qid, data, actor):
         if settings(db, SEND_SLOT):
             raise HTTPException(409, 'Send already claimed; reconcile instead of retrying.')
         approval = settings(db, APPROVAL, {}) or {}
-        approving_owner = one(db, "SELECT id FROM users WHERE id=? AND role='owner' AND active=1", (approval.get('approved_by', ''),))
+        require_master(db, actor)
+        approving_owner = approval.get('approved_by') == actor
         row = one(db, 'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?', (qid,))
         latest = one(db, 'SELECT id FROM quotes WHERE lead_id=(SELECT lead_id FROM quotes WHERE id=?) ORDER BY revision DESC LIMIT 1', (qid,))
         if (not approving_owner or digest(approval) != p['approval_hash'] or approval.get('review_hash') != p['review_hash'] or not approval.get('owner_approved')
-                or not row or row['state'] != 'Ready' or not latest or latest['id'] != qid or source(db, qid)[3] != row['source_hash']):
+                or not row or stored_review(row) != p['stored_review'] or any(os.getenv(k, '0') != '0' for k in OFF)
+                or row['state'] != 'Ready' or not latest or latest['id'] != qid or source(db, qid)[3] != row['source_hash']):
             raise HTTPException(409, 'Approval or source changed during review. No send claimed.')
         put_setting(db, SEND_SLOT, {'state': 'Sending', 'quote_id': qid, 'estimate_id': scope.ESTIMATE, 'recipient': RECIPIENT,
                                   'review_hash': p['review_hash'], 'actor': actor, 'at': now()})
@@ -203,6 +274,11 @@ def register(app, path, auth):
     def preview(qid: str, u=Depends(auth)):
         require_role(u, SALES)
         return preflight(path, qid)
+
+    @app.post('/api/quotes/{qid}/sandbox-send-approval')
+    def approve_route(qid: str, data: dict, u=Depends(auth)):
+        require_role(u, {'owner'})
+        return approve(path, qid, data, u['id'])
 
     @app.post('/api/quotes/{qid}/sandbox-send')
     def send_route(qid: str, data: dict, u=Depends(auth)):
