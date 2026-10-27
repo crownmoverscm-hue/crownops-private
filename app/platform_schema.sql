@@ -477,3 +477,19 @@ CREATE TABLE IF NOT EXISTS qbo_estimate_deliveries (
  error TEXT NOT NULL DEFAULT '', sent_at TEXT, checked_at TEXT,
  created_by TEXT NOT NULL, created_at TEXT NOT NULL
 );
+-- A single immutable decision; it does not update any quote or provider mapping.
+CREATE TABLE IF NOT EXISTS sandbox_revision_reconciliations (
+ id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, created_at TEXT NOT NULL, reason TEXT NOT NULL,
+ context_hash TEXT NOT NULL, provider_hash TEXT NOT NULL, decision_json TEXT NOT NULL,
+ audit_id INTEGER NOT NULL UNIQUE REFERENCES audit(id)
+);
+CREATE TRIGGER IF NOT EXISTS sandbox_reconciliation_no_update BEFORE UPDATE ON sandbox_revision_reconciliations
+ BEGIN SELECT RAISE(ABORT, 'Revision reconciliation is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS sandbox_reconciliation_no_delete BEFORE DELETE ON sandbox_revision_reconciliations
+ BEGIN SELECT RAISE(ABORT, 'Revision reconciliation is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS sandbox_reconciliation_audit_no_update BEFORE UPDATE ON audit
+ WHEN OLD.action='Sandbox r3 delivery reconciliation recorded'
+ BEGIN SELECT RAISE(ABORT, 'Revision reconciliation audit is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS sandbox_reconciliation_audit_no_delete BEFORE DELETE ON audit
+ WHEN OLD.action='Sandbox r3 delivery reconciliation recorded'
+ BEGIN SELECT RAISE(ABORT, 'Revision reconciliation audit is immutable'); END;

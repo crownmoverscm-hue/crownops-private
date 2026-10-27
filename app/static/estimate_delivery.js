@@ -6,6 +6,19 @@ window.openQuickBooksEstimate = async function(qid){
  if(r.send_only_preflight){
   const detail=(name,value)=>'<div class="quote-line" style="gap:12px;overflow-wrap:anywhere"><span>'+h(name)+'</span><strong>'+h(value)+'</strong></div>';
   const master=S.user.role==='owner'&&S.user.is_master_owner===true;
+  const reconciliation=r.reconciliation;
+  const reconcileForm=master&&r.reconciliation_can_record?'<section class="panel panel-body"><h3>Resolve r3 billing email change</h3>'+
+   '<p>'+h(reconciliation.before)+'</p>'+detail('Keep linked to Estimate 185',reconciliation.retained_quote_id+' · r2')+
+   detail('Withdraw from delivery use only',reconciliation.withdrawn_quote_id+' · r3')+
+   detail('Original fictional Bill-to email',reconciliation.original_bill_email)+detail('r3 Bill-to email change',reconciliation.r3_bill_email)+
+   detail('Separate test email recipient',r.recipient)+'<p>'+h(reconciliation.after)+'</p>'+
+   '<label for="qbo-reconciliation-reason">Reason for withdrawing this billing change</label><textarea id="qbo-reconciliation-reason" maxlength="1000" placeholder="Explain that the intentional r3 edit was meant to select the test email recipient, while fictional billing stays unchanged."></textarea>'+
+   '<p><label><input type="checkbox" id="qbo-reconciliation-preserve"> I explicitly withdraw this r3 Bill-to change from Estimate 185 delivery use only. Preserve all three revisions, their original contents and audit history. This does not approve or send an email.</label></p></section>':'';
+  const reconciliationNote=reconciliation?.recorded?'<section class="panel panel-body"><h3>Recorded r3 reconciliation</h3>'+
+   detail('Status',reconciliation.valid?'Valid for this exact reviewed history':'Invalidated — r2 delivery remains blocked')+
+   detail('Recorded by',reconciliation.owner_name||reconciliation.owner_id)+detail('Recorded at',reconciliation.recorded_at)+
+   detail('Audit event',reconciliation.audit_id)+detail('Reason',reconciliation.reason)+
+   '<p>r1, r2 and r3 are preserved. Estimate 185 remains linked to r2. Email approval and SEND remain separate actions.</p></section>':'';
   const approval=master&&r.approval_eligible?'<div class="panel panel-body"><h3>Approve one sandbox email</h3>'+
    '<p>Records your approval only. Sending requires a separate click after review.</p>'+
    '<label for="qbo-approval-reference">Where did you check the sandbox email settings?</label><textarea id="qbo-approval-reference" maxlength="1000" placeholder="Describe the QuickBooks screen or evidence reference; no passwords."></textarea>'+
@@ -13,11 +26,13 @@ window.openQuickBooksEstimate = async function(qid){
    '<p><label><input type="checkbox" id="qbo-approval-bill"> I approve one email to '+h(r.recipient)+' and understand sendTo may change Estimate BillEmail from '+h(r.bill_email)+'.</label></p>'+
    '<p><label><input type="checkbox" id="qbo-approval-unknown"> I understand the exact sender, Reply-To, inbox delivery and online approval link remain unverified until the controlled test. Acceptance and booking stay disabled.</label></p></div>':'';
   const actionData=' data-id="'+h(qid)+'" data-review="'+h(r.review_hash)+'" data-recipient="'+h(r.recipient)+'"';
+  const reconciliationButton=master&&r.reconciliation_can_record?'<button type="button" class="btn-primary" data-qbo-delivery="reconcile-r3" data-id="'+h(qid)+'" data-review="'+h(reconciliation.review_hash)+'" data-withdraw="'+h(reconciliation.withdrawn_quote_id)+'" data-recipient="'+h(r.recipient)+'">Record r3 withdrawal — no email approval</button>':'';
   const approvalButton=master&&r.approval_eligible?'<button type="button" class="btn-primary" data-qbo-delivery="sandbox-approve"'+actionData+'>Approve one test email — do not send</button>':'';
   const sendButton=master&&r.can_send?'<button type="button" class="btn-primary" data-qbo-delivery="sandbox-send"'+actionData+'>Send ONE QuickBooks test email</button>':
    '<button disabled>'+(r.send_attempt.state?'Send locked — reconcile existing attempt':!master?'Send disabled — Master owner required':r.owner_approved?'Send unavailable — review blockers':'Send disabled — owner approval required')+'</button>';
   showModal('TEST ONLY · Estimate 185 send preflight',
    '<div class="callout orange"><strong>'+(r.send_attempt.state?'Send attempt: '+h(r.send_attempt.state)+'. Do not resend.':r.owner_approved?'One test email approved; not sent by approval.':'No current email approval recorded in CrownOps.')+'</strong> No acceptance, booking, invoice, deposit or payment is authorized.</div>'+
+   reconciliationNote+reconcileForm+
    detail('Company',r.company_name+' · '+r.country+' · '+r.environment)+detail('Realm ID',r.realm_id)+
    detail('QuickBooks Estimate ID',r.external_id)+detail('CrownOps quote',r.quote_id+' · r'+r.revision)+
    detail('Logical service parent',r.service_id)+detail('QuickBooks Customer ID',r.customer_id)+
@@ -36,7 +51,7 @@ window.openQuickBooksEstimate = async function(qid){
    (r.approval?.approved_at?detail('Approval recorded',r.approval.approved_name+' · '+r.approval.approved_at)+detail('Approval status',r.approval.current?'Current':'Stale — review again')+detail('Settings evidence',r.approval.evidence_reference):'')+
    '<p><strong>Effective gates:</strong> Customer CREATE OFF · Estimate CREATE OFF · Acceptance OFF · Booking OFF · Invoice OFF · Deposit OFF · Payment OFF · Gmail OFF</p>'+
    '<p>Provider email status: '+h(r.provider_email_status||'NotSet')+' · estimate status: '+h(r.provider_status)+'. Neither sent nor Accepted status proves inbox receipt or a customer click.</p>'+
-   '<ul>'+r.blockers.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul>'+approval,close+approvalButton+sendButton);
+   '<ul>'+r.blockers.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul>'+approval,close+reconciliationButton+approvalButton+sendButton);
   return;
  }
 
@@ -85,7 +100,12 @@ document.addEventListener('click',async event=>{
  const qid=b.dataset.id,base='/quotes/'+encodeURIComponent(qid)+'/quickbooks-delivery';
  try{
   if(b.dataset.qboDelivery==='open'){await openQuickBooksEstimate(qid);return;}
-  if(b.dataset.qboDelivery==='sandbox-approve'){
+  if(b.dataset.qboDelivery==='reconcile-r3'){
+   const reason=document.getElementById('qbo-reconciliation-reason')?.value.trim()||'';
+   if(document.getElementById('qbo-reconciliation-preserve')?.checked!==true||reason.length<20)throw Error('Review the exact withdrawal, enter a reason and confirm preservation of all revisions. No email approval is granted.');
+   await api('/quotes/'+encodeURIComponent(qid)+'/sandbox-revision-reconciliation',{method:'POST',timeoutMs:95000,data:{confirm_preserve_history:true,reason,retained_quote_id:qid,withdrawn_quote_id:b.dataset.withdraw,estimate_id:'185',recipient:b.dataset.recipient,review_hash:b.dataset.review}});
+   toast('r3 withdrawal recorded. No email approval or send.');
+  }else if(b.dataset.qboDelivery==='sandbox-approve'){
    const copies=document.getElementById('qbo-approval-copies')?.checked===true;
    const bill=document.getElementById('qbo-approval-bill')?.checked===true;
    const unknown=document.getElementById('qbo-approval-unknown')?.checked===true;
@@ -115,7 +135,7 @@ document.addEventListener('click',async event=>{
   }
   await openQuickBooksEstimate(qid);
  }catch(error){
-  if(b.dataset.qboDelivery==='sandbox-approve')modalError(error);
+  if(['sandbox-approve','reconcile-r3'].includes(b.dataset.qboDelivery))modalError(error);
   else if(b.dataset.qboDelivery==='sandbox-send')modalError(new Error(error.message+' Do not resend an uncertain attempt. Reopen this preflight for reconciliation.'));
   else toast(error.message);
  }finally{if(b.isConnected)b.disabled=false;}

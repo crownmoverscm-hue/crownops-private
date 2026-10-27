@@ -105,14 +105,23 @@ def preflight(path, qid):
     snapshot_hash = digest({'payload': payload, 'taxes': saved.get('TxnTaxDetail'), 'total': saved.get('TotalAmt'), 'source': row['source_hash']})
     cc = {k: remote[k] for k in ('BillEmailCc', 'BillEmailBcc') if remote.get(k)}
     company_email = company.get('CustomerCommunicationEmailAddr', {}).get('Address', '')
+    from . import sandbox_revision_reconciliation as revision_review
+    provider_hash = digest({'realm': realm, 'company': company, 'customer': customer,
+                            'estimate': remote, 'recipient': RECIPIENT})
+    with closing(connect(path)) as db:
+        local = revision_review.local_review(db)
+        reconciliation = revision_review.proposal(db, local, provider_hash, snapshot_hash)
     review = digest({'snapshot': snapshot_hash, 'provider': review_hash(remote), 'to': RECIPIENT, 'realm': realm,
                      'estimate': scope.ESTIMATE, 'cc_bcc': cc, 'company_contact_email': company_email,
-                     'stored_review': stored_review(row)})
+                     'stored_review': stored_review(row), 'family_context': local['context_hash'],
+                     'provider_identity': provider_hash, 'reconciliation': reconciliation['record_hash']})
     blockers = ['Email sending requires separate owner approval.']
     if source_error:
         blockers.append(source_error)
-    if history[-1]['id'] != qid:
-        blockers.append('A newer revision exists; the synced revision cannot be used for a valid booking or send.')
+    if local['latest_id'] != qid and not reconciliation['valid']:
+        blockers.append(revision_review.NEWER)
+    if reconciliation['recorded'] and not reconciliation['valid']:
+        blockers.append('The recorded r3 reconciliation no longer matches current evidence; delivery remains blocked.')
     from .quote_options import expired_quote
     if expired_quote(q):
         blockers.append('The synced estimate has expired; do not send or recreate it.')
@@ -131,6 +140,11 @@ def preflight(path, qid):
     if cc:
         blockers.append('Estimate contains CC/BCC fields. Remove them in QuickBooks and review again; CrownOps will not change them.')
     approval_blockers = [x for x in blockers if x != 'Email sending requires separate owner approval.']
+    reconciliation_blockers = local['blockers'] + [x for x in approval_blockers if x != revision_review.NEWER]
+    if approval:
+        reconciliation_blockers.append('An email approval record already exists; reconciliation cannot alter or grant email approval.')
+    if reconciliation['recorded'] and not reconciliation['valid']:
+        reconciliation_blockers.append('The recorded reconciliation is stale or invalid. It cannot be overwritten or reset.')
     owner_approved = (approval.get('version') == APPROVAL_VERSION and approval.get('owner_approved') is True and bool(approving_owner)
                       and approval.get('review_hash') == review and approval.get('recipient') == RECIPIENT
                       and str(approval.get('estimate_id')) == scope.ESTIMATE and bool(approval.get('approved_at'))
@@ -166,6 +180,9 @@ def preflight(path, qid):
                          'approved_at': approval.get('approved_at'), 'current': owner_approved,
                          'evidence_reference': evidence.get('evidence_reference', '')},
             'stored_review': stored_review(row),
+            'family_context_hash': local['context_hash'], 'provider_hash': provider_hash,
+            'reconciliation': reconciliation, 'reconciliation_blockers': reconciliation_blockers,
+            'reconciliation_can_record': not reconciliation['recorded'] and not reconciliation_blockers,
             'send_attempt': send_attempt, 'blockers': blockers, 'review_hash': review,
             'approval_hash': digest(approval),
             'gates': {'create_customer': False, 'create_estimate': False, 'acceptance': False, 'booking': False,
@@ -192,9 +209,10 @@ def approve(path, qid, data, actor):
     with transaction(path) as db:
         owner = require_master(db, actor)
         row = one(db, 'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?', (qid,))
-        latest = one(db, 'SELECT id FROM quotes WHERE lead_id=(SELECT lead_id FROM quotes WHERE id=?) ORDER BY revision DESC LIMIT 1', (qid,))
+        from .sandbox_revision_reconciliation import current_for_delivery
         if (settings(db, SEND_SLOT) or not row or stored_review(row) != p['stored_review']
-                or not latest or latest['id'] != qid or source(db, qid)[3] != row['source_hash']):
+                or not current_for_delivery(db, qid, p['provider_hash'], p['family_context_hash'])
+                or source(db, qid)[3] != row['source_hash']):
             raise HTTPException(409, 'Estimate changed or send already claimed. Reconcile without retrying.')
         existing = settings(db, APPROVAL, {}) or {}
         if existing.get('review_hash') == p['review_hash'] and p['owner_approved']:
@@ -229,10 +247,11 @@ def send(path, qid, data, actor):
         require_master(db, actor)
         approving_owner = approval.get('approved_by') == actor
         row = one(db, 'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?', (qid,))
-        latest = one(db, 'SELECT id FROM quotes WHERE lead_id=(SELECT lead_id FROM quotes WHERE id=?) ORDER BY revision DESC LIMIT 1', (qid,))
+        from .sandbox_revision_reconciliation import current_for_delivery
         if (not approving_owner or digest(approval) != p['approval_hash'] or approval.get('review_hash') != p['review_hash'] or not approval.get('owner_approved')
                 or not row or stored_review(row) != p['stored_review'] or any(os.getenv(k, '0') != '0' for k in OFF)
-                or row['state'] != 'Ready' or not latest or latest['id'] != qid or source(db, qid)[3] != row['source_hash']):
+                or row['state'] != 'Ready' or not current_for_delivery(db, qid, p['provider_hash'], p['family_context_hash'])
+                or source(db, qid)[3] != row['source_hash']):
             raise HTTPException(409, 'Approval or source changed during review. No send claimed.')
         put_setting(db, SEND_SLOT, {'state': 'Sending', 'quote_id': qid, 'estimate_id': scope.ESTIMATE, 'recipient': RECIPIENT,
                                   'review_hash': p['review_hash'], 'actor': actor, 'at': now()})
@@ -270,6 +289,8 @@ def send(path, qid, data, actor):
 
 
 def register(app, path, auth):
+    from .sandbox_revision_reconciliation import register as register_reconciliation
+    register_reconciliation(app, path, auth)
     @app.get('/api/quotes/{qid}/sandbox-send-preflight')
     def preview(qid: str, u=Depends(auth)):
         require_role(u, SALES)

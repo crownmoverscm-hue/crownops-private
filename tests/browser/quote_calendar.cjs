@@ -59,12 +59,12 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
    await dismiss();await p.getByRole('button',{name:'Discard changes',exact:true}).click();assert.equal(await p.getByRole('dialog').isVisible(),false,'Discard closes after validation recovery: '+close);
   }
   // Read-only sandbox send preflight renders linkage and separate gates.
-  let preflightMutations=0, approvalCalls=0, sendCalls=0, approved=false;
+  let preflightMutations=0, approvalCalls=0, sendCalls=0, approved=false, hasR3=false, reconciled=false, reconcileCalls=0;
   await p.evaluate(()=>{S.user.role="owner";S.user.is_master_owner=true;});
   await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/booking-workflow',r=>r.fulfill({json:{available:false,workflow_enabled:false}}));
   await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/quickbooks-delivery',r=>{
    if(r.request().method()!=='GET')preflightMutations++;
-   return r.fulfill({json:{send_only_preflight:true,test_only:true,state:'Ready',company_name:'Sandbox Company CA 5634',country:'CA',environment:'sandbox',realm_id:'9341458310238189',external_id:'185',quote_id:'QUOTE-08dd48a364a34f66',revision:2,service_id:'TEST-SERVICE',customer_id:'10',revisions:[{id:'TEST-R1',revision:1},{id:'QUOTE-08dd48a364a34f66',revision:2}],subtotal_cents:48599,gst_cents:2430,qst_cents:4848,total_cents:55877,snapshot_hash:'TEST-SNAPSHOT',customer_email:'testonly.fictional@example.com',bill_email:'testonly.fictional@example.com',recipient:'jonathanprobonas15@gmail.com',send_to_warning:'Intuit sendTo can update Estimate.BillEmail.Address.',cc_bcc:{provider_defaults_verified_absent:false},sender:'Unknown — QuickBooks controls sender',reply_to:'Unknown — verify actual headers',message_preview_note:'Saved estimate only; exact email preview unavailable.',memo:'TEST ONLY',lines:[],operation:'POST existing Estimate 185 send',duplicate_protection:'Durable one-send slot; no automatic retry.',send_attempt:{},provider_status:'Pending',provider_email_status:'NotSet',review_hash:'TEST-REVIEW',approval_eligible:!approved,owner_approved:approved,can_send:approved,send_configured:true,approval:approved?{approved_name:'TEST Owner',approved_at:'2026-10-26T22:00:00Z',current:true,evidence_reference:'SIMULATED sandbox settings'}:{},blockers:approved?[]:['Separate owner approval required.']}});
+   return r.fulfill({json:{send_only_preflight:true,test_only:true,state:'Ready',company_name:'Sandbox Company CA 5634',country:'CA',environment:'sandbox',realm_id:'9341458310238189',external_id:'185',quote_id:'QUOTE-08dd48a364a34f66',revision:2,service_id:'TEST-SERVICE',customer_id:'10',revisions:[{id:'TEST-R1',revision:1},{id:'QUOTE-08dd48a364a34f66',revision:2}],subtotal_cents:48599,gst_cents:2430,qst_cents:4848,total_cents:55877,snapshot_hash:'TEST-SNAPSHOT',customer_email:'testonly.fictional@example.com',bill_email:'testonly.fictional@example.com',recipient:'jonathanprobonas15@gmail.com',send_to_warning:'Intuit sendTo can update Estimate.BillEmail.Address.',cc_bcc:{provider_defaults_verified_absent:false},sender:'Unknown — QuickBooks controls sender',reply_to:'Unknown — verify actual headers',message_preview_note:'Saved estimate only; exact email preview unavailable.',memo:'TEST ONLY',lines:[],operation:'POST existing Estimate 185 send',duplicate_protection:'Durable one-send slot; no automatic retry.',send_attempt:{},provider_status:'Pending',provider_email_status:'NotSet',review_hash:'TEST-REVIEW',reconciliation_can_record:hasR3&&!reconciled,reconciliation:hasR3?{recorded:reconciled,valid:reconciled,review_hash:'TEST-RECON-REVIEW',retained_quote_id:'QUOTE-08dd48a364a34f66',withdrawn_quote_id:'QUOTE-af7136453bf64544',original_bill_email:'testonly.fictional@example.com',r3_bill_email:'jonathanprobonas15@gmail.com',before:'r3 blocks r2 delivery.',after:'r2 eligibility only; no email approval or send.',owner_name:'TEST Owner',recorded_at:'2026-10-27T12:00:00Z',audit_id:99,reason:'SIMULATED intentional Bill-to withdrawal'}:undefined,approval_eligible:!approved&&(!hasR3||reconciled),owner_approved:approved,can_send:approved&&(!hasR3||reconciled),send_configured:true,approval:approved?{approved_name:'TEST Owner',approved_at:'2026-10-26T22:00:00Z',current:true,evidence_reference:'SIMULATED sandbox settings'}:{},blockers:approved?[]:['Separate owner approval required.']}});
   });
   await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/sandbox-send-approval',r=>{
    approvalCalls++;const data=r.request().postDataJSON();
@@ -74,6 +74,14 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
    approved=true;return r.fulfill({json:{approved:true,email_sent:false}});
   });
   await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/sandbox-send',r=>{sendCalls++;return r.fulfill({status:409,json:{detail:'SIMULATED safety block'}});});
+  await p.route('**/api/quotes/QUOTE-08dd48a364a34f66/sandbox-revision-reconciliation',r=>{
+   assert.equal(r.request().method(),'POST');reconcileCalls++;
+   const data=r.request().postDataJSON();assert.equal(data.confirm_preserve_history,true);
+   assert.equal(data.retained_quote_id,'QUOTE-08dd48a364a34f66');assert.equal(data.withdrawn_quote_id,'QUOTE-af7136453bf64544');
+   assert.equal(data.review_hash,'TEST-RECON-REVIEW');assert.equal(data.estimate_id,'185');
+   assert.equal(data.recipient,'jonathanprobonas15@gmail.com');assert(data.reason.length>=20);
+   reconciled=true;return r.fulfill({json:{recorded:true,email_approved:false,email_sent:false}});
+  });
   await p.evaluate(()=>openQuickBooksEstimate('QUOTE-08dd48a364a34f66'));
   await p.getByRole('heading',{name:'TEST ONLY · Estimate 185 send preflight',exact:true}).waitFor();
   assert.match(await p.locator('#modal').innerText(),/QuickBooks Customer ID/);
@@ -98,7 +106,25 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict');
   assert.equal(await p.getByRole('button',{name:'Send disabled — Master owner required',exact:true}).isEnabled(),false);
   assert.equal(await p.getByRole('button',{name:'Approve one test email — do not send',exact:true}).count(),0);
   await p.getByRole('button',{name:'Close',exact:true}).last().click();
-  await ctx.close();console.log(JSON.stringify({width,missingCalendar:'PASS',timeout:'PASS',dismissal:'PASS',validationRecovery:'PASS',sendPreflight:'PASS'}));
+  // The only r3 operation is a separate, explicit reconciliation in this simulated UI.
+  hasR3=true;approved=false;await p.evaluate(()=>{S.user.is_master_owner=true;});
+  await p.evaluate(()=>openQuickBooksEstimate('QUOTE-08dd48a364a34f66'));
+  const withdrawal=p.getByRole('button',{name:'Record r3 withdrawal — no email approval',exact:true});
+  assert.equal(await withdrawal.isEnabled(),true);
+  assert.equal(await p.getByRole('button',{name:'Approve one test email — do not send',exact:true}).count(),0);
+  await withdrawal.click();assert.equal(reconcileCalls,0,'unconfirmed withdrawal never submits');
+  await p.locator('#qbo-reconciliation-reason').fill('SIMULATED owner intended only the separate test email recipient.');
+  await p.locator('#qbo-reconciliation-preserve').check();await withdrawal.click();
+  await p.getByRole('heading',{name:'Recorded r3 reconciliation',exact:true}).waitFor();
+  assert.equal(reconcileCalls,1);assert.equal(approvalCalls,1,'reconciliation does not approve email');assert.equal(sendCalls,0);
+  assert.equal(await p.getByRole('button',{name:'Approve one test email — do not send',exact:true}).isEnabled(),true);
+  assert.equal(await p.getByRole('button',{name:'Send disabled — owner approval required',exact:true}).isEnabled(),false);
+  assert(await p.locator('#modal').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'reconciliation modal overflow '+width);
+  reconciled=false;await p.evaluate(()=>{S.user.is_master_owner=false;});
+  await p.evaluate(()=>openQuickBooksEstimate('QUOTE-08dd48a364a34f66'));
+  assert.equal(await p.getByRole('button',{name:'Record r3 withdrawal — no email approval',exact:true}).count(),0);
+  await p.getByRole('button',{name:'Close',exact:true}).last().click();
+  await ctx.close();console.log(JSON.stringify({width,missingCalendar:'PASS',timeout:'PASS',dismissal:'PASS',validationRecovery:'PASS',sendPreflight:'PASS',revisionReconciliation:'PASS'}));
  }
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});
