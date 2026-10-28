@@ -1529,6 +1529,8 @@ def create_app(database_path=None):
     register_pasted_schedule(app,path,auth)
     from .wix_sync import register_wix
     register_wix(app,path,auth,new_lead)
+    from .wix_draft_connector import register as register_wix_drafts
+    register_wix_drafts(app,path,auth)
 
     from .portal import register_portal
     from .operations import register_operations
