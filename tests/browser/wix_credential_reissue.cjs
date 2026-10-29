@@ -15,6 +15,9 @@ for(const width of [320,390,768,1440]){
  if(width===1440){
   await page.locator('#reason').fill('Disposable browser fixture reissue - no providers');await page.locator('#approve').check();await page.locator('#plan').click();
   await page.locator('#entry').waitFor({state:'visible'});
+  await page.setViewportSize({width:320,height:900});
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'private form overflow');
+  await page.setViewportSize({width:1440,height:900});
   const inputs=page.locator('input[type="password"]');assert.equal(await inputs.count(),10);
   for(let i=0;i<5;i++){const value=crypto.randomBytes(24).toString('base64url');await inputs.nth(i*2).fill(value);await inputs.nth(i*2+1).fill(value);}
   await page.locator('#execute-confirm').check();await page.locator('#execute').click();
