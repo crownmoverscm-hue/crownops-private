@@ -1531,6 +1531,8 @@ def create_app(database_path=None):
     register_wix(app,path,auth,new_lead)
     from .wix_draft_connector import register as register_wix_drafts
     register_wix_drafts(app,path,auth)
+    from .wix_test_credential_reissue import register as register_wix_test_reissue
+    register_wix_test_reissue(app,path,auth)
 
     from .portal import register_portal
     from .operations import register_operations
