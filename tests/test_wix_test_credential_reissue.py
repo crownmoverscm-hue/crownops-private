@@ -96,7 +96,8 @@ class SyntheticCredentialReissueTests(unittest.TestCase):
         op = self.plan()
         for role in ('otherowner','manager','sales','crew','inactive'):
             self.f.login(role)
-            for response in (self.preflight(),self.execute(op)):
+            denied_plan=self.client.post(reissue.PREFIX+'/plan',json={'confirm':True,'reason':'Disposable denied request','inventory_hash':'ignored'})
+            for response in (self.preflight(),self.execute(op),denied_plan):
                 self.assertIn(response.status_code, (401,403))
         self.f.login('owner')
         self.client.headers['x-csrf-token'] = 'wrong'

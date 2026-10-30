@@ -12,6 +12,7 @@ import requests
 from fastapi import BackgroundTasks, Depends, HTTPException, Request
 from .store import connect, transaction, one, rows, insert, audit, now, uid, dumps
 from .platform_common import settings, put_setting, stamp_hash, secret_box, decrypt, require_role
+from .synthetic_recovery_guard import restricted, MESSAGE as SYNTHETIC_RECOVERY_MESSAGE
 
 
 def master_owner_id(db):
@@ -231,7 +232,7 @@ def deliver_recovery(path, email, public_url):
     # Runs after the public response; account existence does not affect its body.
     with closing(connect(path)) as db:
         person = one(db, 'SELECT id,name,email,role,active FROM users WHERE email=? AND active=1', (email,))
-    if not person or not recovery_email_allowed(path, public_url, person['email']):
+    if not person or restricted(path, person) or not recovery_email_allowed(path, public_url, person['email']):
         return
     raw = secrets.token_urlsafe(40)
     key = uid('AUTHMAIL')
@@ -263,7 +264,7 @@ def deliver_recovery(path, email, public_url):
 def notify_password_reset(path, user_id, public_url):
     with closing(connect(path)) as db:
         person = one(db, 'SELECT id,name,email,role,active FROM users WHERE id=? AND active=1', (user_id,))
-    if not person or not recovery_email_allowed(path, public_url, person['email']):
+    if not person or restricted(path, person) or not recovery_email_allowed(path, public_url, person['email']):
         return
     try:
         send_account_email(path, person, public_url,
@@ -313,6 +314,7 @@ def register_account_access(app, path, auth, public_url):
         for person in accounts:
             person['master_owner'] = person['id'] == master
             person['can_manage'] = person['id'] != u['id'] and not person['master_owner'] and (person['role'] != 'owner' or u['id'] == master)
+            person['general_recovery_blocked_reason'] = SYNTHETIC_RECOVERY_MESSAGE if restricted(path,person) else None
             person['access_revision'] = access_revision(person)
         return {'accounts':accounts,'invitations':invitations,'master_owner_id':master,
                 'is_master_owner':u['id']==master,'email_recovery':recovery_email_status(path, public_url)}

@@ -35,7 +35,8 @@
   const d=await api('/account-access');S.user.is_master_owner=d.is_master_owner;
   const accountCards=d.accounts.map(person=>{
    const edit=person.can_manage?`<button class="btn-small ${person.active?'':'btn-primary'}" data-account="edit-access" data-id="${h(person.id)}" data-restore="${person.active?'false':'true'}">${person.active?'Change role':'Restore access'}</button>`:'';
-   const actions=edit+(person.active&&person.can_manage?`<button class="btn-small" data-account="reset-link" data-id="${h(person.id)}">Private reset link</button><button class="btn-danger btn-small" data-account="remove" data-id="${h(person.id)}" data-name="${h(person.name)}" data-email="${h(person.email)}">Remove access</button>`:'');
+   const reset=person.general_recovery_blocked_reason?`<button class="btn-small" disabled title="${h(person.general_recovery_blocked_reason)}">Private reset link — restricted test account</button>`:`<button class="btn-small" data-account="reset-link" data-id="${h(person.id)}">Private reset link</button>`;
+   const actions=edit+(person.active&&person.can_manage?`${reset}<button class="btn-danger btn-small" data-account="remove" data-id="${h(person.id)}" data-name="${h(person.name)}" data-email="${h(person.email)}">Remove access</button>`:'');
    const access=person.master_owner?'Master owner':person.role==='owner'?'Owner':person.role==='manager'?'Manager':person.role==='dispatch'?'Dispatch':person.role;
    return `<div class="account-card"><div class="grow"><div class="strong">${h(person.name)}</div><div class="small muted account-email">${h(person.email)}</div><div class="tiny muted">${h(access)}${person.id===S.user.id?' &middot; Your account':''}</div></div><span class="pill ${person.active?'teal':'gray'}">${person.active?'Active':'Access removed'}</span><div class="account-actions">${actions}</div></div>`;
   }).join('');

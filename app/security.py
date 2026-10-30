@@ -7,6 +7,7 @@ from fastapi import BackgroundTasks,Depends,HTTPException,Request
 from .store import connect,transaction,one,rows,insert,audit,now,dumps,uid
 from .platform_common import *
 from .account_access import protect_owner_account, recovery_rate_limit, notify_password_reset
+from .synthetic_recovery_guard import require_general_recovery
 
 
 def validate_deployment(url,secure):
@@ -90,6 +91,7 @@ def register_security(app,path,auth,public_url,passwords):
             person=one(db,'SELECT * FROM users WHERE id=? AND active=1',(uid_,))
             if not person:raise HTTPException(404,'Active account not found.')
             protect_owner_account(db,u,person)
+            require_general_recovery(path,person)
             db.execute('DELETE FROM account_resets WHERE user_id=?',(uid_,));insert(db,'account_resets',dict(token_hash=stamp_hash(raw),user_id=uid_,expires_at=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat(timespec='seconds')))
             audit(db,u['id'],'One-use password reset prepared','users',uid_)
         return {'url':public_url+'/#reset='+raw,'sent':False,'expires_in':'30 minutes'}
@@ -104,6 +106,7 @@ def register_security(app,path,auth,public_url,passwords):
         with transaction(path) as db:
             r=one(db,'SELECT r.* FROM account_resets r JOIN users u ON u.id=r.user_id WHERE r.token_hash=? AND r.expires_at>? AND r.used_at IS NULL AND u.active=1',(stamp_hash(raw),now()))
             if not r:raise HTTPException(401,'Reset link is invalid or expired.')
+            require_general_recovery(path,one(db,'SELECT id,email FROM users WHERE id=?',(r['user_id'],)))
             db.execute('UPDATE users SET password_hash=? WHERE id=?',(passwords.hash(password),r['user_id']));db.execute('DELETE FROM account_resets WHERE user_id=?',(r['user_id'],));db.execute('DELETE FROM sessions WHERE user_id=?',(r['user_id'],));audit(db,r['user_id'],'Password reset; sessions revoked','users',r['user_id'])
         background.add_task(notify_password_reset,path,r['user_id'],public_url)
         return {'ok':True,'mfa_still_required':True}
