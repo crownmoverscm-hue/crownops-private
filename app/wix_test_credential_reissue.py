@@ -1,5 +1,6 @@
 """Prepared, default-disabled staging-only credential reissue.
-No verified live target IDs are included. No provider clients or email hooks.
+Exact Muse-verified target IDs are in the manifest; execution remains default-disabled.
+No provider clients or email hooks.
 Never select existing credential material; accept replacements only in the owner form.
 """
 from contextlib import closing

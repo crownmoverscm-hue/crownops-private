@@ -1,5 +1,36 @@
 {
-  "status": "AWAITING_MUSE_METADATA_AND_OWNER_REVIEW",
-  "verification_reference": null,
-  "accounts": []
+  "status": "OWNER_REVIEWED_MUSE_METADATA",
+  "verification_reference": "Owner supplied Muse authenticated staging /api/users verification on build 1c522693c3fb32bb95d8c01c; reset execution NOT authorized; origin UNKNOWN.",
+  "accounts": [
+    {
+      "id": "WIX-PILOT-nonmaster-owner",
+      "email": "wix-pilot-nonmaster-owner@example.invalid",
+      "role": "owner",
+      "active": 1
+    },
+    {
+      "id": "WIX-PILOT-manager",
+      "email": "wix-pilot-manager@example.invalid",
+      "role": "manager",
+      "active": 1
+    },
+    {
+      "id": "WIX-PILOT-sales",
+      "email": "wix-pilot-sales@example.invalid",
+      "role": "sales",
+      "active": 1
+    },
+    {
+      "id": "WIX-PILOT-crew",
+      "email": "wix-pilot-crew@example.invalid",
+      "role": "crew",
+      "active": 1
+    },
+    {
+      "id": "WIX-PILOT-inactive",
+      "email": "wix-pilot-inactive@example.invalid",
+      "role": "sales",
+      "active": 0
+    }
+  ]
 }
