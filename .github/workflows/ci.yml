@@ -56,6 +56,10 @@ jobs:
         env:
           NODE_PATH: /tmp/crownops-browser/node_modules
         run: python tests/browser/run_mobile.py wix_drafts
+      - name: Test technical settings, pricing and recovery observation with malformed legacy rates
+        env:
+          NODE_PATH: /tmp/crownops-browser/node_modules
+        run: python tests/browser/run_mobile.py company_settings
       - name: Test synthetic credential reissue on disposable accounts only
         env:
           NODE_PATH: /tmp/crownops-browser/node_modules

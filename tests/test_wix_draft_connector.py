@@ -32,6 +32,19 @@ class WixDraftConnectorTests(unittest.TestCase):
   p=p or self.preflight();return self.client.post('/api/wix-drafts/review/'+self.qid,json={'basis':'high','snapshot_hash':p['snapshot_hash'],'confirm':True,'reason':'Reviewed exact fictional snapshot; no provider write.'})
  def count(self,t):
   with closing(connect(self.path)) as db:return db.execute('SELECT count(*) FROM '+t).fetchone()[0]
+ def test_new_fixture_uses_rate_list_without_rewriting_existing_fixture(self):
+  with patch('requests.Session.post') as post:
+   response=self.client.post('/api/wix-drafts/fixture',json={'confirm':True})
+   self.assertEqual(response.status_code,200,response.text)
+   with transaction(self.path) as db:
+    record=one(db,"SELECT * FROM pricing_versions WHERE id='WIX-TEST-UNAPPROVED-PRICE'")
+    self.assertEqual(json.loads(record['rates_json']),[])
+    db.execute("UPDATE pricing_versions SET rates_json='{}' WHERE id=?",(record['id'],))
+   again=self.client.post('/api/wix-drafts/fixture',json={'confirm':True})
+   self.assertTrue(again.json()['duplicate'])
+   with closing(connect(self.path)) as db:
+    self.assertEqual(one(db,'SELECT rates_json FROM pricing_versions WHERE id=?',(record['id'],))['rates_json'],'{}')
+   post.assert_not_called()
  def test_preflight_uses_actual_snapshot_and_never_calls_provider(self):
   before={t:self.count(t) for t in ('quotes','leads','jobs','outbound_messages','payments','audit','wix_draft_reviews')}
   with patch('requests.Session.post') as post:

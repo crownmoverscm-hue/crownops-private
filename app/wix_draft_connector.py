@@ -187,7 +187,7 @@ def register(app,path,auth):
             old=one(db,'SELECT id FROM quotes WHERE id=?',(FIXTURE_QUOTE,))
             if old:return {'quote_id':FIXTURE_QUOTE,'duplicate':True,'provider_writes':0}
             t=now();lid='WIX-TEST-READINESS-LEAD';pid='WIX-TEST-UNAPPROVED-PRICE'
-            insert(db,'pricing_versions',dict(id=pid,label='UNAPPROVED fictional Wix readiness only',rates_json='{}',settings_json='{}',approved=0,created_at=t))
+            insert(db,'pricing_versions',dict(id=pid,label='UNAPPROVED fictional Wix readiness only',rates_json='[]',settings_json='{}',approved=0,created_at=t))
             lead=dict(id=lid,client_name='TEST Wix readiness — fictional only',email='wix-readiness@example.invalid',phone='',move_date='2026-12-31',created_at=t,updated_at=t)
             insert(db,'leads',lead)
             inp={'service_type':'Moving','move_date':'2026-12-31','expiry_date':'2027-01-31','quote_title':'TEST ONLY — Wix local readiness','billing':{'name':lead['client_name'],'email':lead['email']},'template_snapshot':{},'payment_terms':'No payment, booking or service requested.','wix_fixture_terms':{'approved':True,'version':'WIX-FICTIONAL-v1','text':'Fictional local test only. Not an offer of services. No contact, quote, email, acceptance, invoice, payment or booking is authorized at any provider.'}}
