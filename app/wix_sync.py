@@ -138,6 +138,8 @@ def add_calendar(db, record, payload, day, start, note):
 
 
 def process_quote(db, record, payload, new_lead):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("process quote")
     day, start, note = title_schedule(payload['title'])
     record.update(service_date=day, start_time=start, status='Needs review', note=note)
     if day and day < CUTOFF:
