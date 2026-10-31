@@ -31,6 +31,18 @@ FEEDS = {
     'missed_call': 'Missed Calls',
     'voicemail': 'Voice Mail',
 }
+
+
+def _known_quote_notification(subject,body):
+    """A Gmail label is a routing hint, not proof of a customer inquiry."""
+    if subject in ('Quick Quote Form EN','Quick Quote Form FR','Form Submission from Free Quote FR Page'):
+        return True
+    if subject.startswith('New Instant Moving Estimate Request'):
+        return True
+    if re.fullmatch(r'New Crown Movers Quote Request - .+ - \d{4}-\d{2}-\d{2}',subject):
+        return (('CROWN_QUOTE_BUILDER_INPUT' in body and 'END_CROWN_QUOTE_BUILDER_INPUT' in body)
+                or all(marker in body for marker in ('WEBSITE LEAD - FREE MOVING QUOTE','Client Contact Info','Move Summary')))
+    return False
 def _gmail_received_iso(message,headers):
     raw_internal=str((message or {}).get('internalDate') or '').strip()
     if raw_internal:
@@ -652,18 +664,25 @@ def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_fe
                 db.execute('SAVEPOINT incoming_inquiry')
                 try:
                     if feed == 'quote':
-                        data = _quote_fields(body, subject)
-                        payload['parsed']=data;payload['body']=body[:20000];payload['origin_label']='Quote Form'
+                        payload['body']=body[:20000]
                         event_type='gmail_quote'
-                        existing = one(db, 'SELECT id FROM leads WHERE external_id=?', (event_key,))
-                        match=match_inquiry_project(db,data,'quote')
-                        if match['requires_review'] and not existing:
-                            payload['matching']=_matching_payload(match);summary['needs_review']+=1
-                            _review_task(db,event_key,'Match incoming quote form to the correct client service')
+                        if not _known_quote_notification(subject,body):
+                            payload['origin_label']='Unclassified mail'
+                            payload['classification_review']={'reason':'Quote label alone does not establish a customer request; notification type requires review.'}
+                            summary['needs_review']+=1
+                            _review_task(db,event_key,'Review message type in quote label before creating any customer service')
                         else:
-                            object_id,created=_quote_inquiry(db,data,payload,actor,event_key,new_lead,match['lead'])
-                            if created:summary['new_leads']+=1
-                            status='Imported'
+                            data = _quote_fields(body, subject)
+                            payload['parsed']=data;payload['origin_label']='Quote Form'
+                            existing = one(db, 'SELECT id FROM leads WHERE external_id=?', (event_key,))
+                            match=match_inquiry_project(db,data,'quote')
+                            if match['requires_review'] and not existing:
+                                payload['matching']=_matching_payload(match);summary['needs_review']+=1
+                                _review_task(db,event_key,'Match incoming quote form to the correct client service')
+                            else:
+                                object_id,created=_quote_inquiry(db,data,payload,actor,event_key,new_lead,match['lead'])
+                                if created:summary['new_leads']+=1
+                                status='Imported'
                     elif feed in ('bank', 'wix_payment'):
                         parsed = _payment_payload(feed, subject, body)
                         if not parsed:

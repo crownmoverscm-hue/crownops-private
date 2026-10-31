@@ -18,7 +18,10 @@ def parse_notification(text, subject):
     en = subject == 'Quick Quote Form EN' and text.startswith('Quick Quote Form EN')
     fr = subject == 'Form Submission from Free Quote FR Page' and text.startswith(subject)
     calc = subject == 'New Instant Moving Estimate Request - Crown Movers' and 'Client DetailsName' in text and 'Follow-Up Priority' in text
-    if not (en or fr or calc):
+    styled_subject = re.fullmatch(r'New Crown Movers Quote Request - .+ - (\d{4}-\d{2}-\d{2})',subject)
+    styled_contact = re.search(r'Client Contact Info(.*?)Move Summary',text,re.S)
+    styled = bool(styled_subject and styled_contact and 'WEBSITE LEAD - FREE MOVING QUOTE' in text)
+    if not (en or fr or calc or styled):
         return None
     reviews = []
     result = dict.fromkeys(('email','phone','move_date','pickup','dropoff','home_size','boxes',
@@ -32,7 +35,28 @@ def parse_notification(text, subject):
             reviews.append('Conflicting values for '+label)
             return ''
         return values[0] if values else ''
-    if en:
+    if styled:
+        fields = _fields(styled_contact.group(1),['Name:','Phone:','Email:'])
+        mapping = {'client_name':'Name:'}
+        section = text.split('Move Summary',1)[1]
+        section, sep, notes = section.partition('Additional Details:')
+        result['notes'] = notes.strip() if sep else ''
+        summary = _fields(section,['Moving Date:','Pickup Address:','Destination Address:'])
+        result['source_summary_fields'] = summary
+        result['source_subject_date'] = styled_subject.group(1)
+        result['move_date'] = value(summary,'Moving Date:')
+        if len(set(summary.get('Moving Date:',[]))) > 1:
+            result['move_date']=''
+        elif result['move_date'] and result['move_date'] != styled_subject.group(1):
+            result['move_date']=''
+            reviews.append('Moving date conflicts between notification body and subject; staff review required')
+        elif not result['move_date']:
+            result['move_date']=styled_subject.group(1)
+            reviews.append('Moving date recovered from subject; confirm missing body date')
+        result['pickup'] = value(summary,'Pickup Address:')
+        result['dropoff'] = value(summary,'Destination Address:')
+        reviews.append('Styled notification language is not an explicit customer preference; confirm with staff')
+    elif en:
         section = text
         while section.startswith(subject):
             section = section[len(subject):]
@@ -79,7 +103,7 @@ def parse_notification(text, subject):
         result['photo_link'] = photo.group(1) or '' if photo else ''
     for target,label in mapping.items():
         result[target] = value(fields,label)
-    email_label,phone_label = ('Courriel','Téléphone') if fr else ('Email','Phone')
+    email_label,phone_label = ('Email:','Phone:') if styled else (('Courriel','Téléphone') if fr else ('Email','Phone'))
     emails = {x.lower() for x in re.findall(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z])', value(fields,email_label))}
     phones = {re.sub(r'\D','',x) for x in re.findall(r'(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)',value(fields,phone_label))}
     phones = {x[1:] if len(x)==11 and x.startswith('1') else x for x in phones}

@@ -1,0 +1,6 @@
+{
+  "id": "CURRENT-STYLED-SYNTHETIC-01",
+  "subject": "New Crown Movers Quote Request - TEST Current Layout - 2026-11-29",
+  "provenance": "Synthetic HTML, not recovered customer HTML. Contact heading/labels, repeated link text and visible anchor remnants follow the supplied screenshot. Move Summary fields below the screenshot crop are modelled with existing canonical labels; their actual production labels are NOT verified.",
+  "html": "<html><body><h1>New Crown Movers Quote Request</h1><p>WEBSITE LEAD - FREE MOVING QUOTE</p><h2>Client Contact Info</h2><p><strong>Name:</strong> TEST Current Layout</p><p><strong>Phone:</strong> 5145550140\"&gt; <a href=\"tel:5145550140\">5145550140</a></p><p><strong>Email:</strong> current-layout@example.invalid\"&gt; <a href=\"mailto:current-layout@example.invalid\">current-layout@example.invalid</a></p><h2>Move Summary</h2><p><strong>Moving Date:</strong> 2026-11-29</p><p><strong>Pickup Address:</strong> TEST pickup, Montreal</p><p><strong>Destination Address:</strong> TEST destination, Laval</p><p><strong>Additional Details:</strong> TEST ONLY. Two chairs and a table. Access and box count not supplied.</p></body></html>"
+}
