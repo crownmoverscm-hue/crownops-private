@@ -85,6 +85,8 @@ def preview(path,iid,user):
 
 
 def send(path,iid,data,user):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("send")
     if os.getenv('CROWNOPS_ALLOW_QBO_INVOICE_DELIVERY')!='1':raise HTTPException(503,'QuickBooks invoice email must pass the isolated walkthrough before activation.')
     quickbooks_gate()
     if data.get('confirm') is not True:raise HTTPException(422,'Confirm the reviewed invoice and billing recipient.')
