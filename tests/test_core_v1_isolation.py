@@ -154,7 +154,7 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
     def test_07_review_tasks_and_explicit_followup_are_audited(self):
         a,b,_,_=self.create_pair()
         follow = self.client.post(f"/api/core-v1/inquiries/{a['inquiry_id']}/tasks",
-                                 json={"title":"TEST explicit follow-up","due_date":"2026-11-02","owner":"sales"},
+                                 json={"title":"TEST explicit follow-up","due_date":"2026-11-02"},
                                  headers={"X-CSRF-Token":self.csrf})
         self.assertEqual(follow.status_code,200,follow.text)
         with connect(self.path) as db:
@@ -182,9 +182,17 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         r=crew.post("/api/core-v1/inquiries",json=payload("CORE-CREW-001","TEST Crew","crew@example.invalid","TEST","TEST"),
                     headers={"X-CSRF-Token":ccsrf})
         self.assertEqual(r.status_code,403)
-        r=self.client.patch("/api/core-v1/inquiries/unknown",json={"assigned_to":"manager"},
-                            headers={"X-CSRF-Token":self.csrf})
-        self.assertEqual(r.status_code,404)
+        inquiry,_,_,_=self.create_pair()
+        manager=TestClient(self.app,raise_server_exceptions=False)
+        self.addCleanup(manager.close)
+        mcsrf=self.login(manager,"manager@example.invalid")
+        manager_id=manager.get("/api/me").json()["user"]["id"]
+        denied=self.client.patch(f"/api/core-v1/inquiries/{inquiry['inquiry_id']}",
+            json={"assigned_to":manager_id},headers={"X-CSRF-Token":self.csrf})
+        self.assertEqual(denied.status_code,403,denied.text)
+        allowed=manager.patch(f"/api/core-v1/inquiries/{inquiry['inquiry_id']}",
+            json={"assigned_to":manager_id},headers={"X-CSRF-Token":mcsrf})
+        self.assertEqual(allowed.status_code,200,allowed.text)
 
     def test_10_duplicate_concurrent_retry_is_serialized(self):
         data=payload("CORE-CONCURRENT-001","TEST Concurrent Client","parallel@example.invalid","TEST parallel","TEST parallel original")
@@ -214,7 +222,6 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
 
     def test_12_fictional_readbacks_have_zero_business_and_provider_effects(self):
         self.create_pair()
-        a,_,_,_=self.create_pair() if False else (None,None,None,None)
         from app.core_v1 import TRANSPORT_EVIDENCE
         with connect(self.path) as db:
             expected={"clients":1,"services":2,"sources":2,"source_messages":2,"review_tasks":2,
