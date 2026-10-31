@@ -32,7 +32,7 @@ ALLOWED_ROUTE_KEYS = {
 }
 SAFE_TABLES = {
     "sessions", "client_accounts", "client_account_leads", "leads",
-    "manual_source_submissions", "messages", "tasks", "audit", "sqlite_sequence",
+    "manual_source_submissions", "core_v1_client_requests", "messages", "tasks", "audit", "sqlite_sequence",
 }
 _LOCKED_PATHS = set()
 
@@ -69,6 +69,40 @@ def authorize_write(action, table, allowed=SAFE_TABLES):
         return __import__("sqlite3").SQLITE_DENY
     return __import__("sqlite3").SQLITE_OK
 
+
+
+TRANSPORT_EVIDENCE = {"blocked_provider_calls": 0, "socket_attempts": 0, "subprocess_attempts": 0}
+_TRANSPORT_PATCHED = False
+
+
+def install_transport_guards():
+    """Final process boundary for accidental provider/network/subprocess work in Core v1."""
+    global _TRANSPORT_PATCHED
+    if not enabled() or _TRANSPORT_PATCHED:
+        return
+    import socket
+    import subprocess
+    import requests
+
+    original_request = requests.sessions.Session.request
+    def blocked_request(self, method, url, *args, **kwargs):
+        TRANSPORT_EVIDENCE["blocked_provider_calls"] += 1
+        raise RuntimeError("External provider operations are disabled in Core v1.")
+    requests.sessions.Session.request = blocked_request
+
+    def blocked_socket(*args, **kwargs):
+        TRANSPORT_EVIDENCE["socket_attempts"] += 1
+        raise OSError("Network sockets are disabled in Core v1.")
+    socket.socket.connect = blocked_socket
+    socket.socket.connect_ex = blocked_socket
+    socket.create_connection = blocked_socket
+
+    def blocked_process(*args, **kwargs):
+        TRANSPORT_EVIDENCE["subprocess_attempts"] += 1
+        raise RuntimeError("Subprocess execution is disabled in Core v1.")
+    subprocess.Popen = blocked_process
+    subprocess.run = blocked_process
+    _TRANSPORT_PATCHED = True
 
 def roles(user):
     if not user or user.get("role") not in OFFICE:
@@ -121,6 +155,9 @@ def ensure_schema(path):
           client_id TEXT NOT NULL REFERENCES client_accounts(id),
           lead_id TEXT NOT NULL UNIQUE REFERENCES leads(id), created_at TEXT NOT NULL,
           PRIMARY KEY(client_id,lead_id));
+        CREATE TABLE IF NOT EXISTS core_v1_client_requests(
+          request_key TEXT PRIMARY KEY, request_sha256 TEXT NOT NULL, client_id TEXT NOT NULL REFERENCES client_accounts(id),
+          created_by TEXT NOT NULL, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS manual_source_submissions(
           id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE, lead_id TEXT NOT NULL UNIQUE REFERENCES leads(id),
           source_kind TEXT NOT NULL, source_reference TEXT NOT NULL DEFAULT '',
