@@ -161,6 +161,8 @@ def same_company(path, row):
 
 
 def prepare(path, qid, basis, actor):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("prepare")
     enabled();quickbooks_gate()
     with transaction(path) as db:
         old=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,))
@@ -219,6 +221,8 @@ def preview(path, qid):
 
 
 def send(path,qid,data,actor):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("send")
     enabled();quickbooks_gate()
     if data.get('confirm') is not True: raise HTTPException(422,'Review the recipient, tax and full estimate, then confirm sending.')
     with closing(connect(path)) as db:
@@ -257,6 +261,8 @@ def send(path,qid,data,actor):
 
 
 def synchronize(path,qid,actor='quickbooks-sync'):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("synchronize")
     with closing(connect(path)) as db:row=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,))
     if not row or not row['external_id']:raise HTTPException(409,'No linked QuickBooks estimate is ready to check.')
     try:
@@ -317,6 +323,8 @@ def synchronize(path,qid,actor='quickbooks-sync'):
 
 
 def poll_estimates(path):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("poll estimates")
     if os.getenv('CROWNOPS_ALLOW_QBO_ESTIMATE_DELIVERY')!='1':return
     with closing(connect(path)) as db:
         candidates=rows(db,"SELECT quote_id FROM qbo_estimate_deliveries WHERE external_id IS NOT NULL AND state IN ('Sent','Sending','Unknown') ORDER BY COALESCE(checked_at,created_at) LIMIT 25")
