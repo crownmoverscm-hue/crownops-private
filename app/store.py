@@ -52,6 +52,26 @@ def connect(path):
     return db
 
 
+
+def initialize_core_v1(path):
+    """Initialize schemas only for disposable qualification; never migrate a business DB."""
+    if os.getenv('CROWNOPS_ENV') != 'test':
+        raise RuntimeError('Core v1 qualification profile is restricted to disposable test storage.')
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    db = connect(path)
+    try:
+        db.execute('PRAGMA journal_mode=WAL')
+        db.executescript(Path(__file__).with_name('schema.sql').read_text())
+        db.executescript(Path(__file__).with_name('platform_schema.sql').read_text())
+    finally:
+        db.close()
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def migrate_manager_role(db):
     """Widen the legacy users CHECK while retaining rows and referencing tables."""
     sql = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()[0]
