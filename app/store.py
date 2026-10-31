@@ -9,7 +9,7 @@ import uuid
 import re
 
 _CORE_V1_PATHS = set()
-_CORE_V1_TABLES = {'sessions','client_accounts','client_account_leads','leads','manual_source_submissions','core_v1_client_requests','messages','tasks','audit','sqlite_sequence'}
+_CORE_V1_TABLES = {'sessions','login_attempts','client_accounts','client_account_leads','leads','manual_source_submissions','core_v1_client_requests','messages','tasks','audit','sqlite_sequence'}
 
 
 def protect_core_v1_path(path):
