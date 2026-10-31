@@ -194,7 +194,9 @@ def _value_after(text, label):
         for next_line in lines[i+1:i+5]:
             value=next_line.strip()
             if not value:continue
-            if re.match(r'^[A-Za-z][A-Za-z /_-]{1,70}:',value) or value.startswith('END_CROWN_'):return ''
+            # Labels may contain accented French letters and apostrophes. A
+            # blank answer must not consume the following labelled field.
+            if re.match(r"^[^\W\d_][\w /’'-]{1,70}:",value) or value.startswith('END_CROWN_'):return ''
             return value
     return ''
 
