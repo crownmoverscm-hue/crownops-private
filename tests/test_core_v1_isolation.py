@@ -327,6 +327,8 @@ class CoreV1SecurityTests(CoreV1Fixture):
         from app.deposits import create_deposit_checkout, record_deposit_callback
         from app.worker import tick
         from app.automatic_intake import run_intake, prepare_draft
+        from app.client_communications import prepare_deposit_request
+        from app.sales_crm_v6 import prepare_booking_confirmation, confirm_job
         for call in (
             lambda:provider_token(self.path,"quickbooks"),
             lambda:invoke("TEST","English",{}),
@@ -335,6 +337,9 @@ class CoreV1SecurityTests(CoreV1Fixture):
             lambda:tick(self.path),
             lambda:run_intake(self.path,lambda *a:None),
             lambda:prepare_draft(None,{}, "TEST"),
+            lambda:prepare_deposit_request(None,"TEST","TEST"),
+            lambda:prepare_booking_confirmation(None,{}, {}, {}, "TEST"),
+            lambda:confirm_job(None,{}, {}, "TEST", "TEST"),
         ):
             with self.assertRaises(HTTPException) as caught: call()
             self.assertEqual(caught.exception.status_code,403)
