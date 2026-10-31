@@ -6,7 +6,7 @@ Generated from all 69 Python modules under app/ before application changes. The 
 
 Every baseline route other than the five limited health/auth/root routes is classified DENIED for Core v1. All existing effectful helper candidates are DENIED in this profile. Unlisted paths and methods also deny by default. The root path must render only the isolated Core v1 manual inquiry shell. This inventory is the source of the focused route denial manifest; the test must compare runtime registered routes with the inventory, not only sample endpoints.
 
-The files core-v1-route-inventory.csv and core-v1-helper-inventory.csv are generated from the exact baseline source. They identify source file, line, handler/helper, classification, and a focused test identifier. If implementation discovers an omitted handler, worker, callback or effectful helper, add it to the inventory and denial tests before qualification.
+The route CSV contains the 423 baseline declarations and the explicitly allowed Core v1 routes added by this branch; the helper CSV is the pre-change baseline helper index. They identify source file, line, handler/helper, classification, and a focused test identifier. If implementation discovers an omitted handler, worker, callback or effectful helper, add it to the inventory and denial tests before qualification.
 
 ## Limited baseline ALLOWED surface
 
@@ -18,7 +18,7 @@ The files core-v1-route-inventory.csv and core-v1-helper-inventory.csv are gener
 
 ## Baseline DENIED surface
 
-All other listed routes, including all business APIs, GET routes that contact providers or expose provider state, public intake, webhooks and callbacks, client portal/acceptance/payment paths, legacy recovery, quote/estimate creation or approval, booking/job mutations, deposit/payment/invoice operations, dispatch, employee/truck operations, notifications, AI, imports, and external integrations.
+All baseline business routes remain denied. Newly added Core v1 routes are explicitly allowed in the route CSV. Denied baseline routes include all business APIs, GET routes that contact providers or expose provider state, public intake, webhooks and callbacks, client portal/acceptance/payment paths, legacy recovery, quote/estimate creation or approval, booking/job mutations, deposit/payment/invoice operations, dispatch, employee/truck operations, notifications, AI, imports, and external integrations.
 
 ## Focused denial manifest
 
