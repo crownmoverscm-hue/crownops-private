@@ -104,6 +104,11 @@ def install_transport_guards():
     subprocess.run = blocked_process
     _TRANSPORT_PATCHED = True
 
+def deny_if_enabled(operation):
+    if enabled():
+        raise HTTPException(403, f"{operation} is disabled in the locked Core v1 profile.")
+
+
 def roles(user):
     if not user or user.get("role") not in OFFICE:
         raise HTTPException(403, "Your role does not allow Core v1 inquiry work.")
