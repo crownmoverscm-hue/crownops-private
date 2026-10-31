@@ -15,6 +15,8 @@ from .invoice_payments import checked_quickbooks_link
 
 
 def qbo_work(path,kind,obj,rev,actor,action):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("qbo work")
     """Reserve one write; failures of uncertain completion require human reconciliation."""
     key='qbo:'+kind+':'+obj+':'+str(rev)
     with transaction(path) as db:
