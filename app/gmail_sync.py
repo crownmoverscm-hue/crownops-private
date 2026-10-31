@@ -82,6 +82,8 @@ def gmail_read_failure(exc):
 
 
 def _api(token, path, params=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled(" api")
     last = None
     for attempt in range(3):
         try:
@@ -484,6 +486,8 @@ def _new_call_lead(db,parsed,payload,actor,event_key,new_lead,event_type):
 
 
 def promote_pending_call_events(db, actor, new_lead, limit=120):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("promote pending call events")
     """Promote already-detected Gmail missed calls/voicemails into local CRM leads/calls without mutating Gmail."""
     promoted=0
     pending=rows(db,"""SELECT * FROM integration_events
@@ -524,6 +528,8 @@ def promote_pending_call_events(db, actor, new_lead, limit=120):
 
 
 def sync_gmail_readonly(path, access_token, actor, new_lead, days=14, max_per_feed=30, fluid=False, feed_names=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("sync gmail readonly")
     days = max(1, min(int(days), 60))
     max_per_feed = max(1, min(int(max_per_feed), 50))
     summary = {'scanned': 0, 'new_events': 0, 'new_leads': 0, 'duplicates': 0, 'ignored': 0, 'needs_review':0, 'feeds': {}, 'errors': [], 'fluid': bool(fluid), 'promoted_existing_calls': 0}
@@ -692,6 +698,8 @@ def _review_details(db,event):
 
 
 def resolve_review_match(path,event_id,data,user,new_lead):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("resolve review match")
     """One audited staff decision resolves one source event; no Gmail mutations."""
     from fastapi import HTTPException
     from .platform_common import SALES,require_role,text
