@@ -1468,6 +1468,11 @@ def create_app(database_path=None):
         from .core_v1 import create_app_routes, install_transport_guards
         from .store import protect_core_v1_path
         create_app_routes(app,path,auth,ROOT)
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+        host=urlparse(public_url).hostname or 'localhost'
+        app.add_middleware(TrustedHostMiddleware,allowed_hosts=[host,'127.0.0.1','localhost','healthcheck.railway.app']+(['testserver','crownops.test'] if os.getenv('CROWNOPS_ENV','test')!='production' else []))
+        app.state.core_v1_profile=True
+        app.state.core_v1_workers_disabled=True
         protect_core_v1_path(path)
         install_transport_guards()
         return app
