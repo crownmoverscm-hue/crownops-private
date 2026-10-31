@@ -40,7 +40,7 @@ def repair_imported_forms(path,actor):
                 db.execute("UPDATE client_accounts SET client_name=? WHERE id IN (SELECT client_id FROM client_account_leads WHERE lead_id=?) AND client_name IN ('','Website inquiry')",(changes['client_name'],lead['id']))
             for field in ('email','phone'):
                 if changes.get(field):db.execute('UPDATE client_accounts SET '+field+"=? WHERE id IN (SELECT client_id FROM client_account_leads WHERE lead_id=?) AND "+field+"=''",(changes[field],lead['id']))
-            prepare_draft(db,one(db,'SELECT * FROM leads WHERE id=?',(lead['id'],)),actor)
+            prepare_draft(db,one(db,'SELECT * FROM leads WHERE id=?',(lead['id'],)),actor,blockers=parsed.get('parser_review') or ())
             audit(db,actor,'Original quote-form fields recovered','leads',lead['id'],{'fields':list(changes),'original_preserved':True})
             repaired+=1
     return repaired
@@ -51,12 +51,12 @@ def labour_suggestion(lead):
         engine.eval('var window={};'+Path(__file__).with_name('static').joinpath('local_estimator.js').read_text(),timeout_sec=1,max_memory=64*1024*1024)
         return engine.call('window.CrownLocalEstimator.suggest',lead,timeout_sec=1,max_memory=64*1024*1024)
 
-def prepare_draft(db,lead,actor):
+def prepare_draft(db,lead,actor,blockers=()):
     prior=one(db,'SELECT * FROM intake_drafts WHERE lead_id=?',(lead['id'],))
     if prior and prior['quote_id']:return prior
     existing=one(db,'SELECT id FROM quotes WHERE lead_id=? ORDER BY revision DESC LIMIT 1',(lead['id'],))
     if existing:return {'lead_id':lead['id'],'quote_id':existing['id'],'status':'Estimate already exists','missing':[]}
-    missing=[]
+    missing=list(blockers)
     for field,label in [('client_name','client name'),('email','email'),('phone','phone'),('move_date','service date'),('pickup','pickup address'),('dropoff','destination'),('home_size','move size'),('boxes','box count'),('pickup_access','pickup access'),('dropoff_access','destination access'),('pickup_walk','pickup walking distance'),('dropoff_walk','destination walking distance')]:
         value=str(lead.get(field) or '').strip()
         if not value or 'not sure' in value.lower() or 'unknown' in value.lower():missing.append(label)

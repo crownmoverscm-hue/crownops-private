@@ -203,6 +203,10 @@ def _value_after(text, label):
 
 def _quote_fields(body, subject):
     text = _clean_html(body).replace('\r', '')
+    from .legacy_notifications import parse_notification
+    legacy = parse_notification(text, subject)
+    if legacy is not None:
+        return legacy
     block = text
     m = re.search(r'CROWN_QUOTE_BUILDER_INPUT(.*?)END_CROWN_QUOTE_BUILDER_INPUT', text, re.S)
     if m:
@@ -396,7 +400,9 @@ def match_inquiry_project(db,parsed,kind='call'):
     candidates={r['id']:r for r in emails+phones};items=list(candidates.values());items.sort(key=lambda r:r['id'])
     email_ids={r['id'] for r in emails};phone_ids={r['id'] for r in phones}
     reason='';selected=None;requires_review=False
-    if not email and not phone:
+    if parsed.get('contact_conflict'):
+        reason='Conflicting contact values in the original notification require staff review.';requires_review=True
+    elif not email and not phone:
         reason='No usable client email or phone was provided. Check the original inquiry before creating a service.';requires_review=True
     elif email_ids and phone_ids and email_ids!=phone_ids:
         reason='Email and phone identify different client services. Compare the original inquiry and choose the correct service.';requires_review=True
@@ -405,14 +411,24 @@ def match_inquiry_project(db,parsed,kind='call'):
     elif len(items)>1:
         dated=[r for r in items if day and r['move_date']==day]
         if len(dated)==1:selected=dated[0]
+        elif (kind in ('form','quote') and day and not dated and email and phone
+              and all(r['email'].strip().lower()==email and _digits(r['phone'])==phone
+                      and r['move_date'] and r['stage'] not in ('Completed','Closed','Lost') for r in items)):
+            links=[one(db,'SELECT client_id FROM client_account_leads WHERE lead_id=?',(r['id'],)) for r in items]
+            account=one(db,'SELECT email,phone FROM client_accounts WHERE id=?',(links[0]['client_id'],)) if all(links) and len({x['client_id'] for x in links})==1 else None
+            if (account and account['email'].strip().lower()==email and _digits(account['phone'])==phone
+                and len(phone)==10 and len({r['move_date'] for r in items})==len(items)):
+                reason='Verified client requested a distinct service date. A new service inquiry will be created.'
+            else:
+                reason='Several services require verified client linkage before a new service can be created.';requires_review=True
         else:
             reason='Several services use this contact information. Choose the service or create a separate new inquiry.';requires_review=True
     elif items:
         candidate=items[0]
-        if kind in ('form','quote') and day and candidate['move_date'] and candidate['move_date']!=day:
-            reason='The requested date is different from the existing service. A new service inquiry will be created.'
-        elif candidate['stage'] in ('Completed','Closed','Lost'):
+        if candidate['stage'] in ('Completed','Closed','Lost'):
             reason='This contact matches a closed service. Confirm whether this is a new request or concerns the previous service.';requires_review=True
+        elif kind in ('form','quote') and day and candidate['move_date'] and candidate['move_date']!=day:
+            reason='The requested date is different from the existing service. A new service inquiry will be created.'
         else:selected=candidate
     if selected and selected['stage'] in ('Completed','Closed','Lost'):
         selected=None;requires_review=True;reason='The requested date matches a closed service. Confirm whether this is a new inquiry or a follow-up on that service.'
@@ -502,6 +518,8 @@ def _quote_inquiry(db,data,payload,actor,event_key,new_lead,matched=None):
         add_task(db,lead_id,'Review new quote form details for this service',selected.get('assigned_to') or '',key='quote-form:'+event_key)
     from .sales_crm_v6 import sync_unlinked_clients
     sync_unlinked_clients(db)
+    if data.get('parser_review'):
+        add_task(db,lead_id,'Review original notification details: '+'; '.join(data['parser_review']),selected.get('assigned_to') or '',key='gmail-fields:'+event_key)
     return lead_id,created
 
 

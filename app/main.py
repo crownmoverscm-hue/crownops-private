@@ -534,7 +534,7 @@ def create_app(database_path=None):
         audit(db,actor,'Lead created','leads',record['id'])
         if prepare_estimate and record['lead_type'] not in ('Missed Call','Voicemail','Email'):
             from .automatic_intake import prepare_draft
-            prepare_draft(db,one(db,'SELECT * FROM leads WHERE id=?',(record['id'],)),actor)
+            prepare_draft(db,one(db,'SELECT * FROM leads WHERE id=?',(record['id'],)),actor,blockers=data.get('parser_review') or ())
         from .sales_crm_v6 import sync_unlinked_clients
         sync_unlinked_clients(db)
         return record
