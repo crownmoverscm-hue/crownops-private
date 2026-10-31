@@ -156,11 +156,13 @@ def create_app(database_path=None):
     path=Path(database_path or os.environ.get('CROWNOPS_DB',str(ROOT/'instance'/'crownops.sqlite3')))
     from .core_v1 import enabled as core_v1_enabled
     core_v1_profile=core_v1_enabled()
-    if core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' and path.exists() and path.stat().st_size>0:
-        raise RuntimeError('Core v1 refuses to open a non-empty production database before separate production inventory and authorization.')
-    from .production import validate_runtime_storage
-    validate_runtime_storage(path)
-    initialize(path)
+    if core_v1_profile:
+        from .store import initialize_core_v1
+        initialize_core_v1(path)
+    else:
+        from .production import validate_runtime_storage
+        validate_runtime_storage(path)
+        initialize(path)
     import asyncio
     from contextlib import asynccontextmanager,suppress
     @asynccontextmanager
