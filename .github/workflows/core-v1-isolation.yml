@@ -1,0 +1,64 @@
+name: Core v1 manual inquiry qualification
+
+on:
+  push:
+    branches:
+      - fix/core-v1-manual-inquiry-isolation
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-v1-isolation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fictional-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout authorized branch
+        uses: actions/checkout@v4
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Record baseline and install pinned wheels from PyPI only
+        env:
+          PIP_NO_CACHE_DIR: "1"
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+        run: |
+          mkdir -p evidence/core-v1
+          python --version | tee evidence/core-v1/python-version.txt
+          actual="$(sha256sum requirements.txt | cut -d' ' -f1)"
+          echo "$actual  requirements.txt" | tee evidence/core-v1/requirements-sha256.txt
+          test "$actual" = "0463b4356f287e502e221844bb219d33b53a48d34113305302064e0aa2261c1e"
+          python -m pip install --only-binary=:all: --index-url https://pypi.org/simple --report evidence/core-v1/dependency-install.json -r requirements.txt
+          python -m pip freeze --all | tee evidence/core-v1/pip-freeze.txt
+      - name: Compile only changed Core v1 Python files
+        run: |
+          python -m py_compile app/main.py app/store.py app/core_v1.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py tests/test_core_v1_isolation.py
+      - name: Run fictional-only Core v1 qualification
+        env:
+          CROWNOPS_PROFILE: core-v1
+          CROWNOPS_ENV: test
+          CROWNOPS_ALLOW_EXTERNAL: "0"
+          CROWNOPS_RUN_WORKER: "1"
+        run: |
+          set -o pipefail
+          python tests/test_core_v1_isolation.py -v 2>&1 | tee evidence/core-v1/test-output.txt
+      - name: Record source checksums and prepare portable review bundle
+        if: always()
+        run: |
+          sha256sum app/core_v1.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv > evidence/core-v1/source-sha256.txt
+          tar -czf evidence/core-v1/core-v1-source-and-evidence.tar.gz app/core_v1.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv evidence/core-v1
+      - name: Upload portable Muse review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-v1-muse-review-${{ github.sha }}
+          path: evidence/core-v1/
+          if-no-files-found: warn
+          retention-days: 7
