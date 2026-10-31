@@ -1,0 +1,20 @@
+{
+  "current_public_renderer": "WordPress / WS Form",
+  "evidence": "Owner relayed Muse read-only public inspection, 2026-10-31; not independently re-inspected by DEV",
+  "current_departure_and_destination_sections": true,
+  "current_both_postal_fields": true,
+  "current_form_id": null,
+  "departure_address_field_id": null,
+  "departure_postal_field_id": null,
+  "destination_address_field_id": null,
+  "destination_postal_field_id": null,
+  "notification_action_id": null,
+  "notification_placeholders": null,
+  "recipient_routing": null,
+  "installed_plugin_version": null,
+  "configuration_modified_at": null,
+  "historical_2026_10_24_mapping": "UNKNOWN",
+  "source_export_received": false,
+  "administrator_request_sent": false,
+  "existing_customer_records_accessed": false
+}

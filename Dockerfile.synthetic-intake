@@ -1,0 +1,22 @@
+# Design/build recipe only: no image was built during local qualification.
+# BASE_IMAGE must be an owner-reviewed python:3.13-slim@sha256:<digest>.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    CROWNOPS_ENV=test CROWNOPS_ALLOW_EXTERNAL=0 CROWNOPS_RUN_WORKER=0 QBO_ENV=sandbox
+WORKDIR /opt/crownops
+# Wheel acquisition is separate from the running endpoint. This offline build
+# requires an independently approved wheelhouse and pinned base already present.
+COPY requirements.txt /tmp/requirements.txt
+COPY wheelhouse /tmp/wheelhouse
+RUN pip install --no-index --find-links=/tmp/wheelhouse -r /tmp/requirements.txt \
+    && rm -rf /tmp/wheelhouse /tmp/requirements.txt \
+    && useradd --uid 10001 --create-home crown
+COPY app ./app
+COPY config ./config
+COPY requirements.txt ./requirements.txt
+COPY synthetic_intake ./synthetic_intake
+RUN python -c "from pathlib import Path; import shutil; [shutil.rmtree(p) for p in Path('/opt/crownops').rglob('__pycache__')]"
+USER 10001:10001
+# No public ports, healthchecks, background workers or default serving command.
+ENTRYPOINT ["python", "-m", "synthetic_intake"]
