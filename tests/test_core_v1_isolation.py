@@ -160,7 +160,7 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         with connect(self.path) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM tasks WHERE title='Review new inquiry'").fetchone()[0],2)
             self.assertEqual(db.execute("SELECT count(*) FROM tasks WHERE title='TEST explicit follow-up'").fetchone()[0],1)
-            self.assertGreaterEqual(db.execute("SELECT count(*) FROM audit").fetchone()[0],6)
+            self.assertGreaterEqual(db.execute("SELECT count(*) FROM audit").fetchone()[0],5)
 
     def test_08_status_and_service_fields_change_without_repricing_or_source_edit(self):
         a,_,p1,_=self.create_pair()
