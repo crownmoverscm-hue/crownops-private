@@ -48,7 +48,7 @@ jobs:
           CROWNOPS_RUN_WORKER: "1"
         run: |
           set -o pipefail
-          python tests/test_core_v1_isolation.py -v 2>&1 | tee evidence/core-v1/test-output.txt
+          PYTHONPATH=. python tests/test_core_v1_isolation.py -v 2>&1 | tee evidence/core-v1/test-output.txt
       - name: Record source checksums and prepare portable review bundle
         if: always()
         run: |
