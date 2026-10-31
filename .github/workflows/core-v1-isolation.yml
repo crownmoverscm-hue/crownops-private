@@ -39,7 +39,7 @@ jobs:
           python -m pip freeze --all | tee evidence/core-v1/pip-freeze.txt
       - name: Compile only changed Core v1 Python files
         run: |
-          python -m py_compile app/main.py app/store.py app/core_v1.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py tests/test_core_v1_isolation.py
+          python -m py_compile app/main.py app/store.py app/core_v1.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/invoice_quickbooks_delivery.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py tests/test_core_v1_isolation.py
       - name: Run fictional-only Core v1 qualification
         env:
           CROWNOPS_PROFILE: core-v1
@@ -52,8 +52,9 @@ jobs:
       - name: Record source checksums and prepare portable review bundle
         if: always()
         run: |
-          sha256sum app/core_v1.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv > evidence/core-v1/source-sha256.txt
-          tar -czf evidence/core-v1/core-v1-source-and-evidence.tar.gz app/core_v1.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv evidence/core-v1
+          sha256sum app/core_v1.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/invoice_quickbooks_delivery.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv > evidence/core-v1/source-sha256.txt
+          tar -czf /tmp/core-v1-source-and-evidence.tar.gz app/core_v1.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/invoice_quickbooks_delivery.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv evidence/core-v1
+          cp /tmp/core-v1-source-and-evidence.tar.gz evidence/core-v1/core-v1-source-and-evidence.tar.gz
       - name: Upload portable Muse review evidence
         if: always()
         uses: actions/upload-artifact@v4
