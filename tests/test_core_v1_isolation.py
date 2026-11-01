@@ -461,6 +461,38 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
             self.assertEqual(winner,{t:[dict(x) for x in db.execute('SELECT * FROM '+t)] for t in winner})
         print('CORE_V1_CORRECTED_CREATE invalid=422 invalid_no_change=true corrected=200 duplicate_retry=200 all_rows_unchanged=true')
 
+    def test_24_existing_mfa_verification_counter_only_is_permitted(self):
+        import sqlite3, base64, time
+        from cryptography.fernet import Fernet
+        from app.platform_common import encrypt
+        from app.security import totp
+        key=Fernet.generate_key().decode()
+        secret=base64.b32encode(os.urandom(20)).decode()
+        with patch.dict(os.environ,{'CROWNOPS_SECRET_KEY':key}):
+            with connect(self.path) as db:
+                user=db.execute("SELECT id FROM users WHERE email='manager@example.invalid'").fetchone()[0]
+            ciphertext=encrypt({'secret':secret})
+            # Seed an already-enabled fictional factor in disposable storage only, before the behavior under test.
+            with sqlite3.connect(str(self.path)) as seed:
+                seed.execute('INSERT INTO auth_factors(user_id,secret_ciphertext,enabled,last_step,created_at) VALUES(?,?,1,-1,?)',(user,ciphertext,'TEST'))
+            client=TestClient(self.app,raise_server_exceptions=False);self.addCleanup(client.close)
+            data={'email':'manager@example.invalid','password':PASSWORD}
+            self.assertEqual(client.post('/api/login',json=data).status_code,401)
+            self.assertEqual(client.post('/api/login',json={**data,'mfa_code':'invalid'}).status_code,401)
+            step=int(time.time()//30)
+            with patch('app.security.time.time',return_value=step*30):
+                valid=client.post('/api/login',json={**data,'mfa_code':totp(secret,step)})
+                self.assertEqual(valid.status_code,200,valid.text)
+                replay=client.post('/api/login',json={**data,'mfa_code':totp(secret,step)})
+                self.assertEqual(replay.status_code,401,replay.text)
+            with connect(self.path) as db:
+                factor=dict(db.execute('SELECT * FROM auth_factors WHERE user_id=?',(user,)).fetchone())
+                self.assertEqual(factor['last_step'],step);self.assertEqual(factor['secret_ciphertext'],ciphertext);self.assertEqual(factor['enabled'],1)
+                for sql in ("UPDATE auth_factors SET enabled=0", "UPDATE auth_factors SET secret_ciphertext='TEST'", 'DELETE FROM auth_factors'):
+                    with self.assertRaises(sqlite3.DatabaseError):db.execute(sql)
+                self.assertEqual(dict(db.execute('SELECT * FROM auth_factors WHERE user_id=?',(user,)).fetchone()),factor)
+        print('CORE_V1_MFA missing_invalid=401 valid=200 replay=401 counter_only_update=true factor_changes=denied')
+
 
 class CoreV1SecurityTests(CoreV1Fixture):
     def test_44_security_cases_and_every_baseline_route_are_denied(self):
