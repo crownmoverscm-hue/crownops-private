@@ -166,7 +166,7 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         a,_,p1,_=self.create_pair()
         oldhash=hashlib.sha256(p1["source"]["body"].encode()).hexdigest()
         r=self.client.patch(f"/api/core-v1/inquiries/{a['inquiry_id']}",
-            json={"stage":"In Progress","pickup":"TEST updated pickup","move_date":"2027-07-01"},
+            json={"expected_version":1,"stage":"In Progress","pickup":"TEST updated pickup","move_date":"2027-07-01"},
             headers={"X-CSRF-Token":self.csrf})
         self.assertEqual(r.status_code,200,r.text)
         d=self.client.get(f"/api/core-v1/inquiries/{a['inquiry_id']}").json()
@@ -188,10 +188,10 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         mcsrf=self.login(manager,"manager@example.invalid")
         manager_id=manager.get("/api/me").json()["user"]["id"]
         denied=self.client.patch(f"/api/core-v1/inquiries/{inquiry['inquiry_id']}",
-            json={"assigned_to":manager_id},headers={"X-CSRF-Token":self.csrf})
+            json={"expected_version":1,"assigned_to":manager_id},headers={"X-CSRF-Token":self.csrf})
         self.assertEqual(denied.status_code,403,denied.text)
         allowed=manager.patch(f"/api/core-v1/inquiries/{inquiry['inquiry_id']}",
-            json={"assigned_to":manager_id},headers={"X-CSRF-Token":mcsrf})
+            json={"expected_version":1,"assigned_to":manager_id},headers={"X-CSRF-Token":mcsrf})
         self.assertEqual(allowed.status_code,200,allowed.text)
 
     def test_10_duplicate_concurrent_retry_is_serialized(self):
@@ -243,6 +243,85 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         self.assertEqual(TRANSPORT_EVIDENCE,{"blocked_provider_calls":0,"socket_attempts":0,"subprocess_attempts":0})
         print("CORE_V1_READBACK "+json.dumps(actual,sort_keys=True))
         print("CORE_V1_TRANSPORT "+json.dumps(TRANSPORT_EVIDENCE,sort_keys=True))
+
+    def test_13_stale_update_is_rejected_without_record_or_audit_mutation(self):
+        a, _, _, _ = self.create_pair()
+        url = f"/api/core-v1/inquiries/{a['inquiry_id']}"
+        initial = self.client.get(url).json()
+        version = initial["version"]
+        for value in (None, True, "1", 0, -1):
+            data = {"pickup": "TEST invalid version"}
+            if value is not None:
+                data["expected_version"] = value
+            result = self.client.patch(url, json=data, headers={"X-CSRF-Token": self.csrf})
+            self.assertEqual(result.status_code, 422, result.text)
+        manager = TestClient(self.app, raise_server_exceptions=False)
+        self.addCleanup(manager.close)
+        token = self.login(manager, "manager@example.invalid")
+        winner = manager.patch(url, json={"expected_version": version, "pickup": "TEST manager winner"},
+                               headers={"X-CSRF-Token": token})
+        self.assertEqual(winner.status_code, 200, winner.text)
+        before = self.client.get(url).json()
+        with connect(self.path) as db:
+            audits = db.execute("SELECT count(*) FROM audit").fetchone()[0]
+        stale = self.client.patch(url, json={"expected_version": version, "pickup": "TEST stale overwrite"},
+                                 headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(stale.status_code, 409, stale.text)
+        self.assertEqual(stale.json()["detail"]["current_version"], version + 1)
+        after = self.client.get(url).json()
+        self.assertEqual(after, before)
+        with connect(self.path) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM audit").fetchone()[0], audits)
+        retry = self.client.patch(url, json={"expected_version": version + 1, "pickup": "TEST refreshed retry"},
+                                 headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(retry.status_code, 200, retry.text)
+        self.assertEqual(self.client.get(url).json()["version"], version + 2)
+        print("CORE_V1_STALE_UPDATE missing_invalid=422 winner=200 stale=409 stale_record_unchanged=true stale_audit_unchanged=true refreshed_retry=200")
+
+    def test_14_concurrent_updates_allow_only_one_version_winner(self):
+        a, _, _, _ = self.create_pair()
+        url = f"/api/core-v1/inquiries/{a['inquiry_id']}"
+        version = self.client.get(url).json()["version"]
+        from threading import Barrier
+        barrier = Barrier(2)
+        def save(index):
+            client = TestClient(self.app, raise_server_exceptions=False)
+            try:
+                client.cookies.set("crownops_session", self.client.cookies.get("crownops_session"))
+                barrier.wait(timeout=10)
+                return client.patch(url, json={"expected_version": version, "pickup": f"TEST parallel {index}"},
+                                    headers={"X-CSRF-Token": self.csrf}).status_code
+            finally:
+                client.close()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(save, range(2)))
+        self.assertEqual(sorted(results), [200, 409])
+        self.assertEqual(self.client.get(url).json()["version"], version + 1)
+        print("CORE_V1_CONCURRENT_UPDATE requests=2 statuses=200,409 version_increments=1")
+
+    def test_15_audit_update_delete_denied_and_original_row_preserved(self):
+        self.create_pair()
+        import sqlite3
+        from app.core_v1 import authorize_write
+        from app.store import _core_v1_authorizer, transaction, audit
+        for authorizer in (authorize_write, _core_v1_authorizer):
+            for operation in (sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE):
+                self.assertEqual(authorizer(operation, "audit", None, None, None) if authorizer is _core_v1_authorizer
+                                 else authorizer(operation, "audit"), sqlite3.SQLITE_DENY)
+        with connect(self.path) as db:
+            before = [dict(row) for row in db.execute("SELECT * FROM audit ORDER BY id").fetchall()]
+            self.assertTrue(before)
+            for sql in ("UPDATE audit SET action='TEST tamper'", "DELETE FROM audit"):
+                with self.assertRaises(sqlite3.DatabaseError):
+                    db.execute(sql)
+            self.assertEqual([dict(row) for row in db.execute("SELECT * FROM audit ORDER BY id").fetchall()], before)
+        with transaction(self.path) as db:
+            audit(db, "TEST-ACTOR", "TEST append proof", "leads", "TEST-ID", {})
+        with connect(self.path) as db:
+            after = [dict(row) for row in db.execute("SELECT * FROM audit ORDER BY id").fetchall()]
+        self.assertEqual(after[:-1], before)
+        self.assertEqual(len(after), len(before) + 1)
+        print("CORE_V1_AUDIT update=denied delete=denied rows_preserved=true insert=allowed")
 
 
 class CoreV1SecurityTests(CoreV1Fixture):
