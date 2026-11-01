@@ -345,7 +345,8 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
             self.assertEqual(retry.status_code,200,retry.text)
         print('CORE_V1_MUTABLE_SAVE clients=version_checked tasks=version_checked stale_no_change=true refreshed_retry=success')
 
-    def test_17_audit_triggers_and_replace_preserve_history(self):
+    def test_17_application_authorizer_denies_replace(self):
+        """Proves the protected application connection, not raw-file REPLACE prevention."""
         self.create_pair()
         import sqlite3
         with connect(self.path) as db:
@@ -356,7 +357,7 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
             with self.assertRaises(sqlite3.DatabaseError):
                 db.execute('INSERT OR REPLACE INTO audit(id,actor,action,object_type,object_id,details_json,created_at) SELECT id,actor,action,object_type,object_id,details_json,created_at FROM audit LIMIT 1')
             self.assertEqual(before,[dict(x) for x in db.execute('SELECT * FROM audit ORDER BY id')])
-        print('CORE_V1_AUDIT_DEFENSE triggers=present replace=denied rows_unchanged=true')
+        print('CORE_V1_AUDIT_DEFENSE application_authorizer=denied_replace rows_unchanged=true raw_file_protection=not_claimed')
 
     def test_18_original_submission_whitespace_and_unicode_are_preserved(self):
         original='  TEST original / é\r\n  second line\n\n'
@@ -492,6 +493,52 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
                     with self.assertRaises(sqlite3.DatabaseError):db.execute(sql)
                 self.assertEqual(dict(db.execute('SELECT * FROM auth_factors WHERE user_id=?',(user,)).fetchone()),factor)
         print('CORE_V1_MFA missing_invalid=401 valid=200 replay=401 counter_only_update=true factor_changes=denied')
+    def test_25_note_task_request_keys_prevent_sequential_and_parallel_duplicates(self):
+        a,_,_,_=self.create_pair()
+        for kind,payload_data in (('notes',{'body':'TEST identical note'}),('tasks',{'title':'TEST identical followup'})):
+            url='/api/core-v1/inquiries/'+a['inquiry_id']+'/'+kind
+            data={**payload_data,'request_key':'CORE-ACTION-'+kind}
+            barrier=__import__('threading').Barrier(4)
+            def send(_):
+                c=TestClient(self.app,raise_server_exceptions=False)
+                try:
+                    c.cookies.set('crownops_session',self.client.cookies.get('crownops_session'))
+                    barrier.wait(timeout=10)
+                    r=c.post(url,json=data,headers={'X-CSRF-Token':self.csrf})
+                    return r.status_code,r.json()
+                finally:c.close()
+            with ThreadPoolExecutor(max_workers=4) as pool: replies=list(pool.map(send,range(4)))
+            self.assertEqual([r[0] for r in replies],[200]*4)
+            self.assertEqual(len({r[1]['id'] for r in replies}),1)
+            with connect(self.path) as db:
+                before={t:[dict(r) for r in db.execute('SELECT * FROM '+t)] for t in ('messages','tasks','audit','manual_action_requests')}
+            retry=self.client.post(url,json=data,headers={'X-CSRF-Token':self.csrf})
+            self.assertEqual(retry.status_code,200);self.assertTrue(retry.json()['duplicate'])
+            changed={**data,('body' if kind=='notes' else 'title'):'TEST changed content'}
+            conflict=self.client.post(url,json=changed,headers={'X-CSRF-Token':self.csrf})
+            self.assertEqual(conflict.status_code,409)
+            with connect(self.path) as db:
+                self.assertEqual(before,{t:[dict(r) for r in db.execute('SELECT * FROM '+t)] for t in before})
+        print('CORE_V1_ACTION_RETRY notes_tasks_parallel=4_each unique_result=1_each sequential=duplicate changed_key=409 rows_audit_unchanged=true')
+
+    def test_26_raw_sqlite_replace_is_outside_application_authorizer(self):
+        import sqlite3
+        raw_path=Path(self.temp.name)/'raw-boundary-example.sqlite3'
+        with sqlite3.connect(str(raw_path)) as raw:
+            raw.executescript("CREATE TABLE audit(id INTEGER PRIMARY KEY,action TEXT); CREATE TRIGGER no_audit_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'no delete'); END; INSERT INTO audit VALUES(1,'TEST original');")
+            raw.execute('PRAGMA recursive_triggers=OFF')
+            raw.execute("INSERT OR REPLACE INTO audit VALUES(1,'TEST raw replacement')")
+            self.assertEqual(raw.execute('SELECT action FROM audit WHERE id=1').fetchone()[0],'TEST raw replacement')
+        print('CORE_V1_RAW_FILE_BOUNDARY authorizer_absent recursive_triggers=off raw_replace=possible access_controls_required=true')
+
+    def test_27_backup_helper_connections_are_denied_before_opening_files(self):
+        from app.backups import make_backup,restore_archive,verify_backup
+        with patch('app.backups.connect') as app_connect, patch('app.backups.sqlite3.connect') as raw_connect:
+            for call in (lambda:make_backup('TEST-never-open','TEST-never-create','TEST-no-uploads'),lambda:restore_archive('TEST-no-archive','TEST-no-target'),lambda:verify_backup('TEST-no-archive')):
+                with self.assertRaises(HTTPException) as error:call()
+                self.assertEqual(error.exception.status_code,403)
+            app_connect.assert_not_called();raw_connect.assert_not_called()
+        print('CORE_V1_CONNECTION_REVIEW runtime=store_connect backups_restore=denied_before_constructor')
 
 
 class CoreV1SecurityTests(CoreV1Fixture):
