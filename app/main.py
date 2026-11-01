@@ -152,13 +152,19 @@ def quote_document(q, lead):
     return subject,body
 
 
-def create_app(database_path=None):
+def create_app(database_path=None, *, core_pilot=False):
     path=Path(database_path or os.environ.get('CROWNOPS_DB',str(ROOT/'instance'/'crownops.sqlite3')))
+    if core_pilot:
+        from .core_pilot import validate_pilot_config
+        path=validate_pilot_config(path)
     from .core_v1 import enabled as core_v1_enabled
     core_v1_profile=core_v1_enabled()
+    if core_pilot and not core_v1_profile:
+        raise RuntimeError('Core pilot startup refused: locked profile is required.')
     if core_v1_profile:
-        from .store import initialize_core_v1
-        initialize_core_v1(path)
+        if not core_pilot:
+            from .store import initialize_core_v1
+            initialize_core_v1(path)
     else:
         from .production import validate_runtime_storage
         validate_runtime_storage(path)
@@ -1469,7 +1475,7 @@ def create_app(database_path=None):
     if core_v1_profile:
         from .core_v1 import create_app_routes, install_transport_guards
         from .store import protect_core_v1_path
-        create_app_routes(app,path,auth,ROOT)
+        create_app_routes(app,path,auth,ROOT,initialize_schema=not core_pilot)
         from starlette.middleware.trustedhost import TrustedHostMiddleware
         host=urlparse(public_url).hostname or 'localhost'
         app.add_middleware(TrustedHostMiddleware,allowed_hosts=[host,'127.0.0.1','localhost','healthcheck.railway.app']+(['testserver','crownops.test'] if os.getenv('CROWNOPS_ENV','test')!='production' else []))
