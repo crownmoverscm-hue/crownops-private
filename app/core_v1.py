@@ -32,7 +32,7 @@ ALLOWED_ROUTE_KEYS = {
 }
 SAFE_TABLES = {
     "sessions", "client_accounts", "client_account_leads", "leads",
-    "manual_source_submissions", "core_v1_client_requests", "messages", "tasks", "audit", "sqlite_sequence",
+    "manual_source_submissions", "core_v1_client_requests", "manual_action_requests", "messages", "tasks", "audit", "sqlite_sequence",
 }
 _LOCKED_PATHS = set()
 
@@ -59,7 +59,7 @@ def authorize_write(action, table, allowed=SAFE_TABLES, column=None):
             return __import__("sqlite3").SQLITE_OK if action == __import__("sqlite3").SQLITE_UPDATE and column == "last_step" else __import__("sqlite3").SQLITE_DENY
         if name not in allowed:
             return __import__("sqlite3").SQLITE_DENY
-        if name in {"manual_source_submissions", "audit"} and action != __import__("sqlite3").SQLITE_INSERT:
+        if name in {"manual_source_submissions", "manual_action_requests", "audit"} and action != __import__("sqlite3").SQLITE_INSERT:
             return __import__("sqlite3").SQLITE_DENY
     if action in (getattr(__import__("sqlite3"), "SQLITE_ATTACH"),
                   getattr(__import__("sqlite3"), "SQLITE_DETACH"),
@@ -183,6 +183,10 @@ def ensure_schema(path):
         CREATE TABLE IF NOT EXISTS core_v1_client_requests(
           request_key TEXT PRIMARY KEY, request_sha256 TEXT NOT NULL, client_id TEXT NOT NULL REFERENCES client_accounts(id),
           created_by TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS manual_action_requests(
+          kind TEXT NOT NULL, actor TEXT NOT NULL, request_key TEXT NOT NULL,
+          request_sha256 TEXT NOT NULL, result_id TEXT NOT NULL, created_at TEXT NOT NULL,
+          PRIMARY KEY(kind,actor,request_key));
         CREATE TABLE IF NOT EXISTS manual_source_submissions(
           id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE, lead_id TEXT NOT NULL UNIQUE REFERENCES leads(id),
           source_kind TEXT NOT NULL, source_reference TEXT NOT NULL DEFAULT '',
@@ -202,6 +206,22 @@ def ensure_schema(path):
         for table in ("client_accounts", "tasks"):
             if "version" not in {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}:
                 db.execute("ALTER TABLE " + table + " ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+
+
+def action_retry(db, data, kind, iid, payload, actor):
+    key = text(data.get("request_key", ""), "Request key", 100)
+    digest = hashlib.sha256(dumps({"inquiry":iid,"payload":payload}).encode()).hexdigest()
+    if not key:
+        return key, digest, None
+    prior = one(db,"SELECT request_sha256,result_id FROM manual_action_requests WHERE kind=? AND actor=? AND request_key=?",(kind,actor,key))
+    if prior and prior["request_sha256"] != digest:
+        raise HTTPException(409,"Request key was already used for different content.")
+    return key, digest, prior["result_id"] if prior else None
+
+
+def record_action(db, key, digest, kind, actor, result_id):
+    if key:
+        insert(db,"manual_action_requests",dict(kind=kind,actor=actor,request_key=key,request_sha256=digest,result_id=result_id,created_at=now()))
 
 
 def create_app_routes(app, path, auth, root):
@@ -449,9 +469,12 @@ def create_app_routes(app, path, auth, root):
         with transaction(path) as db:
             l=one(db,"SELECT * FROM leads WHERE id=? AND id IN (SELECT lead_id FROM manual_source_submissions)",(iid,))
             if not l: raise HTTPException(404,"Inquiry not found.")
+            key,digest,existing=action_retry(db,data,"note",iid,{"body":body},u["id"])
+            if existing: return {"id":existing,"kind":"Note","duplicate":True}
             mid=uid("MSG")
             insert(db,"messages",dict(id=mid,lead_id=iid,kind="Note",subject="",body=body,language=l["language"],author=u["id"],created_at=now()))
             audit(db,u["id"],"Internal note added","messages",mid,{"lead_id":iid})
+            record_action(db,key,digest,"note",u["id"],mid)
         return {"id":mid,"kind":"Note"}
 
     @app.get("/api/core-v1/inquiries/{iid}/tasks")
@@ -477,9 +500,12 @@ def create_app_routes(app, path, auth, root):
                 raise HTTPException(403,"Sales may assign follow-up only to themselves.")
             if owner and u["role"] in {"owner","manager"} and not one(db,"SELECT id FROM users WHERE id=? AND active=1 AND role IN ('owner','manager','sales')",(owner,)):
                 raise HTTPException(422,"Choose active staff for this follow-up.")
+            key,digest,existing=action_retry(db,data,"task",iid,{"title":title,"due_date":due,"owner":owner},u["id"])
+            if existing: return {"id":existing,"duplicate":True}
             tid=uid("TASK")
             insert(db,"tasks",dict(id=tid,lead_id=iid,title=title,due_date=due,owner=owner,created_at=now()))
             audit(db,u["id"],"Follow-up task added","tasks",tid,{"lead_id":iid})
+            record_action(db,key,digest,"task",u["id"],tid)
         return {"id":tid}
 
     @app.patch("/api/core-v1/tasks/{tid}")
