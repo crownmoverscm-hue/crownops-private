@@ -16,7 +16,7 @@ const base='http://127.0.0.1:8097';
    await page.locator('#login-form [name=password]').fill('TEST-only-safe-password-138!');
    await page.locator('#login-form button').click();await page.locator('#workspace').waitFor({state:'visible'});
    const key=locale+'-'+viewport.width;
-   const fill=async(subject)=>{for(const [name,value]of Object.entries({client_name:'TEST Browser '+key,email:'browser-'+key+'@example.invalid',phone:'5145550119',subject,body:'  TEST original / é\n\n',pickup:'TEST A',dropoff:'TEST B'}))await page.locator('#inquiry-form [name='+name+']').fill(value);};
+   const fill=async(subject)=>{for(const [name,value]of Object.entries({client_name:'TEST Browser '+key,email:'browser-'+key+'@example.invalid',phone:'514555'+String(100+cases).padStart(4,'0'),subject,body:'  TEST original / é\n\n',pickup:'TEST A',dropoff:'TEST B'}))await page.locator('#inquiry-form [name='+name+']').fill(value);};
    await fill('TEST first');await page.locator('#inquiry-form button').click();await page.locator('#inquiry-edit').waitFor();
    const original=await page.locator('#detail details pre').textContent();assert(original.includes('  TEST original / é\n\n'));
    await page.locator('#detail details summary').click();assert(await page.locator('#detail details pre').isVisible());
