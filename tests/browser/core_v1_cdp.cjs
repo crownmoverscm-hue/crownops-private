@@ -9,7 +9,7 @@ class CDP{
  cmd(method,params={},sessionId){return new Promise((resolve,reject)=>{const id=++this.id;this.pending.set(id,{resolve,reject});this.ws.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));setTimeout(()=>{if(this.pending.delete(id))reject(Error('CDP timeout '+method));},15000).unref();});}
  on(method,fn){this.events.set(method,[...(this.events.get(method)||[]),fn]);}
  async eval(sid,expression){const r=await this.cmd('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true},sid);if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;}
- async wait(sid,expression){for(let i=0;i<100;i++){if(await this.eval(sid,expression))return;await delay(100);}throw Error('UI wait timed out: '+expression);}
+ async wait(sid,expression){let lastError='';for(let i=0;i<100;i++){try{if(await this.eval(sid,expression))return;}catch(e){lastError=String(e);}await delay(100);}throw Error('UI wait timed out: '+expression+(lastError?' last navigation state: '+lastError:''));}
 }
 (async()=>{
  let fixture,chrome,cdp,profile,lastSession=null;const results=[];let external=0;const interceptionErrors=[];
@@ -30,7 +30,7 @@ class CDP{
   for(const [index,config]of [{locale:'en-CA',width:1280,height:900},{locale:'fr-CA',width:1280,height:900},{locale:'en-CA',width:390,height:844},{locale:'fr-CA',width:390,height:844}].entries()){
    const {browserContextId}=await cdp.cmd('Target.createBrowserContext');const {targetId}=await cdp.cmd('Target.createTarget',{url:'about:blank',browserContextId});const {sessionId:sid}=await cdp.cmd('Target.attachToTarget',{targetId,flatten:true});
    lastSession=sid;await cdp.cmd('Page.enable',{},sid);await cdp.cmd('Runtime.enable',{},sid);await cdp.cmd('Emulation.setDeviceMetricsOverride',{width:config.width,height:config.height,deviceScaleFactor:1,mobile:config.width<500},sid);await cdp.cmd('Emulation.setLocaleOverride',{locale:config.locale},sid);await cdp.cmd('Fetch.enable',{patterns:[{urlPattern:'*'}]},sid);
-   await cdp.cmd('Page.navigate',{url:base},sid);await cdp.wait(sid,'document.documentElement.dataset.coreReady==="1" && !!document.querySelector("#login-form")');
+   await cdp.cmd('Page.navigate',{url:base},sid);await cdp.wait(sid,'document.documentElement?.dataset.coreReady==="1" && !!document.querySelector("#login-form")');
    await fill(sid,'#login-form',{email:'sales@example.invalid',password:'TEST-only-safe-password-138!'});await click(sid,'#login-form button');await cdp.wait(sid,'!document.querySelector("#workspace").classList.contains("hidden")');
    const name='TEST Browser '+index;const original='  TEST original / é\n\n';
    const inquiry={client_name:name,email:'browser-'+index+'@example.invalid',phone:'514555'+String(100+index).padStart(4,'0'),subject:'TEST first',body:original,pickup:'TEST A',dropoff:'TEST B'};
@@ -54,7 +54,7 @@ class CDP{
   }
   // Permission error through the real shell, and a role-permitted ownership transfer through the UI.
   for(const role of ['manager','crew']){
-   const {browserContextId}=await cdp.cmd('Target.createBrowserContext');const {targetId}=await cdp.cmd('Target.createTarget',{url:'about:blank',browserContextId});const {sessionId:sid}=await cdp.cmd('Target.attachToTarget',{targetId,flatten:true});await cdp.cmd('Runtime.enable',{},sid);lastSession=sid;await cdp.cmd('Page.enable',{},sid);await cdp.cmd('Fetch.enable',{patterns:[{urlPattern:'*'}]},sid);await cdp.cmd('Page.navigate',{url:base},sid);await cdp.wait(sid,'document.documentElement.dataset.coreReady==="1" && !!document.querySelector("#login-form")');
+   const {browserContextId}=await cdp.cmd('Target.createBrowserContext');const {targetId}=await cdp.cmd('Target.createTarget',{url:'about:blank',browserContextId});const {sessionId:sid}=await cdp.cmd('Target.attachToTarget',{targetId,flatten:true});await cdp.cmd('Runtime.enable',{},sid);lastSession=sid;await cdp.cmd('Page.enable',{},sid);await cdp.cmd('Fetch.enable',{patterns:[{urlPattern:'*'}]},sid);await cdp.cmd('Page.navigate',{url:base},sid);await cdp.wait(sid,'document.documentElement?.dataset.coreReady==="1" && !!document.querySelector("#login-form")');
    await fill(sid,'#login-form',{email:role+'@example.invalid',password:'TEST-only-safe-password-138!'});await click(sid,'#login-form button');
    if(role==='crew'){await cdp.wait(sid,'document.querySelector("#status").textContent.includes("does not allow")');results.push({role,status:'PASS',permissionDeniedVisible:true});}
    else{await cdp.wait(sid,'document.querySelectorAll("#inquiries .row").length>0');await click(sid,'#inquiries .row');await cdp.wait(sid,'!!document.querySelector("#inquiry-edit")');const uid=await run(sid,async()=> (await(await fetch('/api/me')).json()).user.id);await fill(sid,'#inquiry-edit',{assigned_to:uid,reason:'TEST manager takes ownership'});await click(sid,'#inquiry-edit button');await cdp.wait(sid,'document.querySelector("#status").textContent.includes("Changes saved")');results.push({role,status:'PASS',authorizedOwnershipTransfer:true});}
