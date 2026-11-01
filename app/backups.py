@@ -36,6 +36,8 @@ def verify_referenced_files(db, uploads):
 
 
 def make_backup(path, dest, uploads):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("Backup and restore operations")
     path, dest, uploads = Path(path).resolve(), Path(dest).absolute(), Path(uploads).resolve()
     if not path.is_file():
         raise ValueError('The source database does not exist. No empty backup was created.')
@@ -117,6 +119,8 @@ def inspect_archive(archive):
 
 
 def restore_archive(archive, path):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("Backup and restore operations")
     path = Path(path).absolute()
     if path.exists() or path.is_symlink() or (path.parent/'uploads').exists():
         raise ValueError('Use a new empty target instance, never an existing database/uploads folder.')
@@ -150,6 +154,8 @@ def restore_archive(archive, path):
 
 
 def verify_backup(archive):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("Backup and restore operations")
     result = inspect_archive(archive)
     with tempfile.TemporaryDirectory() as tmp:
         restore_archive(archive, Path(tmp)/'restore'/'crownops.sqlite3')
