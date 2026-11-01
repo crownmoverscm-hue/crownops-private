@@ -49,11 +49,19 @@ jobs:
         run: |
           set -o pipefail
           PYTHONPATH=. python tests/test_core_v1_isolation.py -v 2>&1 | tee evidence/core-v1/test-output.txt
+      - name: Browser qualification with preinstalled Chrome and Node only
+        run: |
+          node --version | tee evidence/core-v1/browser-node-version.txt
+          node --check app/static/core_v1.js
+          node --check tests/browser/core_v1_cdp.cjs
+          python -m py_compile tests/browser/core_v1_fixture.py
+          set -o pipefail
+          node tests/browser/core_v1_cdp.cjs 2>&1 | tee evidence/core-v1/browser-output.txt
       - name: Record source checksums and prepare portable review bundle
         if: always()
         run: |
-          sha256sum .github/workflows/core-v1-isolation.yml app/core_v1.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/invoice_quickbooks_delivery.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv > evidence/core-v1/source-sha256.txt
-          tar -czf /tmp/core-v1-source-and-evidence.tar.gz .github/workflows/core-v1-isolation.yml app/core_v1.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/invoice_quickbooks_delivery.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv evidence/core-v1
+          sha256sum .github/workflows/core-v1-isolation.yml app/core_v1.py app/backups.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/invoice_quickbooks_delivery.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py tests/browser/core_v1_fixture.py tests/browser/core_v1_cdp.cjs docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv > evidence/core-v1/source-sha256.txt
+          tar -czf /tmp/core-v1-source-and-evidence.tar.gz .github/workflows/core-v1-isolation.yml app/core_v1.py app/backups.py app/main.py app/store.py app/providers.py app/automatic_intake.py app/worker.py app/estimate_delivery.py app/invoice_payments.py app/invoice_quickbooks_delivery.py app/deposits.py app/ai.py app/account_access.py app/gmail_sync.py app/wix_sync.py app/extensions.py app/client_communications.py app/sales_crm_v6.py app/static/core_v1.html app/static/core_v1.js tests/test_core_v1_isolation.py tests/browser/core_v1_fixture.py tests/browser/core_v1_cdp.cjs docs/core-v1-safety-inventory.md docs/core-v1-route-inventory.csv docs/core-v1-helper-inventory.csv evidence/core-v1
           cp /tmp/core-v1-source-and-evidence.tar.gz evidence/core-v1/core-v1-source-and-evidence.tar.gz
       - name: Upload portable Muse review evidence
         if: always()
