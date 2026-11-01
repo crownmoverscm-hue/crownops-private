@@ -150,6 +150,46 @@ def email(value):
     return value
 
 
+def structured_date(value, label="Date"):
+    value = original_text(value, label, 40)
+    if not value.strip():
+        return ""
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+        raise HTTPException(422, f"{label} must be a real calendar date in YYYY-MM-DD format.")
+    from datetime import date
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(422, f"{label} must be a real calendar date in YYYY-MM-DD format.")
+    return value
+
+
+def structured_phone(value):
+    value = original_text(value, "Phone", 80)
+    if not value.strip():
+        return ""
+    candidate = value.strip()
+    if not re.fullmatch(r"\+?[0-9 () .-]+", candidate) or candidate.count("(") != candidate.count(")"):
+        raise HTTPException(422, "Enter a valid Canadian phone or an international phone beginning with +.")
+    balance = 0
+    for char in candidate:
+        if char == "(": balance += 1
+        if char == ")": balance -= 1
+        if balance < 0 or balance > 1:
+            raise HTTPException(422, "Review the phone number formatting.")
+    digits = re.sub(r"[^0-9]", "", candidate)
+    if candidate.startswith("+"):
+        valid = 8 <= len(digits) <= 15 and not digits.startswith("0")
+        if digits.startswith("1"):
+            valid = len(digits) == 11 and digits[1] in "23456789" and digits[4] in "23456789"
+    else:
+        national = digits[1:] if len(digits) == 11 and digits.startswith("1") else digits
+        valid = len(national) == 10 and national[0] in "23456789" and national[3] in "23456789"
+    if not valid:
+        raise HTTPException(422, "Enter a valid Canadian phone or an international phone beginning with +.")
+    return value  # Preserve the supplied format; never infer or silently rewrite a contact number.
+
+
 def phone_key(value):
     digits = re.sub(r"\D", "", str(value or ""))
     return digits[1:] if len(digits) == 11 and digits.startswith("1") else digits
@@ -224,8 +264,9 @@ def record_action(db, key, digest, kind, actor, result_id):
         insert(db,"manual_action_requests",dict(kind=kind,actor=actor,request_key=key,request_sha256=digest,result_id=result_id,created_at=now()))
 
 
-def create_app_routes(app, path, auth, root):
-    ensure_schema(path)
+def create_app_routes(app, path, auth, root, *, initialize_schema=True):
+    if initialize_schema:
+        ensure_schema(path)
 
     @app.get("/core-v1.js")
     def core_script():
@@ -247,7 +288,7 @@ def create_app_routes(app, path, auth, root):
         request_key = text(data.get("request_key"), "Request key", 100, True)
         name = text(data.get("client_name"), "Client name", 150, True)
         mail = email(data.get("email", ""))
-        phone = text(data.get("phone", ""), "Phone", 80)
+        phone = structured_phone(data.get("phone", ""))
         if not mail and not phone_key(phone):
             raise HTTPException(422, "Enter an email or phone number.")
         request_hash = hashlib.sha256(dumps({"client_name": name, "email": mail, "phone": phone}).encode()).hexdigest()
@@ -295,7 +336,7 @@ def create_app_routes(app, path, auth, root):
                 raise HTTPException(422, "At least one client field is required.")
             name = text(data.get("client_name", current["client_name"]), "Client name", 150, True)
             mail = email(data.get("email", current["email"]))
-            phone = text(data.get("phone", current["phone"]), "Phone", 80)
+            phone = structured_phone(data.get("phone", current["phone"]))
             language = "French" if str(data.get("language", current["language"])).lower().startswith("fr") else "English"
             if not mail and not phone_key(phone):
                 raise HTTPException(422, "Enter an email or phone number.")
@@ -320,7 +361,7 @@ def create_app_routes(app, path, auth, root):
             raise HTTPException(422, "Client, service, and source must be objects.")
         name = text(client_data.get("client_name"), "Client name", 150, True)
         mail = email(client_data.get("email", ""))
-        phone = text(client_data.get("phone", ""), "Phone", 80)
+        phone = structured_phone(client_data.get("phone", ""))
         client_id = text(data.get("client_id", ""), "Client ID", 100)
         kind = text(source.get("kind", "Email"), "Source type", 40, True)
         if kind.lower() not in ("email", "email-origin"):
@@ -334,7 +375,7 @@ def create_app_routes(app, path, auth, root):
         for field, limit in (("move_date",40),("pickup",500),("dropoff",500),("home_size",100),("boxes",100),
                              ("pickup_access",500),("dropoff_access",500),("pickup_walk",100),("dropoff_walk",100),
                              ("inventory",4000),("heavy_items",2000),("notes",4000),("service_type",60)):
-            editable[field] = text(service.get(field, ""), field, limit)
+            editable[field] = structured_date(service.get(field, ""), "Requested date") if field == "move_date" else text(service.get(field, ""), field, limit)
         req = {"client_id":client_id,"client":client_data,"service":editable,
                "source":{"kind":kind,"subject":original_subject,"body":original_body,"secure_reference":source_reference}}
         request_sha = hashlib.sha256(dumps(req).encode()).hexdigest()
@@ -444,6 +485,8 @@ def create_app_routes(app, path, auth, root):
                     value=text(value,"Status",40,True)
                     if value not in {"New Lead","In Progress","Waiting for client","Follow-up","Closed","Lost"}:
                         raise HTTPException(422,"Invalid Core v1 inquiry status.")
+                elif key=="move_date":
+                    value=structured_date(value,"Requested date")
                 elif key=="assigned_to":
                     value=text(value,"Owner",100)
                     if not value:
@@ -489,7 +532,7 @@ def create_app_routes(app, path, auth, root):
     def add_task(iid: str, data: dict, u=Depends(auth)):
         roles(u)
         title=text(data.get("title","Follow up"),"Task",300,True)
-        due=text(data.get("due_date",""),"Due date",10)
+        due=structured_date(data.get("due_date",""),"Due date")
         owner=text(data.get("owner",u["id"]),"Owner",100)
         with transaction(path) as db:
             if not one(db,"SELECT id FROM manual_source_submissions WHERE lead_id=?",(iid,)):
