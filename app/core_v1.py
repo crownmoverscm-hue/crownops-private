@@ -49,12 +49,14 @@ def protect_storage(path):
     _LOCKED_PATHS.add(canonical(path))
 
 
-def authorize_write(action, table, allowed=SAFE_TABLES):
+def authorize_write(action, table, allowed=SAFE_TABLES, column=None):
     """SQLite authorizer callback: allow only manual CRM and session/audit writes."""
     if action in (getattr(__import__("sqlite3"), "SQLITE_INSERT"),
                   getattr(__import__("sqlite3"), "SQLITE_UPDATE"),
                   getattr(__import__("sqlite3"), "SQLITE_DELETE")):
         name = str(table or "").lower()
+        if name == "auth_factors":
+            return __import__("sqlite3").SQLITE_OK if action == __import__("sqlite3").SQLITE_UPDATE and column == "last_step" else __import__("sqlite3").SQLITE_DENY
         if name not in allowed:
             return __import__("sqlite3").SQLITE_DENY
         if name in {"manual_source_submissions", "audit"} and action != __import__("sqlite3").SQLITE_INSERT:
