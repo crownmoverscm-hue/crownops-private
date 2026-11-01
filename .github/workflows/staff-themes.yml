@@ -1,0 +1,60 @@
+name: Staff three-view theme qualification
+on:
+  push:
+    branches: [feature/staff-three-view-themes]
+permissions:
+  contents: read
+jobs:
+  themes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Record UI-only scope and approved source
+        run: |
+          mkdir -p evidence/staff-themes
+          git rev-parse HEAD > evidence/staff-themes/candidate-sha.txt
+          git diff --name-status 717eea595c3112a3efe341ab7ad6069f88460e40 > evidence/staff-themes/changed-files.txt
+          git diff --exit-code 717eea595c3112a3efe341ab7ad6069f88460e40 -- app ':!app/static/app.js' ':!app/static/index.html' ':!app/static/staff_themes.css' ':!app/static/staff_themes.js'
+          git diff --exit-code 717eea595c3112a3efe341ab7ad6069f88460e40 -- requirements.txt app/static/icon.svg app/static/icons
+          node --version | tee evidence/staff-themes/node-version.txt
+          python --version | tee evidence/staff-themes/python-version.txt
+      - name: Install recorded binary wheels from approved PyPI distribution URLs
+        env:
+          PIP_CONFIG_FILE: /dev/null
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+        run: |
+          python -m pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: --report evidence/staff-themes/dependency-install.json -r tests/browser/staff_themes_python313.lock
+          python -m pip check | tee evidence/staff-themes/pip-check.txt
+      - name: Relevant frontend regressions and theme tests
+        run: |
+          set -o pipefail
+          node --check app/static/app.js
+          node --check app/static/staff_themes.js
+          node --check tests/browser/staff_themes_cdp.cjs
+          node --test tests/staff_themes.test.cjs tests/company_settings.test.cjs tests/schedule_calendar.test.cjs tests/schedule_week.test.cjs tests/move_navigation.test.cjs 2>&1 | tee evidence/staff-themes/frontend-tests.txt
+      - name: Actual preinstalled Chrome desktop/mobile screenshots and UI assertions
+        run: |
+          set -o pipefail
+          node tests/browser/staff_themes_cdp.cjs 2>&1 | tee evidence/staff-themes/browser-output.txt
+      - name: Bind evidence to source and original logo
+        if: always()
+        run: |
+          sha256sum app/static/app.js app/static/index.html app/static/staff_themes.css app/static/staff_themes.js app/static/icon.svg app/static/icons/app-512.png tests/staff_themes.test.cjs tests/browser/staff_themes_cdp.cjs tests/browser/staff_themes_fixture.py tests/browser/staff_themes_python313.lock .github/workflows/staff-themes.yml > evidence/staff-themes/source-sha256.txt
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          Path('evidence/staff-themes/run.json').write_text(json.dumps({'candidate':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],'run_url':'https://github.com/'+os.environ['GITHUB_REPOSITORY']+'/actions/runs/'+os.environ['GITHUB_RUN_ID'],'base':'717eea595c3112a3efe341ab7ad6069f88460e40','scope':'UI-only, fictional read-only fixture, no deployment'},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: staff-themes-muse-review-${{ github.sha }}
+          path: evidence/staff-themes/
+          retention-days: 7
