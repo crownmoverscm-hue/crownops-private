@@ -48,6 +48,7 @@ def connect(path):
     db.execute('PRAGMA foreign_keys=ON')
     db.execute('PRAGMA busy_timeout=20000')
     if str(Path(path).resolve()) in _CORE_V1_PATHS:
+        db.execute("PRAGMA recursive_triggers=ON")
         db.set_authorizer(_core_v1_authorizer)
     return db
 
