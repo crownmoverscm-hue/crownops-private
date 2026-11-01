@@ -57,7 +57,7 @@ def authorize_write(action, table, allowed=SAFE_TABLES):
         name = str(table or "").lower()
         if name not in allowed:
             return __import__("sqlite3").SQLITE_DENY
-        if name == "manual_source_submissions" and action != __import__("sqlite3").SQLITE_INSERT:
+        if name in {"manual_source_submissions", "audit"} and action != __import__("sqlite3").SQLITE_INSERT:
             return __import__("sqlite3").SQLITE_DENY
     if action in (getattr(__import__("sqlite3"), "SQLITE_ATTACH"),
                   getattr(__import__("sqlite3"), "SQLITE_DETACH"),
@@ -368,15 +368,24 @@ def create_app_routes(app, path, auth, root):
     @app.patch("/api/core-v1/inquiries/{iid}")
     def update_inquiry(iid: str, data: dict, u=Depends(auth)):
         roles(u)
-        allowed={"stage","assigned_to","move_date","pickup","dropoff","home_size","boxes","pickup_access",
+        allowed={"expected_version","stage","assigned_to","move_date","pickup","dropoff","home_size","boxes","pickup_access",
                  "dropoff_access","pickup_walk","dropoff_walk","inventory","heavy_items","notes"}
         if not data or set(data)-allowed:
             raise HTTPException(422,"Only inquiry, ownership, and service fields may be updated.")
+        expected = data.get("expected_version")
+        if type(expected) is not int or expected < 1:
+            raise HTTPException(422,"A positive integer expected_version is required.")
+        if not (set(data) - {"expected_version"}):
+            raise HTTPException(422,"At least one inquiry field is required.")
         with transaction(path) as db:
             l=one(db,"SELECT * FROM leads WHERE id=? AND id IN (SELECT lead_id FROM manual_source_submissions)",(iid,))
             if not l: raise HTTPException(404,"Inquiry not found.")
+            if expected != l["version"]:
+                raise HTTPException(409,{"message":"Inquiry changed; refresh before saving.","current_version":l["version"]})
             values={}
             for key,value in data.items():
+                if key=="expected_version":
+                    continue
                 if key=="stage":
                     value=text(value,"Status",40,True)
                     if value not in {"New Lead","In Progress","Waiting for client","Follow-up","Closed","Lost"}:
@@ -393,7 +402,7 @@ def create_app_routes(app, path, auth, root):
             sql="UPDATE leads SET "+",".join(k+"=?" for k in values)+",version=version+1,updated_at=? WHERE id=?"
             db.execute(sql,[*values.values(),now(),iid])
             audit(db,u["id"],"Manual inquiry updated","leads",iid,{"fields":sorted(values)})
-        return {"ok":True}
+        return {"ok":True,"version":expected+1}
 
     @app.post("/api/core-v1/inquiries/{iid}/notes")
     def add_note(iid: str, data: dict, u=Depends(auth)):
