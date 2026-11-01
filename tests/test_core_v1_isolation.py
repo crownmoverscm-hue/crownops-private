@@ -543,6 +543,131 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
                 self.assertEqual(error.exception.status_code,403)
             app_connect.assert_not_called();raw_connect.assert_not_called()
         print('CORE_V1_CONNECTION_REVIEW runtime=store_connect backups_restore=denied_before_constructor')
+    def test_28_d1_inquiry_structured_calendar_dates(self):
+        for index,(value,status) in enumerate((('2028-02-29',200),('2027-02-30',422),('2027-13-01',422),('',200))):
+            data=payload('D1-DATE-'+str(index),'TEST Date','date'+str(index)+'@example.invalid','TEST','TEST original')
+            data['client']['phone']='514555'+str(1100+index)
+            data['service']['move_date']=value
+            with connect(self.path) as db:
+                before={t:db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('client_accounts','leads','manual_source_submissions','messages','tasks','audit')}
+            response=self.client.post('/api/core-v1/inquiries',json=data,headers={'X-CSRF-Token':self.csrf})
+            self.assertEqual(response.status_code,status,response.text)
+            if status==422:
+                with connect(self.path) as db:self.assertEqual(before,{t:db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in before})
+            else:self.assertEqual(self.client.get('/api/core-v1/inquiries/'+response.json()['inquiry_id']).json()['move_date'],value)
+        print('CORE_V1_D1_DATES valid_calendar=200 impossible_day=422 invalid_month=422 blank=200 invalid_no_change=true')
+
+    def test_29_d1_phone_create_and_edit_routes(self):
+        cases=[('abc','phone-bad@example.invalid',422),('514-555-0191','phone-ca@example.invalid',200),('+44 20 7946 0958','phone-intl@example.invalid',200),('','phone-empty@example.invalid',200),('','',422),('abc','',422)]
+        for index,(phone,mail,status) in enumerate(cases):
+            data=payload('D1-PHONE-'+str(index),'TEST Phone',mail,'TEST','TEST source');data['client']['phone']=phone
+            response=self.client.post('/api/core-v1/inquiries',json=data,headers={'X-CSRF-Token':self.csrf})
+            self.assertEqual(response.status_code,status,response.text)
+            if status==200:
+                detail=self.client.get('/api/core-v1/inquiries/'+response.json()['inquiry_id']).json()
+                self.assertEqual(detail['phone'],phone)
+        invalid=self.client.post('/api/core-v1/clients',json={'request_key':'D1-CLIENT-BAD','client_name':'TEST Client','email':'client-bad@example.invalid','phone':'abc'},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(invalid.status_code,422)
+        created=self.client.post('/api/core-v1/clients',json={'request_key':'D1-CLIENT-OK','client_name':'TEST Contact','email':'contact@example.invalid','phone':'+1 (416) 555-0198'},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(created.status_code,200,created.text);url='/api/core-v1/clients/'+created.json()['id']
+        for changes,status in (({'phone':'abc'},422),({'phone':'','email':''},422),({'phone':'+33 1 42 68 53 00'},200)):
+            result=self.client.patch(url,json={'expected_version':1,**changes},headers={'X-CSRF-Token':self.csrf});self.assertEqual(result.status_code,status,result.text)
+        result=self.client.patch(url,json={'expected_version':2,'phone':'','email':'contact@example.invalid'},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(result.status_code,200,result.text)
+        print('CORE_V1_D1_PHONES canadian=accepted international=accepted malformed=rejected blank_with_email=accepted both_blank=rejected client_create_edit=validated format_preserved=true')
+
+    def test_30_d1_date_edits_and_followup_dates_are_validated(self):
+        a,_,_,_=self.create_pair();url='/api/core-v1/inquiries/'+a['inquiry_id']
+        for value in ('2027-02-30','2027-13-01','02/28/2027'):
+            before=self.client.get(url).json()
+            result=self.client.patch(url,json={'expected_version':1,'move_date':value},headers={'X-CSRF-Token':self.csrf})
+            self.assertEqual(result.status_code,422,result.text);self.assertEqual(self.client.get(url).json(),before)
+        for version,value in ((1,'2027-02-28'),(2,'')):
+            result=self.client.patch(url,json={'expected_version':version,'move_date':value},headers={'X-CSRF-Token':self.csrf})
+            self.assertEqual(result.status_code,200,result.text)
+        for value,status in (('2027-02-30',422),('2027-13-01',422),('2027-02-28',200),('',200)):
+            result=self.client.post(url+'/tasks',json={'title':'TEST date task','due_date':value},headers={'X-CSRF-Token':self.csrf})
+            self.assertEqual(result.status_code,status,result.text)
+        print('CORE_V1_D1_EDIT_DATES inquiry_and_task_dates=validated invalid_inquiry_unchanged=true')
+
+    def test_31_d1_invalid_information_in_original_is_preserved_exactly(self):
+        original='  Customer says date 2027-02-30 and phone abc.\r\nÉvidence originale.  \n'
+        data=payload('D1-ORIGINAL','TEST Original','original-invalid@example.invalid','  Original  ',original)
+        data['client']['phone']='514-555-0197';data['service']['move_date']='2027-02-28'
+        response=self.client.post('/api/core-v1/inquiries',json=data,headers={'X-CSRF-Token':self.csrf});self.assertEqual(response.status_code,200,response.text)
+        url='/api/core-v1/inquiries/'+response.json()['inquiry_id'];before=self.client.get(url).json()['source']
+        edit=self.client.patch(url,json={'expected_version':1,'move_date':''},headers={'X-CSRF-Token':self.csrf});self.assertEqual(edit.status_code,200)
+        after=self.client.get(url).json()['source'];self.assertEqual(after,before)
+        self.assertEqual(after['original_body'].encode(),original.encode());self.assertEqual(after['source_sha256'],hashlib.sha256(original.encode()).hexdigest())
+        print('CORE_V1_D1_ORIGINAL invalid_information_preserved_byte_exact=true sha256_unchanged=true')
+
+
+class CorePilotStartupTests(unittest.TestCase):
+    def setUp(self):
+        from cryptography.fernet import Fernet
+        self.temp=tempfile.TemporaryDirectory(prefix='crownops-pilot-config-fictional-');self.addCleanup(self.temp.cleanup)
+        self.path=Path(self.temp.name)/'fictional.sqlite3'
+        self.env=patch.dict(os.environ,{'CROWNOPS_ENV':'test','CROWNOPS_PROFILE':'core-v1','CROWNOPS_ALLOW_EXTERNAL':'0','CROWNOPS_RUN_WORKER':'0'})
+        self.env.start();self.addCleanup(self.env.stop)
+        create_app(self.path)  # Trusted disposable provisioning; dedicated pilot factory must never do this.
+        self.valid={'CROWNOPS_ENV':'pilot','CROWNOPS_PROFILE':'core-v1','CROWNOPS_ALLOW_EXTERNAL':'0','CROWNOPS_RUN_WORKER':'0','CROWNOPS_PILOT_ACK':'manual-inquiry-only','CROWNOPS_SECURE_COOKIES':'1','CROWNOPS_DB':str(self.path),'CROWNOPS_PUBLIC_URL':'https://core-pilot.example.invalid','CROWNOPS_SECRET_KEY':Fernet.generate_key().decode()}
+
+    def test_32_d3_valid_config_starts_locked_without_workers_or_schema_mutation(self):
+        from app.core_pilot import create_pilot_app
+        def schema():
+            with connect(self.path) as db:return [tuple(x) for x in db.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")]
+        before=schema()
+        with patch.dict(os.environ,self.valid),patch('app.worker.tick') as worker,patch('app.estimate_delivery.poll_estimates') as estimates,patch('app.invoice_payments.poll_quickbooks_receipts') as receipts,patch('app.providers.maintain_connections') as providers:
+            app=create_pilot_app()
+            with TestClient(app,base_url='https://core-pilot.example.invalid',raise_server_exceptions=False) as client:
+                self.assertEqual(client.get('/api/health').status_code,200)
+                for method,url in (('POST','/api/leads'),('POST','/api/quotes/TEST/accept'),('PUT','/api/jobs/TEST/plan'),('POST','/api/webhooks/square'),('POST','/api/forgot-password'),('GET','/api/quickbooks/test-connection')):
+                    self.assertEqual(client.request(method,url,json={'confirm':True}).status_code,403)
+                self.assertTrue(app.state.core_v1_pilot_entrypoint);self.assertTrue(app.state.core_v1_workers_disabled)
+            for mock in (worker,estimates,receipts,providers):mock.assert_not_called()
+        self.assertEqual(schema(),before)
+        print('CORE_V1_D3_VALID locked=true workers=not_called forbidden_routes=403 schema_unchanged=true')
+
+    def test_33_d3_missing_required_configuration_never_constructs_app(self):
+        from app.core_pilot import create_pilot_app
+        for missing in self.valid:
+            with self.subTest(missing=missing),patch.dict(os.environ,self.valid),patch('app.main.create_app') as construct:
+                os.environ.pop(missing,None)
+                with self.assertRaises(RuntimeError):create_pilot_app()
+                construct.assert_not_called()
+        print('CORE_V1_D3_MISSING all_required_keys=refused app_construction=never_called')
+
+    def test_34_d3_invalid_and_contradictory_flags_never_fall_back(self):
+        from app.core_pilot import create_pilot_app
+        cases=[('CROWNOPS_PROFILE','full'),('CROWNOPS_ENV','production'),('CROWNOPS_ENV','test'),('CROWNOPS_ALLOW_EXTERNAL','1'),('CROWNOPS_RUN_WORKER','1'),('CROWNOPS_PILOT_ACK','yes'),('CROWNOPS_SECURE_COOKIES','0'),('CROWNOPS_PUBLIC_URL','http://core-pilot.example.invalid'),('CROWNOPS_SECRET_KEY','TEST-invalid-key'),('CROWNOPS_DB','relative.sqlite3')]
+        for key,value in cases:
+            with self.subTest(key=key,value=value if 'KEY' not in key else 'redacted'),patch.dict(os.environ,{**self.valid,key:value}),patch('app.main.initialize') as legacy,patch('app.production.validate_runtime_storage') as legacy_storage:
+                with self.assertRaises(RuntimeError):create_pilot_app()
+                with self.assertRaises(RuntimeError):create_app(self.path,core_pilot=True)
+                legacy.assert_not_called();legacy_storage.assert_not_called()
+        print('CORE_V1_D3_INVALID contradictory_profile_env_external_worker_cookie_url_key_path=refused legacy_fallback=never_called')
+
+    def test_35_d3_missing_storage_permissions_and_schema_refuse_without_bootstrap(self):
+        from app.core_pilot import create_pilot_app
+        missing=Path(self.temp.name)/'not-provisioned.sqlite3'
+        with patch.dict(os.environ,{**self.valid,'CROWNOPS_DB':str(missing)}):
+            with self.assertRaises(RuntimeError):create_pilot_app()
+        self.assertFalse(missing.exists())
+        self.path.chmod(0o644)
+        with patch.dict(os.environ,self.valid):
+            with self.assertRaises(RuntimeError):create_pilot_app()
+        self.path.chmod(0o600)
+        link=Path(self.temp.name)/'symlink.sqlite3';link.symlink_to(self.path)
+        with patch.dict(os.environ,{**self.valid,'CROWNOPS_DB':str(link)}):
+            with self.assertRaises(RuntimeError):create_pilot_app()
+        import sqlite3
+        bad=Path(self.temp.name)/'unqualified.sqlite3'
+        with sqlite3.connect(str(bad)) as db:db.execute('CREATE TABLE TEST_ONLY(id INTEGER)')
+        bad.chmod(0o600)
+        with patch.dict(os.environ,{**self.valid,'CROWNOPS_DB':str(bad)}),patch('app.main.initialize') as legacy:
+            with self.assertRaises(RuntimeError):create_pilot_app()
+            legacy.assert_not_called()
+        print('CORE_V1_D3_STORAGE missing=refused no_database_created=true permissions_symlink_schema=refused no_migration=true')
 
 
 class CoreV1SecurityTests(CoreV1Fixture):
