@@ -9,7 +9,7 @@ import uuid
 import re
 
 _CORE_V1_PATHS = set()
-_CORE_V1_TABLES = {'sessions','login_attempts','client_accounts','client_account_leads','leads','manual_source_submissions','core_v1_client_requests','messages','tasks','audit','sqlite_sequence'}
+_CORE_V1_TABLES = {'sessions','login_attempts','client_accounts','client_account_leads','leads','manual_source_submissions','core_v1_client_requests','manual_action_requests','messages','tasks','audit','sqlite_sequence'}
 
 
 def protect_core_v1_path(path):
@@ -24,7 +24,7 @@ def _core_v1_authorizer(action, arg1, arg2, db_name, trigger_name):
             return sqlite3.SQLITE_OK if action == sqlite3.SQLITE_UPDATE and arg2 == 'last_step' else sqlite3.SQLITE_DENY
         if table not in _CORE_V1_TABLES:
             return sqlite3.SQLITE_DENY
-        if table in {'manual_source_submissions', 'audit'} and action != sqlite3.SQLITE_INSERT:
+        if table in {'manual_source_submissions', 'manual_action_requests', 'audit'} and action != sqlite3.SQLITE_INSERT:
             return sqlite3.SQLITE_DENY
     denied = {getattr(sqlite3, name) for name in ('SQLITE_ATTACH','SQLITE_DETACH','SQLITE_ALTER_TABLE','SQLITE_DROP_TABLE','SQLITE_CREATE_TABLE','SQLITE_CREATE_TRIGGER','SQLITE_DROP_TRIGGER') if hasattr(sqlite3, name)}
     if action in denied:
