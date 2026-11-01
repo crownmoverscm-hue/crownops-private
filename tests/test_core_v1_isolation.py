@@ -390,6 +390,10 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         print('CORE_V1_AUDIT_CONTENT selection=durable transfer=old_new status=old_new actor_timestamp_reason=present')
 
     def test_20_auth_csrf_static_and_owner_tampering_are_denied(self):
+        html=self.client.get('/').text
+        self.assertIn('id="login-form" method="post" action="/api/login"',html)
+        self.assertIn('id="inquiry-form" method="post" action="/api/core-v1/inquiries"',html)
+        self.assertIn('<noscript>',html)
         a,_,_,_=self.create_pair();url='/api/core-v1/inquiries/'+a['inquiry_id']
         for token in ('','TEST-invalid-token'):
             r=self.client.patch(url,json={'expected_version':1,'pickup':'TEST denied'},headers={'X-CSRF-Token':token})
