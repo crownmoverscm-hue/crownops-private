@@ -25,7 +25,7 @@ class CDP{
   cdp.on('Fetch.requestPaused',m=>{const req=m.params.request,allowed=req.url.startsWith(base+'/')&&['GET','HEAD'].includes(req.method);if(!req.url.startsWith(base+'/'))external.push(req.url);if(!['GET','HEAD'].includes(req.method))writes.push(req.method+' '+req.url);cdp.cmd(allowed?'Fetch.continueRequest':'Fetch.failRequest',allowed?{requestId:m.params.requestId}:{requestId:m.params.requestId,errorReason:'BlockedByClient'},m.sessionId).catch(e=>errors.push(String(e)));});
   cdp.on('Runtime.exceptionThrown',m=>errors.push(m.params.exceptionDetails.text));
   const cookie=async(sid,value)=>cdp.cmd('Network.setCookie',{name:'crownops_session',value,url:base,httpOnly:true},sid);
-  const reloadStaff=async(sid,id)=>{const origin=await cdp.eval(sid,'performance.timeOrigin');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'performance.timeOrigin!=='+origin+' && document.readyState==="complete" && !!window.CrownOpsThemes && CrownOpsThemes.getStaff()==='+JSON.stringify(id)+' && !!document.querySelector("#staff-theme-nav")');};
+  const reloadStaff=async(sid,id)=>{const origin=await cdp.eval(sid,'performance.timeOrigin');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'performance.timeOrigin!=='+origin+' && document.readyState==="complete" && !!window.CrownOpsThemes && CrownOpsThemes.getStaff()==='+JSON.stringify(id)+' && !!document.querySelector("#staff-theme-nav") && !!document.querySelector("#content h1")');};
   const shot=async(sid,file,selector)=>{let clip;if(selector){const rect=await cdp.eval(sid,`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height,scale:1};})()`);clip=rect;}const r=await cdp.cmd('Page.captureScreenshot',{format:'png',...(clip?{clip}:{}),captureBeyondViewport:!!clip},sid);fs.writeFileSync(path.join(out,file),Buffer.from(r.data,'base64'));};
   for(const width of [1440,390]){
    const {browserContextId}=await cdp.cmd('Target.createBrowserContext');const {targetId}=await cdp.cmd('Target.createTarget',{url:'about:blank',browserContextId});const {sessionId:sid}=await cdp.cmd('Target.attachToTarget',{targetId,flatten:true});lastSid=sid;
@@ -60,7 +60,8 @@ class CDP{
    }
    for(const view of ['sales','communications','schedule']){
     await cdp.eval(sid,'navigate('+JSON.stringify(view)+')');
-    await cdp.wait(sid,'!!document.querySelector("#content h1")');
+    const titlePattern={sales:'client',communications:'inbox',schedule:'schedule'}[view];
+    await cdp.wait(sid,'new RegExp('+JSON.stringify(titlePattern)+',"i").test(document.querySelector("#content h1")?.textContent||"")');
     assert(!(await cdp.eval(sid,'document.querySelector("#content").textContent.includes("This section could not load")')),'Staff view failed: '+view);
     assert(!(await cdp.eval(sid,'document.documentElement.scrollWidth>innerWidth+1')),'Staff view overflow: '+view);
     for(const theme of ['black','light','ocean']){
