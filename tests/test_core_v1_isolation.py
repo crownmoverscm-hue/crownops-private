@@ -558,7 +558,7 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         print('CORE_V1_D1_DATES valid_calendar=200 impossible_day=422 invalid_month=422 blank=200 invalid_no_change=true')
 
     def test_29_d1_phone_create_and_edit_routes(self):
-        cases=[('abc','phone-bad@example.invalid',422),('514-555-0191','phone-ca@example.invalid',200),('+44 20 7946 0958','phone-intl@example.invalid',200),('','phone-empty@example.invalid',200),('','',422),('abc','',422)]
+        cases=[('abc','phone-bad@example.invalid',422),('514-555-0191','phone-ca@example.invalid',200),('+44 20 7946 0958','phone-intl@example.invalid',200),('+6830000','phone-short-intl@example.invalid',200),('','phone-empty@example.invalid',200),('','',422),('abc','',422)]
         for index,(phone,mail,status) in enumerate(cases):
             data=payload('D1-PHONE-'+str(index),'TEST Phone',mail,'TEST','TEST source');data['client']['phone']=phone
             response=self.client.post('/api/core-v1/inquiries',json=data,headers={'X-CSRF-Token':self.csrf})
