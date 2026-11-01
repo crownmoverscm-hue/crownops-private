@@ -30,6 +30,8 @@ with transaction(path) as db:
  insert(db,'annual_rate_periods',dict(id='THEME-RATE',label='TEST UI dates only',start_date='2026-01-01',end_date='2027-12-31',rate_2_cents=13500,rate_3_cents=19500,rate_4_cents=26000,rate_5_cents=30000,rate_6_cents=35000,active=1,version=1,note='Fictional UI fixture, not company pricing',approved_by='THEME-A',created_at=now()))
  for n,name in enumerate(['TEST Alex Example','TEST Morgan Example','TEST Camille Exemple']):
   insert(db,'leads',dict(id='THEME-LEAD-'+str(n),client_name=name,email='client-'+str(n)+'@example.invalid',phone='514555010'+str(n),move_date='2026-11-15',pickup='TEST pickup',dropoff='TEST destination',stage='New Lead',source='Manual fictional UI',lead_type='Moving',created_at=now(),updated_at=now()))
+  insert(db,'client_accounts',dict(id='THEME-CLIENT-'+str(n),identity_key='e:client-'+str(n)+'@example.invalid',client_name=name,email='client-'+str(n)+'@example.invalid',phone='514555010'+str(n),language='English',created_at=now(),updated_at=now()))
+  insert(db,'client_account_leads',dict(client_id='THEME-CLIENT-'+str(n),lead_id='THEME-LEAD-'+str(n),created_at=now()))
 @app.middleware('http')
 async def read_only(request,call_next):
  from starlette.responses import JSONResponse

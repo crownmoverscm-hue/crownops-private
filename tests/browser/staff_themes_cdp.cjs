@@ -11,7 +11,7 @@ class CDP{
  async wait(sid,expression){for(let n=0;n<120;n++){try{if(await this.eval(sid,expression))return;}catch(_){}await delay(100);}throw Error('Wait failed: '+expression);}
 }
 (async()=>{
- let fixture,chrome,cdp,profile,lastSid;const results=[],errors=[],external=[],writes=[];
+ let fixture,chrome,cdp,profile,lastSid;const results=[],areaChecks=[],errors=[],external=[],writes=[];
  try{
   const bin=process.env.CHROME_BIN||spawnSync('sh',['-c','command -v google-chrome || command -v chromium || command -v chromium-browser'],{encoding:'utf8'}).stdout.trim();
   if(!bin||!fs.existsSync(bin)){fs.writeFileSync(path.join(out,'browser-result.json'),JSON.stringify({status:'NOT TESTED',reason:'No preinstalled browser. No download attempted.'}));throw Error('Browser unavailable');}
@@ -63,8 +63,16 @@ class CDP{
     await cdp.wait(sid,'!!document.querySelector("#content h1")');
     assert(!(await cdp.eval(sid,'document.querySelector("#content").textContent.includes("This section could not load")')),'Staff view failed: '+view);
     assert(!(await cdp.eval(sid,'document.documentElement.scrollWidth>innerWidth+1')),'Staff view overflow: '+view);
+    for(const theme of ['black','light','ocean']){
+     await cdp.eval(sid,'CrownOpsThemes.select('+JSON.stringify(theme)+')');
+     const expected={black:'rgb(245, 246, 248)',light:'rgb(242, 244, 247)',ocean:'rgb(237, 244, 248)'}[theme];
+     assert.equal(await cdp.eval(sid,'getComputedStyle(document.querySelector("#content")).backgroundColor'),expected);
+     assert(!(await cdp.eval(sid,'document.documentElement.scrollWidth>innerWidth+1')),'Area overflow '+view+' '+theme);
+     areaChecks.push({width,view,theme,status:'PASS'});
+    }
     if(width===1440)await shot(sid,'staff-'+view+'.png');
    }
+   const semantic=[];for(const theme of ['black','light','ocean']){await cdp.eval(sid,'CrownOpsThemes.select('+JSON.stringify(theme)+')');semantic.push(await cdp.eval(sid,`(()=>{let p=document.getElementById('theme-semantic-probe');if(!p){p=document.createElement('div');p.id='theme-semantic-probe';p.hidden=true;p.innerHTML='<span class="pill teal">TEST success</span><span class="callout orange">TEST warning</span><button class="btn-danger">TEST error</button>';document.body.append(p);}return Array.from(p.children,e=>({color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor}));})()`));}assert.deepEqual(semantic[0],semantic[1]);assert.deepEqual(semantic[1],semantic[2]);
    await cdp.eval(sid,'crmQuoteBuilder()');await cdp.wait(sid,'!!document.querySelector("#crm-quote-form")');
    const retained=await cdp.eval(sid,`(()=>{const f=document.querySelector('#crm-quote-form');const e=f.elements.quote_title||f.querySelector('input[type=text]');e.value='TEST unsaved quote theme';window.quoteThemeMark=performance.timeOrigin;return JSON.stringify([...new FormData(f)]);})()`);
    for(const theme of ['black','light','ocean']){
@@ -86,7 +94,7 @@ class CDP{
   assert.equal(external.length,0);assert.equal(writes.length,0);assert.equal(errors.length,0,JSON.stringify(errors));
   fixture.stdin.write('snapshot\n');for(let n=0;n<50&&!fs.existsSync(path.join(out,'fixture-readback.json'));n++)await delay(100);
   const readback=JSON.parse(fs.readFileSync(path.join(out,'fixture-readback.json'),'utf8'));assert.equal(readback.external_attempts.length,0);assert(Object.values(readback.prohibited_business_counts).every(n=>n===0));
-  fs.writeFileSync(path.join(out,'browser-result.json'),JSON.stringify({status:'PASS',browser:info.Browser,node:process.version,results,externalRequests:external,nonGetRequests:writes,pageErrors:errors,readback,scope:'Actual staff shell, Settings, account/reload persistence, mobile drawer, keyboard and theme-label EN/FR; seeded fictional sessions, not real authentication or business-flow acceptance.'},null,2));
+  fs.writeFileSync(path.join(out,'browser-result.json'),JSON.stringify({status:'PASS',browser:info.Browser,node:process.version,results,areaChecks,semanticColorsStable:true,externalRequests:external,nonGetRequests:writes,pageErrors:errors,readback,scope:'Actual staff shell, Settings, account/reload persistence, mobile drawer, keyboard and theme-label EN/FR; seeded fictional sessions, not real authentication or business-flow acceptance.'},null,2));
  }catch(e){let state;try{if(cdp&&lastSid){state=await cdp.eval(lastSid,'({title:document.querySelector("#content h1")?.textContent,body:document.body.innerText.slice(0,1800)})');await cdp.cmd('Page.captureScreenshot',{format:'png'},lastSid).then(r=>fs.writeFileSync(path.join(out,'failure.png'),Buffer.from(r.data,'base64')));}}catch(_){}fs.writeFileSync(path.join(out,'browser-failure.json'),JSON.stringify({error:String(e),state,errors,external,writes},null,2));process.exitCode=1;
  }finally{if(cdp)cdp.ws.close();if(chrome)chrome.kill('SIGTERM');if(fixture)fixture.kill('SIGTERM');if(chrome){for(let n=0;n<30&&chrome.exitCode===null;n++)await delay(100);}if(profile){try{fs.rmSync(profile,{recursive:true,force:true,maxRetries:5,retryDelay:100});}catch(e){fs.writeFileSync(path.join(out,'cleanup-note.txt'),'Disposable browser profile cleanup incomplete; runner teardown removes it.');}}}
 })();
