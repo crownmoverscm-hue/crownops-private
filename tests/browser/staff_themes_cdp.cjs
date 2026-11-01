@@ -25,6 +25,7 @@ class CDP{
   cdp.on('Fetch.requestPaused',m=>{const req=m.params.request,allowed=req.url.startsWith(base+'/')&&['GET','HEAD'].includes(req.method);if(!req.url.startsWith(base+'/'))external.push(req.url);if(!['GET','HEAD'].includes(req.method))writes.push(req.method+' '+req.url);cdp.cmd(allowed?'Fetch.continueRequest':'Fetch.failRequest',allowed?{requestId:m.params.requestId}:{requestId:m.params.requestId,errorReason:'BlockedByClient'},m.sessionId).catch(e=>errors.push(String(e)));});
   cdp.on('Runtime.exceptionThrown',m=>errors.push(m.params.exceptionDetails.text));
   const cookie=async(sid,value)=>cdp.cmd('Network.setCookie',{name:'crownops_session',value,url:base,httpOnly:true},sid);
+  const reloadStaff=async(sid,id)=>{const origin=await cdp.eval(sid,'performance.timeOrigin');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'performance.timeOrigin!=='+origin+' && document.readyState==="complete" && !!window.CrownOpsThemes && CrownOpsThemes.getStaff()==='+JSON.stringify(id)+' && !!document.querySelector("#staff-theme-nav")');};
   const shot=async(sid,file,selector)=>{let clip;if(selector){const rect=await cdp.eval(sid,`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height,scale:1};})()`);clip=rect;}const r=await cdp.cmd('Page.captureScreenshot',{format:'png',...(clip?{clip}:{}),captureBeyondViewport:!!clip},sid);fs.writeFileSync(path.join(out,file),Buffer.from(r.data,'base64'));};
   for(const width of [1440,390]){
    const {browserContextId}=await cdp.cmd('Target.createBrowserContext');const {targetId}=await cdp.cmd('Target.createTarget',{url:'about:blank',browserContextId});const {sessionId:sid}=await cdp.cmd('Target.attachToTarget',{targetId,flatten:true});lastSid=sid;
@@ -72,9 +73,9 @@ class CDP{
     if(width===1440)await shot(sid,'quote-editor-'+theme+'.png');
    }
    await cdp.eval(sid,'modal.close()');
-   await cdp.eval(sid,'CrownOpsThemes.select("ocean")');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'!!document.querySelector("#staff-theme-nav")');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'ocean');await cdp.wait(sid,'window.__themePaints.length>0');assert(await cdp.eval(sid,'window.__themePaints.every(t=>t==="ocean")'),'Persisted theme flashed at first staff paint');
-   await cookie(sid,'TEST-theme-sales-token');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'CrownOpsThemes.getStaff()==="THEME-B"');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'black');await cdp.eval(sid,'CrownOpsThemes.select("light")');
-   await cookie(sid,'TEST-theme-owner-token');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'CrownOpsThemes.getStaff()==="THEME-A"');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'ocean');
+   await cdp.eval(sid,'CrownOpsThemes.select("ocean")');await reloadStaff(sid,'THEME-A');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'ocean');await cdp.wait(sid,'window.__themePaints.length>0');assert(await cdp.eval(sid,'window.__themePaints.every(t=>t==="ocean")'),'Persisted theme flashed at first staff paint');
+   await cookie(sid,'TEST-theme-sales-token');await reloadStaff(sid,'THEME-B');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'black');await cdp.eval(sid,'CrownOpsThemes.select("light")');
+   await cookie(sid,'TEST-theme-owner-token');await reloadStaff(sid,'THEME-A');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'ocean');
    await cdp.eval(sid,'CrownOpsThemes.setLanguage("fr");navigate("settings")');await cdp.wait(sid,'document.querySelector(".staff-theme-settings [data-theme-label]")?.textContent==="Thème"');
    assert.deepEqual(await cdp.eval(sid,'Array.from(document.querySelector("#staff-theme-settings").options,o=>o.textContent)'),['Black View','Light View','Ocean Blue View']);await shot(sid,`settings-fr-${width}.png`);
    await cdp.eval(sid,'loginScreen()');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'black');
