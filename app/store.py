@@ -22,7 +22,7 @@ def _core_v1_authorizer(action, arg1, arg2, db_name, trigger_name):
         table = str(arg1 or '').lower()
         if table not in _CORE_V1_TABLES:
             return sqlite3.SQLITE_DENY
-        if table == 'manual_source_submissions' and action != sqlite3.SQLITE_INSERT:
+        if table in {'manual_source_submissions', 'audit'} and action != sqlite3.SQLITE_INSERT:
             return sqlite3.SQLITE_DENY
     denied = {getattr(sqlite3, name) for name in ('SQLITE_ATTACH','SQLITE_DETACH','SQLITE_ALTER_TABLE','SQLITE_DROP_TABLE','SQLITE_CREATE_TABLE','SQLITE_CREATE_TRIGGER','SQLITE_DROP_TRIGGER') if hasattr(sqlite3, name)}
     if action in denied:
