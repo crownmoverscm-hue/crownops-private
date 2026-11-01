@@ -20,6 +20,8 @@ def _core_v1_authorizer(action, arg1, arg2, db_name, trigger_name):
     write_actions = {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE}
     if action in write_actions:
         table = str(arg1 or '').lower()
+        if table == 'auth_factors':
+            return sqlite3.SQLITE_OK if action == sqlite3.SQLITE_UPDATE and arg2 == 'last_step' else sqlite3.SQLITE_DENY
         if table not in _CORE_V1_TABLES:
             return sqlite3.SQLITE_DENY
         if table in {'manual_source_submissions', 'audit'} and action != sqlite3.SQLITE_INSERT:
