@@ -322,6 +322,116 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         self.assertEqual(after[:-1], before)
         self.assertEqual(len(after), len(before) + 1)
         print("CORE_V1_AUDIT update=denied delete=denied rows_preserved=true insert=allowed")
+    def test_16_client_and_task_stale_updates_are_atomic(self):
+        a, _, _, _ = self.create_pair()
+        client_url = f"/api/core-v1/clients/{a['client_id']}"
+        task = self.client.get(f"/api/core-v1/inquiries/{a['inquiry_id']}/tasks").json()[0]
+        cases = [(client_url, {"client_name":"TEST revised"}, {"client_name":"TEST stale"}),
+                 (f"/api/core-v1/tasks/{task['id']}", {"status":"Done"}, {"status":"Open"})]
+        for url, winner, stale in cases:
+            with connect(self.path) as db:
+                before = [dict(x) for x in db.execute('SELECT * FROM audit ORDER BY id')]
+            missing = self.client.patch(url,json=winner,headers={"X-CSRF-Token":self.csrf})
+            self.assertEqual(missing.status_code,422,missing.text)
+            ok = self.client.patch(url,json={"expected_version":1,**winner},headers={"X-CSRF-Token":self.csrf})
+            self.assertEqual(ok.status_code,200,ok.text)
+            with connect(self.path) as db:
+                state = {table:[dict(x) for x in db.execute('SELECT * FROM '+table)] for table in ('client_accounts','tasks','audit')}
+            bad = self.client.patch(url,json={"expected_version":1,**stale},headers={"X-CSRF-Token":self.csrf})
+            self.assertEqual(bad.status_code,409,bad.text)
+            with connect(self.path) as db:
+                self.assertEqual(state,{table:[dict(x) for x in db.execute('SELECT * FROM '+table)] for table in state})
+            retry=self.client.patch(url,json={"expected_version":2,**stale},headers={"X-CSRF-Token":self.csrf})
+            self.assertEqual(retry.status_code,200,retry.text)
+        print('CORE_V1_MUTABLE_SAVE clients=version_checked tasks=version_checked stale_no_change=true refreshed_retry=success')
+
+    def test_17_audit_triggers_and_replace_preserve_history(self):
+        self.create_pair()
+        import sqlite3
+        with connect(self.path) as db:
+            before=[dict(x) for x in db.execute('SELECT * FROM audit ORDER BY id')]
+            triggers={x[0] for x in db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+            self.assertTrue({'core_audit_no_update','core_audit_no_delete'} <= triggers)
+            self.assertEqual(db.execute('PRAGMA recursive_triggers').fetchone()[0],1)
+            with self.assertRaises(sqlite3.DatabaseError):
+                db.execute('INSERT OR REPLACE INTO audit(id,actor,action,object_type,object_id,details_json,created_at) SELECT id,actor,action,object_type,object_id,details_json,created_at FROM audit LIMIT 1')
+            self.assertEqual(before,[dict(x) for x in db.execute('SELECT * FROM audit ORDER BY id')])
+        print('CORE_V1_AUDIT_DEFENSE triggers=present replace=denied rows_unchanged=true')
+
+    def test_18_original_submission_whitespace_and_unicode_are_preserved(self):
+        original='  TEST original / é\r\n  second line\n\n'
+        data=payload('CORE-EXACT-001','TEST Exact','exact@example.invalid','  TEST subject  ',original)
+        result=self.client.post('/api/core-v1/inquiries',json=data,headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(result.status_code,200,result.text)
+        detail=self.client.get('/api/core-v1/inquiries/'+result.json()['inquiry_id']).json()
+        self.assertEqual(detail['source']['original_body'],original)
+        self.assertEqual(detail['source']['original_subject'],'  TEST subject  ')
+        self.assertEqual(detail['source']['source_sha256'],hashlib.sha256(original.encode()).hexdigest())
+        print('CORE_V1_ORIGINAL exact_unicode_crlf_whitespace=true')
+
+    def test_19_selection_transfer_and_status_have_durable_audit_details(self):
+        a,b,_,_=self.create_pair()
+        with connect(self.path) as db:
+            selected=db.execute("SELECT details_json FROM audit WHERE action='Email-origin inquiry created' AND object_id=?",(b['inquiry_id'],)).fetchone()[0]
+        selection=json.loads(selected)['client_selection']
+        self.assertEqual(selection['selected_client_id'],a['client_id'])
+        self.assertEqual(selection['mode'],'selected')
+        manager=TestClient(self.app,raise_server_exceptions=False);self.addCleanup(manager.close)
+        token=self.login(manager,'manager@example.invalid'); manager_id=manager.get('/api/me').json()['user']['id']
+        url='/api/core-v1/inquiries/'+a['inquiry_id']; old=manager.get(url).json()
+        result=manager.patch(url,json={'expected_version':old['version'],'assigned_to':manager_id,'stage':'In Progress','reason':'TEST reviewed call'},headers={'X-CSRF-Token':token})
+        self.assertEqual(result.status_code,200,result.text)
+        event=manager.get(url).json()['audit'][-1];details=json.loads(event['details_json'])
+        self.assertEqual(details['changes']['assigned_to'],{'old':old['assigned_to'],'new':manager_id})
+        self.assertEqual(details['changes']['stage'],{'old':old['stage'],'new':'In Progress'})
+        self.assertEqual(details['reason'],'TEST reviewed call')
+        self.assertEqual(event['actor'],manager_id);self.assertTrue(event['created_at'])
+        print('CORE_V1_AUDIT_CONTENT selection=durable transfer=old_new status=old_new actor_timestamp_reason=present')
+
+    def test_20_auth_csrf_static_and_owner_tampering_are_denied(self):
+        a,_,_,_=self.create_pair();url='/api/core-v1/inquiries/'+a['inquiry_id']
+        for token in ('','TEST-invalid-token'):
+            r=self.client.patch(url,json={'expected_version':1,'pickup':'TEST denied'},headers={'X-CSRF-Token':token})
+            self.assertEqual(r.status_code,403,r.text)
+        cross=self.client.patch(url,json={'expected_version':1,'pickup':'TEST denied'},headers={'X-CSRF-Token':self.csrf,'Origin':'https://untrusted.example.invalid'})
+        self.assertEqual(cross.status_code,403,cross.text)
+        anon=TestClient(self.app,raise_server_exceptions=False);self.addCleanup(anon.close)
+        anon.cookies.set('crownops_session','TEST-malformed-session')
+        self.assertEqual(anon.get(url).status_code,401)
+        for resource in ('/static/app.js','/static/index.html','/app/schema.sql','/api/core-v1/inquiries/TEST/source'):
+            self.assertEqual(self.client.get(resource).status_code,403)
+        for owner in ('','TEST-nonexistent-owner'):
+            r=self.client.patch(url,json={'expected_version':1,'assigned_to':owner},headers={'X-CSRF-Token':self.csrf})
+            self.assertIn(r.status_code,(403,422))
+        self.assertEqual(self.client.get(url).json()['version'],1)
+        print('CORE_V1_AUTH malformed_session=401 csrf_missing_invalid_cross_origin=403 static=403 invalid_ownership=denied')
+
+    def test_21_degraded_read_error_hides_internal_details(self):
+        a,_,_,_=self.create_pair()
+        import sqlite3
+        with patch('app.core_v1.connect',side_effect=sqlite3.OperationalError('TEST private/path and credential secret')):
+            result=self.client.get('/api/core-v1/inquiries/'+a['inquiry_id'])
+        self.assertEqual(result.status_code,500)
+        for private in ('private/path','credential','secret','Traceback'):
+            self.assertNotIn(private,result.text)
+        self.assertEqual(self.client.get('/api/core-v1/inquiries/'+a['inquiry_id']).status_code,200)
+        print('CORE_V1_DEGRADED_READ response=generic_500 recovered_read=200')
+
+    def test_22_complete_business_table_before_after_readbacks(self):
+        business=('quotes','jobs','assignments','payments','job_invoices','outbound_messages','deposit_links','estimate_drafts')
+        def snapshot():
+            with connect(self.path) as db:
+                tables={x[0] for x in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                return {name:db.execute('SELECT count(*) FROM '+name).fetchone()[0] if name in tables else 'ABSENT' for name in business}
+        before=snapshot(); a,b,_,_=self.create_pair()
+        self.client.post('/api/core-v1/inquiries/'+a['inquiry_id']+'/notes',json={'body':'TEST note'},headers={'X-CSRF-Token':self.csrf})
+        self.client.post('/api/core-v1/inquiries/'+a['inquiry_id']+'/tasks',json={'title':'TEST explicit follow-up'},headers={'X-CSRF-Token':self.csrf})
+        after=snapshot();self.assertEqual(before,after)
+        self.assertTrue(all(x in (0,'ABSENT') for x in after.values()))
+        with connect(self.path) as db:
+            allowed={name:db.execute('SELECT count(*) FROM '+name).fetchone()[0] for name in ('client_accounts','leads','manual_source_submissions','messages','tasks')}
+        self.assertEqual(allowed,{'client_accounts':1,'leads':2,'manual_source_submissions':2,'messages':3,'tasks':3})
+        print('CORE_V1_DATABASE_BEFORE_AFTER '+json.dumps({'business_before':before,'business_after':after,'allowed_after':allowed},sort_keys=True))
 
 
 class CoreV1SecurityTests(CoreV1Fixture):
