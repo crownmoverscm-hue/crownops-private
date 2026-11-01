@@ -5,16 +5,16 @@
 :root{font:16px system-ui;color:#171717;background:#f5f3ef}body{margin:0}header{background:#151515;color:white;padding:1rem 1.4rem;border-bottom:4px solid #bd4e0e}main{max-width:1000px;margin:1.2rem auto;padding:0 1rem}.card{background:white;border:1px solid #ddd;border-radius:10px;padding:1rem;margin:1rem 0}label{display:block;margin:.7rem 0}input,textarea,select{box-sizing:border-box;width:100%;padding:.65rem;border:1px solid #888;border-radius:5px;font:inherit}textarea{min-height:110px}button{padding:.7rem 1rem;border:0;border-radius:5px;background:#bd4e0e;color:#fff;font:inherit;cursor:pointer}button.secondary{background:#444}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem}.row{border-top:1px solid #ddd;padding:.8rem;cursor:pointer}.muted{color:#555}.status{min-height:1.4rem;color:#8a2500;white-space:pre-wrap}.hidden{display:none!important}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:.8rem}@media(max-width:560px){main{padding:0 .6rem}}
 </style>
 <header><strong>CrownOps Core v1</strong> · Manual email-origin inquiries</header>
-<main>
-<section id="login" class="card"><h1>Sign in</h1><form id="login-form"><label>Email<input name="email" type="email" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><label>MFA code, if enabled<input name="mfa_code" inputmode="numeric" autocomplete="one-time-code"></label><button>Sign in</button></form></section>
+<main><noscript>JavaScript is required for secure form submission. / JavaScript est requis pour transmettre les formulaires.</noscript>
+<section id="login" class="card"><h1>Sign in</h1><form id="login-form" method="post" action="/api/login"><label>Email<input name="email" type="email" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><label>MFA code, if enabled<input name="mfa_code" inputmode="numeric" autocomplete="one-time-code"></label><button disabled>Sign in / Connexion</button></form></section>
 <section id="workspace" class="hidden">
 <div class="card"><button id="logout" class="secondary">Sign out</button> <button id="refresh" class="secondary">Refresh inquiries</button><span id="who"></span><p class="status" id="status" role="status"></p></div>
-<div class="card"><h1>Record an email inquiry</h1><form id="inquiry-form">
+<div class="card"><h1>Record an email inquiry</h1><form id="inquiry-form" method="post" action="/api/core-v1/inquiries">
 <div class="grid"><label>Client name<input name="client_name" required></label><label>Email<input name="email" type="email"></label><label>Phone<input name="phone"></label></div>
 <label>Existing client ID (when matching an existing client)<input name="client_id"></label>
 <div class="grid"><label>Service type<input name="service_type" value="Moving"></label><label>Requested date<input name="move_date" type="date"></label><label>Pickup<input name="pickup"></label><label>Destination<input name="dropoff"></label></div>
 <label>Original email subject<input name="subject"></label><label>Original email submission<textarea name="body" required></textarea></label>
-<button>Save inquiry and preserve source</button>
+<button disabled>Save inquiry and preserve source / Enregistrer et préserver</button>
 </form></div>
 <div class="grid"><section class="card"><h2>Inquiries</h2><div id="inquiries"></div></section><section id="detail" class="card"><h2>Selected inquiry</h2><p>Select an inquiry to review.</p></section></div>
 </section></main><script src="/core-v1.js" defer></script></html>
