@@ -627,6 +627,7 @@ class CorePilotStartupTests(unittest.TestCase):
             with connect(self.path) as db:return [tuple(x) for x in db.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")]
         before=schema()
         with patch.dict(os.environ,self.valid),patch('app.worker.tick') as worker,patch('app.estimate_delivery.poll_estimates') as estimates,patch('app.invoice_payments.poll_quickbooks_receipts') as receipts,patch('app.providers.maintain_connections') as providers:
+            with self.assertRaises(RuntimeError):create_app(self.path)
             app=create_pilot_app()
             with TestClient(app,base_url='https://core-pilot.example.invalid',raise_server_exceptions=False) as client:
                 self.assertEqual(client.get('/api/health').status_code,200)
@@ -653,6 +654,8 @@ class CorePilotStartupTests(unittest.TestCase):
             with self.subTest(key=key,value=value if 'KEY' not in key else 'redacted'),patch.dict(os.environ,{**self.valid,key:value}),patch('app.main.initialize') as legacy,patch('app.production.validate_runtime_storage') as legacy_storage:
                 with self.assertRaises(RuntimeError):create_pilot_app()
                 with self.assertRaises(RuntimeError):create_app(self.path,core_pilot=True)
+                if os.environ.get("CROWNOPS_ENV")=="pilot":
+                    with self.assertRaises(RuntimeError):create_app(self.path)
                 legacy.assert_not_called();legacy_storage.assert_not_called()
         print('CORE_V1_D3_INVALID contradictory_profile_env_external_worker_cookie_url_key_path=refused legacy_fallback=never_called')
 
