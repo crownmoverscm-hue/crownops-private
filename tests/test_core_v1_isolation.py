@@ -648,7 +648,7 @@ class CorePilotStartupTests(unittest.TestCase):
 
     def test_34_d3_invalid_and_contradictory_flags_never_fall_back(self):
         from app.core_pilot import create_pilot_app
-        cases=[('CROWNOPS_PROFILE','full'),('CROWNOPS_ENV','production'),('CROWNOPS_ENV','test'),('CROWNOPS_ALLOW_EXTERNAL','1'),('CROWNOPS_RUN_WORKER','1'),('CROWNOPS_PILOT_ACK','yes'),('CROWNOPS_SECURE_COOKIES','0'),('CROWNOPS_PUBLIC_URL','http://core-pilot.example.invalid'),('CROWNOPS_SECRET_KEY','TEST-invalid-key'),('CROWNOPS_DB','relative.sqlite3')]
+        cases=[('CROWNOPS_PROFILE','full'),('CROWNOPS_ENV','production'),('CROWNOPS_ENV','test'),('CROWNOPS_ALLOW_EXTERNAL','1'),('CROWNOPS_RUN_WORKER','1'),('CROWNOPS_PILOT_ACK','yes'),('CROWNOPS_SECURE_COOKIES','0'),('CROWNOPS_PUBLIC_URL','http://core-pilot.example.invalid'),('CROWNOPS_PUBLIC_URL','https://bad host.invalid'),('CROWNOPS_PUBLIC_URL','https://core-pilot.example.invalid:bad'),('CROWNOPS_SECRET_KEY','TEST-invalid-key'),('CROWNOPS_DB','relative.sqlite3')]
         for key,value in cases:
             with self.subTest(key=key,value=value if 'KEY' not in key else 'redacted'),patch.dict(os.environ,{**self.valid,key:value}),patch('app.main.initialize') as legacy,patch('app.production.validate_runtime_storage') as legacy_storage:
                 with self.assertRaises(RuntimeError):create_pilot_app()
