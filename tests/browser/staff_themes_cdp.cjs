@@ -38,10 +38,11 @@ class CDP{
    for(const theme of ['black','light','ocean']){
     await cdp.eval(sid,`(()=>{const s=document.querySelector('#staff-theme-nav');s.value=${JSON.stringify(theme)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await cdp.wait(sid,`document.documentElement.dataset.staffTheme===${JSON.stringify(theme)}`);
-    if(width<600){await cdp.eval(sid,'document.querySelector("[data-action=menu]").click()');await cdp.wait(sid,'document.querySelector(".sidebar").classList.contains("open")');}
+    if(width<600){await cdp.eval(sid,'document.querySelector("[data-action=menu]").click()');await cdp.wait(sid,'document.querySelector(".sidebar").classList.contains("open") && Math.abs(document.querySelector(".sidebar").getBoundingClientRect().left)<1');}
     assert(!(await cdp.eval(sid,'document.documentElement.scrollWidth>innerWidth+1')),'Horizontal overflow');
     const branding=await cdp.eval(sid,`(()=>{const e=document.querySelector('.sidebar .brand-icon'),s=getComputedStyle(e),img=e.querySelector('img');return {padding:s.paddingTop,width:e.getBoundingClientRect().width,src:img.getAttribute('src'),fit:getComputedStyle(img).objectFit,filter:getComputedStyle(img).filter};})()`);
     assert.equal(branding.padding,'8px');assert(branding.src.includes('/static/icon.svg'));assert.equal(branding.fit,'contain');assert.equal(branding.filter,'none');
+    if(width<600)assert(await cdp.eval(sid,'(()=>{const r=document.querySelector(".sidebar .brand-icon").getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.width>=60;})()'),'Mobile logo must be fully visible after drawer transition');
     await shot(sid,`${width<600?'mobile':'desktop'}-${theme}.png`);
     if(width===1440&&theme==='black')await shot(sid,'logo-padding-closeup.png','.sidebar .brand');
     if(width<600){assert(await cdp.eval(sid,'!!document.querySelector(".finish-mobile-brand .staff-theme-mobile-subtitle")'));await cdp.eval(sid,'document.querySelector("[data-workspace-close-menu]").click()');}
