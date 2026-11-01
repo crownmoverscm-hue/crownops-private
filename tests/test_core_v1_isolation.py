@@ -418,12 +418,15 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         print('CORE_V1_DEGRADED_READ response=generic_500 recovered_read=200')
 
     def test_22_complete_business_table_before_after_readbacks(self):
-        business=('quotes','jobs','assignments','payments','job_invoices','outbound_messages','deposit_links','estimate_drafts')
+        business=('quotes','jobs','assignments','payments','job_invoices','outbound_messages','deposit_links','payment_links','intake_drafts','invoice_revisions','invoice_payment_allocations','invoice_deposit_reviews','invoice_change_orders','qbo_estimate_deliveries','portal_detail_drafts','payroll_drafts','job_handoffs','invoice_access_invites','invoice_access_sessions','action_assignments')
         def snapshot():
             with connect(self.path) as db:
                 tables={x[0] for x in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 return {name:db.execute('SELECT count(*) FROM '+name).fetchone()[0] if name in tables else 'ABSENT' for name in business}
-        before=snapshot(); a,b,_,_=self.create_pair()
+        before=snapshot()
+        with connect(self.path) as db:
+            allowed_before={name:db.execute('SELECT count(*) FROM '+name).fetchone()[0] for name in ('client_accounts','leads','manual_source_submissions','messages','tasks')}
+        a,b,_,_=self.create_pair()
         self.client.post('/api/core-v1/inquiries/'+a['inquiry_id']+'/notes',json={'body':'TEST note'},headers={'X-CSRF-Token':self.csrf})
         self.client.post('/api/core-v1/inquiries/'+a['inquiry_id']+'/tasks',json={'title':'TEST explicit follow-up'},headers={'X-CSRF-Token':self.csrf})
         after=snapshot();self.assertEqual(before,after)
@@ -431,7 +434,32 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
         with connect(self.path) as db:
             allowed={name:db.execute('SELECT count(*) FROM '+name).fetchone()[0] for name in ('client_accounts','leads','manual_source_submissions','messages','tasks')}
         self.assertEqual(allowed,{'client_accounts':1,'leads':2,'manual_source_submissions':2,'messages':3,'tasks':3})
-        print('CORE_V1_DATABASE_BEFORE_AFTER '+json.dumps({'business_before':before,'business_after':after,'allowed_after':allowed},sort_keys=True))
+        with connect(self.path) as db:
+            records={table:[dict(row) for row in db.execute('SELECT * FROM '+table)] for table in ('client_accounts','leads','manual_source_submissions','messages','tasks')}
+            records['audit']=[dict(row) for row in db.execute("SELECT * FROM audit WHERE object_type IN ('client_accounts','leads','messages','tasks') ORDER BY id")]
+        print('CORE_V1_FICTIONAL_RECORDS '+json.dumps(records,sort_keys=True))
+        print('CORE_V1_DATABASE_BEFORE_AFTER '+json.dumps({'business_before':before,'business_after':after,'allowed_before':allowed_before,'allowed_after':allowed},sort_keys=True))
+
+    def test_23_invalid_creation_corrected_retry_is_exactly_once(self):
+        data=payload('CORE-CORRECT-001','TEST Corrected','not-an-email','TEST corrected','TEST original')
+        url='/api/core-v1/inquiries'
+        with connect(self.path) as db:
+            before={t:db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('client_accounts','leads','manual_source_submissions','messages','tasks','audit')}
+        bad=self.client.post(url,json=data,headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(bad.status_code,422,bad.text)
+        with connect(self.path) as db:
+            self.assertEqual(before,{t:db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in before})
+        data['client']['email']='corrected@example.invalid'
+        ok=self.client.post(url,json=data,headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(ok.status_code,200,ok.text)
+        with connect(self.path) as db:
+            winner={t:[dict(x) for x in db.execute('SELECT * FROM '+t)] for t in before}
+        retry=self.client.post(url,json=data,headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(retry.status_code,200,retry.text);self.assertTrue(retry.json()['duplicate'])
+        self.assertEqual(retry.json()['inquiry_id'],ok.json()['inquiry_id'])
+        with connect(self.path) as db:
+            self.assertEqual(winner,{t:[dict(x) for x in db.execute('SELECT * FROM '+t)] for t in winner})
+        print('CORE_V1_CORRECTED_CREATE invalid=422 invalid_no_change=true corrected=200 duplicate_retry=200 all_rows_unchanged=true')
 
 
 class CoreV1SecurityTests(CoreV1Fixture):
