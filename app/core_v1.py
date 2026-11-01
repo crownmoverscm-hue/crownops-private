@@ -405,6 +405,11 @@ def create_app_routes(app, path, auth, root, *, initialize_schema=True):
                 audit(db,u["id"],"Manual client created from inquiry","client_accounts",client_id,{"request_key":request_key})
             lead_id = uid("LEAD")
             client = one(db, "SELECT * FROM client_accounts WHERE id=?", (client_id,))
+            # A selected legacy client must not bypass D1 via stale stored contact fields.
+            canonical_mail = email(client["email"])
+            canonical_phone = structured_phone(client["phone"])
+            if not canonical_mail and not canonical_phone:
+                raise HTTPException(422,"Correct the selected client contact details before creating an inquiry.")
             t = now()
             rec = dict(id=lead_id,external_id=None,client_name=client["client_name"],email=client["email"],phone=client["phone"],
                 move_date=editable["move_date"],pickup=editable["pickup"],dropoff=editable["dropoff"],home_size=editable["home_size"],
