@@ -50,8 +50,21 @@ def validate_pilot_config(database_path=None):
             if p.is_symlink() or not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o600:
                 refused('private SQLite sidecar permissions')
     url = os.environ.get('CROWNOPS_PUBLIC_URL', '')
-    parsed = urlparse(url)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/'):
+    try:
+        import re
+        import ipaddress
+        parsed = urlparse(url)
+        host = parsed.hostname or ''
+        port = parsed.port
+        try:
+            ipaddress.ip_address(host)
+            valid_host = True
+        except ValueError:
+            labels = host.rstrip('.').split('.')
+            valid_host = len(host) <= 253 and all(re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label) for label in labels)
+        if parsed.scheme != 'https' or not valid_host or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/') or (port is not None and not 1 <= port <= 65535):
+            refused('CROWNOPS_PUBLIC_URL')
+    except ValueError:
         refused('CROWNOPS_PUBLIC_URL')
     try:
         from cryptography.fernet import Fernet
