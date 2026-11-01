@@ -32,7 +32,8 @@ html[data-crownops-staff] .nav-button{color:var(--staff-nav-text);background:tra
 html[data-crownops-staff] .nav-button:hover{background:var(--staff-nav-field);color:var(--staff-nav-text)}
 html[data-crownops-staff] .nav-button.active,html[data-crownops-staff] .nav-button[aria-current=page]{background:var(--staff-brand);color:#fff;border-color:var(--staff-brand)}
 html[data-crownops-staff] .sidebar .btn-text,html[data-crownops-staff] .sidebar .btn-icon{color:var(--staff-nav-text)}
-html[data-crownops-staff] .sidebar-foot{border-color:var(--staff-line)}
+html[data-crownops-staff] .sidebar-foot{border-color:var(--staff-line);background:var(--staff-nav)}
+html[data-crownops-staff] .sidebar .workspace-label{background:var(--staff-nav-field);color:var(--staff-nav-muted)}
 html[data-crownops-staff] .main,html[data-crownops-staff] .content{background:var(--staff-workspace)}
 html[data-crownops-staff] .topbar,html[data-crownops-staff] .panel,html[data-crownops-staff] dialog{background:var(--staff-card);color:var(--staff-ink);border-color:var(--staff-line)}
 html[data-crownops-staff] .panel-head,html[data-crownops-staff] .panel-body,html[data-crownops-staff] .panel-foot,html[data-crownops-staff] .modal-head,html[data-crownops-staff] .modal-foot{border-color:var(--staff-line)}

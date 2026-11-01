@@ -36,7 +36,17 @@
   el.append(label,s,help);return el;
  }
  function enhance(){
-  queued=false;if(!doc||staff===null)return;
+  queued=false;if(!doc)return;
+  // Existing staff renderers replace shell(); observe their authenticated state
+  // before the next paint instead of modifying authentication or business code.
+  try{
+   const shell=doc.querySelector('.app .sidebar');
+   const state=typeof S==='undefined'?null:S;
+   const inferred=shell&&state?.user?.id!==undefined&&state?.user?.id!==null?String(state.user.id):null;
+   if(inferred!==null&&inferred!==staff){staff=inferred;apply(read(staff));}
+   else if(!shell&&doc.querySelector('.login-screen')&&staff!==null){staff=null;apply('black');}
+  }catch(_){}
+  if(staff===null)return;
   const sidebar=doc.querySelector('.app .sidebar');
   if(sidebar&&!sidebar.querySelector('.staff-theme-nav'))sidebar.querySelector('.brand')?.insertAdjacentElement('afterend',createControl('nav'));
   const content=doc.getElementById('content');const title=content?.querySelector('h1')?.textContent||'';

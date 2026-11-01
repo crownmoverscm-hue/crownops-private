@@ -35,6 +35,10 @@ async def read_only(request,call_next):
  from starlette.responses import JSONResponse
  if request.method not in ('GET','HEAD'):return JSONResponse({'detail':'UI fixture forbids mutations'},status_code=403)
  return await call_next(request)
+@app.get('/theme-logo-comparison')
+async def logo_comparison():
+ from starlette.responses import HTMLResponse
+ return HTMLResponse('<!doctype html><html lang="en" data-crownops-staff data-staff-theme="black"><head><link rel="stylesheet" href="/static/staff_themes.css"><style>body{font:16px system-ui;padding:32px}#logo-comparison{width:760px;background:#fff;padding:24px;box-sizing:border-box;border-radius:16px}h1{font-size:23px}.comparison-row{display:flex;gap:52px;align-items:start}.comparison-row>div{width:310px}.sidebar{position:static!important;padding:0!important;background:transparent!important;border:0!important}.scaled{zoom:3}.brand{padding:0!important}.raw{width:192px;height:192px;object-fit:contain}p{color:#526170;font-size:14px}</style></head><body><section id="logo-comparison"><h1>Official crown: unchanged artwork, restored breathing room</h1><div class="comparison-row"><div><h2>Official asset</h2><img class="raw" src="/static/icon.svg" alt="Original Crown Movers crown and underline"><p>Original SVG, unchanged.</p></div><div><h2>Staff navigation container</h2><div class="sidebar"><div class="brand"><div class="brand-icon scaled"><img src="/static/icon.svg" alt="Same original Crown Movers crown"></div></div></div><p>3× view of a 64px container with 8px padding.<br>Same image source, proportions and orange gradient.</p></div></div></section></body></html>')
 def report():
  for line in sys.stdin:
   if line.strip()=='snapshot':

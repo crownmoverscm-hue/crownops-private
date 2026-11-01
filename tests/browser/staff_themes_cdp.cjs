@@ -29,6 +29,7 @@ class CDP{
   for(const width of [1440,390]){
    const {browserContextId}=await cdp.cmd('Target.createBrowserContext');const {targetId}=await cdp.cmd('Target.createTarget',{url:'about:blank',browserContextId});const {sessionId:sid}=await cdp.cmd('Target.attachToTarget',{targetId,flatten:true});lastSid=sid;
    for(const domain of ['Page','Runtime','Network'])await cdp.cmd(domain+'.enable',{},sid);await cdp.cmd('Fetch.enable',{patterns:[{urlPattern:'*'}]},sid);
+   await cdp.cmd('Page.addScriptToEvaluateOnNewDocument',{source:'window.__themePaints=[];requestAnimationFrame(function sample(){if(document.querySelector(".app .sidebar"))window.__themePaints.push(document.documentElement.dataset.staffTheme);if(window.__themePaints.length<12)requestAnimationFrame(sample);});'},sid);
    await cdp.cmd('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:width<600},sid);
    await cookie(sid,'TEST-theme-owner-token');await cdp.cmd('Page.navigate',{url:base},sid);
    await cdp.wait(sid,'!!document.querySelector("#staff-theme-nav") && !!document.querySelector("#content h1")');
@@ -59,6 +60,7 @@ class CDP{
     await cdp.eval(sid,'navigate('+JSON.stringify(view)+')');
     await cdp.wait(sid,'!!document.querySelector("#content h1")');
     assert(!(await cdp.eval(sid,'document.querySelector("#content").textContent.includes("This section could not load")')),'Staff view failed: '+view);
+    assert(!(await cdp.eval(sid,'document.documentElement.scrollWidth>innerWidth+1')),'Staff view overflow: '+view);
     if(width===1440)await shot(sid,'staff-'+view+'.png');
    }
    await cdp.eval(sid,'crmQuoteBuilder()');await cdp.wait(sid,'!!document.querySelector("#crm-quote-form")');
@@ -70,12 +72,13 @@ class CDP{
     if(width===1440)await shot(sid,'quote-editor-'+theme+'.png');
    }
    await cdp.eval(sid,'modal.close()');
-   await cdp.eval(sid,'CrownOpsThemes.select("ocean")');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'!!document.querySelector("#staff-theme-nav")');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'ocean');
+   await cdp.eval(sid,'CrownOpsThemes.select("ocean")');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'!!document.querySelector("#staff-theme-nav")');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'ocean');await cdp.wait(sid,'window.__themePaints.length>0');assert(await cdp.eval(sid,'window.__themePaints.every(t=>t==="ocean")'),'Persisted theme flashed at first staff paint');
    await cookie(sid,'TEST-theme-sales-token');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'CrownOpsThemes.getStaff()==="THEME-B"');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'black');await cdp.eval(sid,'CrownOpsThemes.select("light")');
    await cookie(sid,'TEST-theme-owner-token');await cdp.cmd('Page.reload',{},sid);await cdp.wait(sid,'CrownOpsThemes.getStaff()==="THEME-A"');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'ocean');
    await cdp.eval(sid,'CrownOpsThemes.setLanguage("fr");navigate("settings")');await cdp.wait(sid,'document.querySelector(".staff-theme-settings [data-theme-label]")?.textContent==="Thème"');
    assert.deepEqual(await cdp.eval(sid,'Array.from(document.querySelector("#staff-theme-settings").options,o=>o.textContent)'),['Black View','Light View','Ocean Blue View']);await shot(sid,`settings-fr-${width}.png`);
    await cdp.eval(sid,'loginScreen()');assert.equal(await cdp.eval(sid,'CrownOpsThemes.getTheme()'),'black');
+   if(width===1440){await cdp.cmd('Page.navigate',{url:base+'/theme-logo-comparison'},sid);await cdp.wait(sid,'!!document.querySelector("#logo-comparison .brand-icon img") && Array.from(document.images).every(i=>i.complete)');await shot(sid,'logo-comparison.png','#logo-comparison');}
    await cdp.cmd('Target.disposeBrowserContext',{browserContextId});
   }
   assert.equal(external.length,0);assert.equal(writes.length,0);assert.equal(errors.length,0,JSON.stringify(errors));
@@ -83,5 +86,5 @@ class CDP{
   const readback=JSON.parse(fs.readFileSync(path.join(out,'fixture-readback.json'),'utf8'));assert.equal(readback.external_attempts.length,0);assert(Object.values(readback.prohibited_business_counts).every(n=>n===0));
   fs.writeFileSync(path.join(out,'browser-result.json'),JSON.stringify({status:'PASS',browser:info.Browser,node:process.version,results,externalRequests:external,nonGetRequests:writes,pageErrors:errors,readback,scope:'Actual staff shell, Settings, account/reload persistence, mobile drawer, keyboard and theme-label EN/FR; seeded fictional sessions, not real authentication or business-flow acceptance.'},null,2));
  }catch(e){let state;try{if(cdp&&lastSid){state=await cdp.eval(lastSid,'({title:document.querySelector("#content h1")?.textContent,body:document.body.innerText.slice(0,1800)})');await cdp.cmd('Page.captureScreenshot',{format:'png'},lastSid).then(r=>fs.writeFileSync(path.join(out,'failure.png'),Buffer.from(r.data,'base64')));}}catch(_){}fs.writeFileSync(path.join(out,'browser-failure.json'),JSON.stringify({error:String(e),state,errors,external,writes},null,2));process.exitCode=1;
- }finally{if(cdp)cdp.ws.close();if(chrome)chrome.kill('SIGTERM');if(fixture)fixture.kill('SIGTERM');if(profile)fs.rmSync(profile,{recursive:true,force:true});}
+ }finally{if(cdp)cdp.ws.close();if(chrome)chrome.kill('SIGTERM');if(fixture)fixture.kill('SIGTERM');if(chrome){for(let n=0;n<30&&chrome.exitCode===null;n++)await delay(100);}if(profile){try{fs.rmSync(profile,{recursive:true,force:true,maxRetries:5,retryDelay:100});}catch(e){fs.writeFileSync(path.join(out,'cleanup-note.txt'),'Disposable browser profile cleanup incomplete; runner teardown removes it.');}}}
 })();
