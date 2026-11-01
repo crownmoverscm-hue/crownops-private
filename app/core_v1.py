@@ -179,7 +179,7 @@ def structured_phone(value):
             raise HTTPException(422, "Review the phone number formatting.")
     digits = re.sub(r"[^0-9]", "", candidate)
     if candidate.startswith("+"):
-        valid = 8 <= len(digits) <= 15 and not digits.startswith("0")
+        valid = 7 <= len(digits) <= 15 and not digits.startswith("0")
         if digits.startswith("1"):
             valid = len(digits) == 11 and digits[1] in "23456789" and digits[4] in "23456789"
     else:
@@ -242,7 +242,7 @@ def ensure_schema(path):
           BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'Audit history is append-only'); END;
         CREATE INDEX IF NOT EXISTS manual_source_lead ON manual_source_submissions(lead_id);
         """)
-        # Disposable Core v1 schema only; runtime remains restricted to CROWNOPS_ENV=test.
+        # Disposable schema initialization only; the dedicated pilot factory uses prequalified storage and skips DDL.
         for table in ("client_accounts", "tasks"):
             if "version" not in {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}:
                 db.execute("ALTER TABLE " + table + " ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
