@@ -123,6 +123,24 @@ def text(value, label, limit=4000, required=False):
     return value
 
 
+def original_text(value, label, limit):
+    if value is None:
+        value = ""
+    if not isinstance(value, str) or len(value) > limit:
+        raise HTTPException(422, f"{label} must be text of at most {limit} characters.")
+    return value
+
+
+def check_version(data, current, label):
+    expected = data.get("expected_version")
+    if type(expected) is not int or expected < 1:
+        raise HTTPException(422, "A positive integer expected_version is required.")
+    if expected != current["version"]:
+        raise HTTPException(409, {"message": f"{label} changed; refresh before saving.",
+                                  "current_version": current["version"]})
+    return expected
+
+
 def email(value):
     value = text(value or "", "Email", 254).lower()
     if value and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
@@ -172,8 +190,16 @@ def ensure_schema(path):
           BEFORE UPDATE ON manual_source_submissions BEGIN SELECT RAISE(ABORT,'Original source submissions are immutable'); END;
         CREATE TRIGGER IF NOT EXISTS manual_source_no_delete
           BEFORE DELETE ON manual_source_submissions BEGIN SELECT RAISE(ABORT,'Original source submissions are immutable'); END;
+        CREATE TRIGGER IF NOT EXISTS core_audit_no_update
+          BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT,'Audit history is append-only'); END;
+        CREATE TRIGGER IF NOT EXISTS core_audit_no_delete
+          BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'Audit history is append-only'); END;
         CREATE INDEX IF NOT EXISTS manual_source_lead ON manual_source_submissions(lead_id);
         """)
+        # Disposable Core v1 schema only; runtime remains restricted to CROWNOPS_ENV=test.
+        for table in ("client_accounts", "tasks"):
+            if "version" not in {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}:
+                db.execute("ALTER TABLE " + table + " ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
 
 
 def create_app_routes(app, path, auth, root):
@@ -189,7 +215,7 @@ def create_app_routes(app, path, auth, root):
         roles(u)
         query = "%" + text(q, "Search", 200).lower() + "%"
         with closing(connect(path)) as db:
-            return rows(db, """SELECT id,client_name,email,phone,language,created_at,updated_at
+            return rows(db, """SELECT id,client_name,email,phone,language,version,created_at,updated_at
                 FROM client_accounts WHERE lower(client_name||' '||email||' '||phone) LIKE ?
                 ORDER BY updated_at DESC LIMIT 200""", (query,))
 
@@ -225,7 +251,7 @@ def create_app_routes(app, path, auth, root):
     def get_client(cid: str, u=Depends(auth)):
         roles(u)
         with closing(connect(path)) as db:
-            client = one(db, "SELECT id,client_name,email,phone,language,created_at,updated_at FROM client_accounts WHERE id=?", (cid,))
+            client = one(db, "SELECT id,client_name,email,phone,language,version,created_at,updated_at FROM client_accounts WHERE id=?", (cid,))
             if not client:
                 raise HTTPException(404, "Client not found.")
             client["services"] = rows(db, """SELECT l.id,l.lead_type,l.source,l.stage,l.move_date,l.pickup,l.dropoff,l.created_at
@@ -235,13 +261,16 @@ def create_app_routes(app, path, auth, root):
     @app.patch("/api/core-v1/clients/{cid}")
     def update_client(cid: str, data: dict, u=Depends(auth)):
         roles(u)
-        allowed = {"client_name", "email", "phone", "language"}
+        allowed = {"expected_version", "client_name", "email", "phone", "language"}
         if not data or set(data) - allowed:
             raise HTTPException(422, "Only client contact fields may be updated.")
         with transaction(path) as db:
             current = one(db, "SELECT * FROM client_accounts WHERE id=?", (cid,))
             if not current:
                 raise HTTPException(404, "Client not found.")
+            expected = check_version(data, current, "Client")
+            if not (set(data) - {"expected_version"}):
+                raise HTTPException(422, "At least one client field is required.")
             name = text(data.get("client_name", current["client_name"]), "Client name", 150, True)
             mail = email(data.get("email", current["email"]))
             phone = text(data.get("phone", current["phone"]), "Phone", 80)
@@ -252,10 +281,11 @@ def create_app_routes(app, path, auth, root):
             if matches:
                 raise HTTPException(409, "These contact details match another client; review it before changing the record.")
             identity_key = "e:" + mail if mail else "p:" + phone_key(phone)
-            db.execute("""UPDATE client_accounts SET identity_key=?,client_name=?,email=?,phone=?,language=?,updated_at=?
+            db.execute("""UPDATE client_accounts SET identity_key=?,client_name=?,email=?,phone=?,language=?,updated_at=?,version=version+1
                 WHERE id=?""", (identity_key,name,mail,phone,language,now(),cid))
-            audit(db, u["id"], "Client contact fields updated", "client_accounts", cid)
-        return {"ok": True, "id": cid}
+            audit(db, u["id"], "Client contact fields updated", "client_accounts", cid,
+                  {"old_version":expected,"new_version":expected+1,"fields":sorted(set(data)-{"expected_version"})})
+        return {"ok": True, "id": cid, "version": expected+1}
 
     @app.post("/api/core-v1/inquiries")
     def create_inquiry(data: dict, u=Depends(auth)):
@@ -273,8 +303,8 @@ def create_app_routes(app, path, auth, root):
         kind = text(source.get("kind", "Email"), "Source type", 40, True)
         if kind.lower() not in ("email", "email-origin"):
             raise HTTPException(422, "Core v1 accepts manual email-origin inquiries only.")
-        original_subject = text(source.get("subject", ""), "Original subject", 300)
-        original_body = text(source.get("body", ""), "Original submission", 20000)
+        original_subject = original_text(source.get("subject", ""), "Original subject", 300)
+        original_body = original_text(source.get("body", ""), "Original submission", 20000)
         source_reference = text(source.get("secure_reference", ""), "Secure source reference", 1000)
         if not original_body and not source_reference:
             raise HTTPException(422, "Preserve the original submission or provide its secure reference.")
@@ -336,7 +366,9 @@ def create_app_routes(app, path, auth, root):
                 owner=u["id"],created_at=t))
             audit(db,u["id"],"Email-origin inquiry created","leads",lead_id,
                 {"client_id":client_id,"source_id":one(db,"SELECT id FROM manual_source_submissions WHERE lead_id=?",(lead_id,))["id"],
-                 "source_sha256":source_sha,"request_key":request_key})
+                 "source_sha256":source_sha,"request_key":request_key,
+                 "client_selection":{"mode":"selected" if client_id == data.get("client_id") else "new",
+                 "selected_client_id":client_id,"matched_fields":[k for k,v in (("email",mail and mail == client["email"]),("phone",phone_key(phone) and phone_key(phone)==phone_key(client["phone"]))) if v]}})
             return {"client_id":client_id,"inquiry_id":lead_id,"source_id":one(db,"SELECT id FROM manual_source_submissions WHERE lead_id=?",(lead_id,))["id"],
                     "message_id":msg_id,"review_task_id":task_id,"duplicate":False}
 
@@ -361,21 +393,21 @@ def create_app_routes(app, path, auth, root):
             l.pop("raw_json",None)
             l["source"]=one(db,"SELECT id,source_kind,source_reference,original_subject,original_body,source_sha256,created_at FROM manual_source_submissions WHERE lead_id=?",(iid,))
             l["notes"]=rows(db,"SELECT id,kind,subject,body,author,created_at FROM messages WHERE lead_id=? ORDER BY created_at",(iid,))
-            l["tasks"]=rows(db,"SELECT id,title,due_date,owner,status,created_at FROM tasks WHERE lead_id=? AND historical=0 ORDER BY created_at",(iid,))
+            l["tasks"]=rows(db,"SELECT id,title,due_date,owner,status,version,created_at FROM tasks WHERE lead_id=? AND historical=0 ORDER BY created_at",(iid,))
             l["audit"]=rows(db,"SELECT actor,action,object_type,object_id,details_json,created_at FROM audit WHERE object_id=? ORDER BY id",(iid,))
             return l
 
     @app.patch("/api/core-v1/inquiries/{iid}")
     def update_inquiry(iid: str, data: dict, u=Depends(auth)):
         roles(u)
-        allowed={"expected_version","stage","assigned_to","move_date","pickup","dropoff","home_size","boxes","pickup_access",
+        allowed={"reason","expected_version","stage","assigned_to","move_date","pickup","dropoff","home_size","boxes","pickup_access",
                  "dropoff_access","pickup_walk","dropoff_walk","inventory","heavy_items","notes"}
         if not data or set(data)-allowed:
             raise HTTPException(422,"Only inquiry, ownership, and service fields may be updated.")
         expected = data.get("expected_version")
         if type(expected) is not int or expected < 1:
             raise HTTPException(422,"A positive integer expected_version is required.")
-        if not (set(data) - {"expected_version"}):
+        if not (set(data) - {"expected_version", "reason"}):
             raise HTTPException(422,"At least one inquiry field is required.")
         with transaction(path) as db:
             l=one(db,"SELECT * FROM leads WHERE id=? AND id IN (SELECT lead_id FROM manual_source_submissions)",(iid,))
@@ -384,7 +416,7 @@ def create_app_routes(app, path, auth, root):
                 raise HTTPException(409,{"message":"Inquiry changed; refresh before saving.","current_version":l["version"]})
             values={}
             for key,value in data.items():
-                if key=="expected_version":
+                if key in {"expected_version","reason"}:
                     continue
                 if key=="stage":
                     value=text(value,"Status",40,True)
@@ -392,16 +424,20 @@ def create_app_routes(app, path, auth, root):
                         raise HTTPException(422,"Invalid Core v1 inquiry status.")
                 elif key=="assigned_to":
                     value=text(value,"Owner",100)
-                    if value and u["role"]=="sales" and value not in (u["id"],u["name"]):
+                    if not value:
+                        raise HTTPException(422,"Choose an inquiry owner.")
+                    if u["role"]=="sales" and value != u["id"]:
                         raise HTTPException(403,"Sales may assign only to themselves.")
-                    if value and u["role"] in {"owner","manager"} and not one(db,"SELECT id FROM users WHERE id=? AND active=1",(value,)):
+                    if value and u["role"] in {"owner","manager"} and not one(db,"SELECT id FROM users WHERE id=? AND active=1 AND role IN ('owner','manager','sales')",(value,)):
                         raise HTTPException(422,"Choose an active staff member.")
                 else:
                     value=text(value,key,4000)
                 values[key]=value
             sql="UPDATE leads SET "+",".join(k+"=?" for k in values)+",version=version+1,updated_at=? WHERE id=?"
             db.execute(sql,[*values.values(),now(),iid])
-            audit(db,u["id"],"Manual inquiry updated","leads",iid,{"fields":sorted(values)})
+            audit(db,u["id"],"Manual inquiry updated","leads",iid,
+                  {"fields":sorted(values),"changes":{k:{"old":l[k],"new":v} for k,v in values.items()},
+                   "old_version":expected,"new_version":expected+1,"reason":text(data.get("reason", ""),"Reason",1000)})
         return {"ok":True,"version":expected+1}
 
     @app.post("/api/core-v1/inquiries/{iid}/notes")
@@ -422,7 +458,7 @@ def create_app_routes(app, path, auth, root):
         with closing(connect(path)) as db:
             if not one(db,"SELECT id FROM manual_source_submissions WHERE lead_id=?",(iid,)):
                 raise HTTPException(404,"Inquiry not found.")
-            return rows(db,"SELECT id,title,due_date,owner,status,created_at FROM tasks WHERE lead_id=? AND historical=0 ORDER BY due_date",(iid,))
+            return rows(db,"SELECT id,title,due_date,owner,status,version,created_at FROM tasks WHERE lead_id=? AND historical=0 ORDER BY due_date",(iid,))
 
     @app.post("/api/core-v1/inquiries/{iid}/tasks")
     def add_task(iid: str, data: dict, u=Depends(auth)):
@@ -433,9 +469,11 @@ def create_app_routes(app, path, auth, root):
         with transaction(path) as db:
             if not one(db,"SELECT id FROM manual_source_submissions WHERE lead_id=?",(iid,)):
                 raise HTTPException(404,"Inquiry not found.")
-            if owner and u["role"]=="sales" and owner not in (u["id"],u["name"]):
+            if not owner:
+                raise HTTPException(422,"Choose a follow-up owner.")
+            if u["role"]=="sales" and owner != u["id"]:
                 raise HTTPException(403,"Sales may assign follow-up only to themselves.")
-            if owner and u["role"] in {"owner","manager"} and not one(db,"SELECT id FROM users WHERE id=? AND active=1",(owner,)):
+            if owner and u["role"] in {"owner","manager"} and not one(db,"SELECT id FROM users WHERE id=? AND active=1 AND role IN ('owner','manager','sales')",(owner,)):
                 raise HTTPException(422,"Choose active staff for this follow-up.")
             tid=uid("TASK")
             insert(db,"tasks",dict(id=tid,lead_id=iid,title=title,due_date=due,owner=owner,created_at=now()))
@@ -445,24 +483,32 @@ def create_app_routes(app, path, auth, root):
     @app.patch("/api/core-v1/tasks/{tid}")
     def edit_task(tid: str, data: dict, u=Depends(auth)):
         roles(u)
-        if not data or set(data)-{"status","owner"}:
+        if not data or set(data)-{"expected_version","status","owner"}:
             raise HTTPException(422,"Only follow-up status and owner may be updated.")
         with transaction(path) as db:
             task=one(db,"SELECT * FROM tasks WHERE id=? AND lead_id IN (SELECT lead_id FROM manual_source_submissions)",(tid,))
             if not task: raise HTTPException(404,"Follow-up not found.")
+            expected = check_version(data, task, "Follow-up")
+            if not (set(data) - {"expected_version"}):
+                raise HTTPException(422,"At least one follow-up field is required.")
             if "status" in data:
                 status=text(data["status"],"Status",20,True)
                 if status not in {"Open","Done"}: raise HTTPException(422,"Invalid follow-up status.")
                 db.execute("UPDATE tasks SET status=? WHERE id=?",(status,tid))
             if "owner" in data:
                 owner=text(data["owner"],"Owner",100)
-                if owner and u["role"]=="sales" and owner not in (u["id"],u["name"]):
+                if not owner:
+                    raise HTTPException(422,"Choose a follow-up owner.")
+                if u["role"]=="sales" and owner != u["id"]:
                     raise HTTPException(403,"Sales may assign follow-up only to themselves.")
-                if owner and u["role"] in {"owner","manager"} and not one(db,"SELECT id FROM users WHERE id=? AND active=1",(owner,)):
+                if owner and u["role"] in {"owner","manager"} and not one(db,"SELECT id FROM users WHERE id=? AND active=1 AND role IN ('owner','manager','sales')",(owner,)):
                     raise HTTPException(422,"Choose active staff for this follow-up.")
                 db.execute("UPDATE tasks SET owner=? WHERE id=?",(owner,tid))
-            audit(db,u["id"],"Follow-up updated","tasks",tid,{"fields":sorted(data)})
-        return {"ok":True}
+            db.execute("UPDATE tasks SET version=version+1 WHERE id=?",(tid,))
+            audit(db,u["id"],"Follow-up updated","tasks",tid,
+                  {"changes":{k:{"old":task[k],"new":data[k]} for k in data if k!="expected_version"},
+                   "old_version":expected,"new_version":expected+1})
+        return {"ok":True,"version":expected+1}
 
     @app.get("/api/core-v1/audit")
     def audit_history(limit: int=100, u=Depends(auth)):
