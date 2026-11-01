@@ -574,6 +574,15 @@ class CoreV1AcceptanceTests(CoreV1Fixture):
             result=self.client.patch(url,json={'expected_version':1,**changes},headers={'X-CSRF-Token':self.csrf});self.assertEqual(result.status_code,status,result.text)
         result=self.client.patch(url,json={'expected_version':2,'phone':'','email':'contact@example.invalid'},headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(result.status_code,200,result.text)
+        with connect(self.path) as db:
+            db.execute("UPDATE client_accounts SET phone='abc' WHERE id=?",(created.json()['id'],))  # Fictional legacy-data fixture only.
+        legacy=payload('D1-SELECTED-LEGACY','TEST Contact','contact@example.invalid','TEST','TEST original retains invalid phone abc',created.json()['id'])
+        rejected=self.client.post('/api/core-v1/inquiries',json=legacy,headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(rejected.status_code,422,rejected.text)
+        corrected=self.client.patch(url,json={'expected_version':3,'phone':'5145550196'},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(corrected.status_code,200,corrected.text)
+        accepted=self.client.post('/api/core-v1/inquiries',json=legacy,headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(accepted.status_code,200,accepted.text)
         print('CORE_V1_D1_PHONES canadian=accepted international=accepted malformed=rejected blank_with_email=accepted both_blank=rejected client_create_edit=validated format_preserved=true')
 
     def test_30_d1_date_edits_and_followup_dates_are_validated(self):
