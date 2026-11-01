@@ -153,6 +153,8 @@ def quote_document(q, lead):
 
 
 def create_app(database_path=None, *, core_pilot=False):
+    if not core_pilot and os.environ.get("CROWNOPS_ENV") == "pilot":
+        raise RuntimeError("Core pilot startup requires the dedicated app.core_pilot factory.")
     path=Path(database_path or os.environ.get('CROWNOPS_DB',str(ROOT/'instance'/'crownops.sqlite3')))
     if core_pilot:
         from .core_pilot import validate_pilot_config
