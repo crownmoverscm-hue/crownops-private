@@ -1,0 +1,49 @@
+name: Core v1 pilot release qualification
+on:
+  push:
+    branches: [release/core-v1-pilot-2026-11-09]
+permissions:
+  contents: read
+jobs:
+  focused-fictional:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Record isolated dependencies
+        env:
+          PIP_CONFIG_FILE: /dev/null
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+        run: |
+          mkdir -p evidence
+          python --version > evidence/python-version.txt
+          python -m pip install --only-binary=:all: --require-hashes --no-deps --report evidence/dependency-install.json -r tools/pilot/requirements-python313.lock
+          python -m pip check > evidence/pip-check.txt
+      - name: Release identity and application-only diff
+        run: python tools/pilot/build_release_evidence.py
+      - name: Affected startup smoke and maintenance composition only
+        env:
+          CROWNOPS_TEST_SOURCE: ${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          python tests/d01_guarded_process.py tests/test_d01_mfa_startup.py 2>&1 | tee evidence/startup-guarded.txt
+          python tools/pilot/tests/test_pilot_maintenance.py 2>&1 | tee evidence/maintenance-python313.txt
+          python tools/pilot/tests/test_cli_processes.py 2>&1 | tee evidence/cli-python313.txt
+      - name: Capture source checksums
+        if: always()
+        run: |
+          git diff --name-status 442d24892d75199816451775b5a174fc12ee1c5f > evidence/changed-files.txt
+          find tools/pilot tests/test_d01_mfa_startup.py tests/d01_guarded_process.py app/core_pilot.py app/security.py release -type f -not -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum > evidence/tool-source-sha256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-v1-pilot-release-${{ github.sha }}
+          path: evidence/
+          retention-days: 14

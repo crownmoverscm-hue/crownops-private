@@ -1,0 +1,81 @@
+Version: core-v1-pilot-2026-11-09-rc1. New tooling composition pending Muse review.
+Application logic is exactly D01-mfa-require-2; it is not redesigned here.
+
+Executables (separate local processes, never maintenance web endpoints):
+tools/pilot/maintenance/pilot_maintenance.py
+  provision: masked private terminal; exactly fixed Owner/Sales addresses
+  verify-ready: exactly two identities/roles and decryptable enabled MFA, FK/
+    integrity checks, returns role-to-staff-ID mapping (not auth credentials)
+  backup: SQLite API, quiescence record, empty upload inventory, Fernet archive,
+    versioned manifest with release/source pins, trusted receipt, no overwrite
+  verify-readback: compares separately retained receipt with downloaded receipt,
+    ciphertext hash AND byte size, decrypts/authenticates, checks manifest/pins,
+    SQLite integrity/FKs/MFA; creates no published database or provider request
+  restore: NEW destination only, verifies receipt/manifest/integrity/FKs, removes
+    sessions, advances replay counters without decreasing them, appends audit,
+    proves other bearer capability tables EMPTY, records pre/post fingerprints
+tools/pilot/qualified_d01/d01_provision.py, d01_revoke_sessions.py, d01_common.py
+  byte-identical independently reviewed require-2 tool files, retained for exact
+  offline provisioning and broader token revocation semantics. Full revoker
+  deletes sessions/invites/resets/portal/invoice/participation bearer capabilities,
+  expires pending approvals while preserving responded rows and historical audit.
+  It requires exclusive trusted offline access; do NOT race multiple invocations
+  against its destination or apply it to a live DB. Its prior independent seeded
+  matrix stands; this release only smoke-tests command compatibility. The
+  primary restore above is the no-overwrite/concurrent-publication-qualified path.
+
+Scope boundary: this is a fresh manual-inquiry pilot. The backup/restore path
+refuses unexpected financial/provider/file/token tables instead of silently
+carrying them into service. Unexpected legacy capabilities require the explicitly
+reviewed D-01 revocation path and scope reconciliation, not relaxing backup
+checks. It is not a general production recovery/migration utility. Older archive
+candidate labels/source pins are refused; do not relabel or auto-migrate them.
+
+Private inputs after separate execution approval only:
+Owned 0700 directories, owned 0600 app/backup key files, database and receipts.
+Backup key != app key. Never supply secret VALUES in argv, Git, chat or logs.
+Quiescence JSON: operation_id (owner unique ID), writer_stopped=true,
+uploads_disabled=true. This record is acknowledgment, NOT proof of writer stop.
+Verify actual process stop and inventory independently. Database-only coverage
+requires all private paths empty/disabled; storing a URL does not back up the
+external referenced original. Any missing external original blocks completeness.
+
+Proposed command shapes; substitute private PATHS, never key values:
+PYTHONPATH=/PINNED-SOURCE python /TOOLS/maintenance/pilot_maintenance.py verify-ready --database /PRIVATE/pilot.sqlite3 --app-key-file /APPKEY/app.key
+PYTHONPATH=/PINNED-SOURCE python /TOOLS/maintenance/pilot_maintenance.py backup --database /PRIVATE/pilot.sqlite3 --archive /BACKUPS/NEW-ID.enc --backup-key-file /BACKUPKEY/backup.key --app-key-file /APPKEY/app.key --uploads-directory /PRIVATE/uploads --receipt /BACKUPS/NEW-ID.json --quiescence-record /PRIVATE/quiescence.json
+PYTHONPATH=/PINNED-SOURCE python /TOOLS/maintenance/pilot_maintenance.py verify-readback --archive /READBACK/ID.enc --receipt /READBACK/ID.json --trusted-receipt /TRUSTED/ID.json --backup-key-file /BACKUPKEY/backup.key --app-key-file /APPKEY/app.key
+PYTHONPATH=/PINNED-SOURCE python /TOOLS/maintenance/pilot_maintenance.py restore --archive /READBACK/ID.enc --database /NEW-ISOLATED/recovered.sqlite3 --backup-key-file /BACKUPKEY/backup.key --app-key-file /APPKEY/app.key --receipt /TRUSTED/ID.json --recovery-receipt /NEW-ISOLATED/recovery.json
+
+Trusted receipt must have been retained independently at capture, not simply
+downloaded beside a potentially replaced archive. Use unique paths. The archive
+and receipt are individually atomic/no-overwrite, NOT an atomic pair. If receipt
+publication fails after archive success, preserve uncertain artifacts and
+reconcile operation ID/authenticated manifest; never blind retry/overwrite or
+invent a receipt. Same applies to DB+recovery receipt. Failure-injection tests
+cover normal exception boundaries, not actual host power loss, disk full or
+malicious same-UID file races. fsync/hard-link durability on Railway is untested.
+Memory encryption/snapshot cap 64 MiB: real memory/headroom/size/timing not proven.
+Ordinary temporary deletion is not forensic erasure. Raw-file SQLite access is
+trusted-operator access and can bypass authorizers; audit is not tamperproof.
+
+Focused qualification commands from source root (approved Python 3.13 deps):
+PYTHONPATH=. python tests/d01_guarded_process.py tests/test_d01_mfa_startup.py
+CROWNOPS_TEST_SOURCE=$PWD PYTHONPATH=. python tools/pilot/tests/test_pilot_maintenance.py
+CROWNOPS_TEST_SOURCE=$PWD PYTHONPATH=. python tools/pilot/tests/test_cli_processes.py
+
+New/affected tests: 15 maintenance methods, 12 intentional local child CLI
+processes (8 serial, 4 concurrent), and three startup smoke tests. 8-way generic
+publish test: 1 winner/7 denied plus sequential no-overwrite; complete archive
+thread race 4-way: 1 winner/3 denied; independent CLI race: 1 winner/3 denied.
+Source pins, wrong key, receipt hash/size, FK failure (including authenticated
+invalid snapshot), permissions/symlinks, interrupted publication and zero actual
+application network attempts are checked. All data reserved fictional; no real
+accounts/device enrollment/offsite connection. Parent intentionally launches
+local child processes; each child blocks/counts transport/DNS/subprocess attempts.
+Guarded instrumentation is local evidence, not a deployed firewall assertion.
+
+No historical 27-check or full accepted/D-01 investigation is repeated. New
+tests/modified backup pins need independent acceptance. Remaining source UI,
+French/security PARTIAL/NOT TESTED findings stay preserved. Three-theme branch
+is excluded. D-01 owner's enrollment-interface deferral does not waive real-
+device enrollment, password-only refusal and replay checks for BOTH accounts.

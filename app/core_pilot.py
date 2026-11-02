@@ -17,6 +17,7 @@ REQUIRED = {
     'CROWNOPS_RUN_WORKER': '0',
     'CROWNOPS_PILOT_ACK': 'manual-inquiry-only',
     'CROWNOPS_SECURE_COOKIES': '1',
+    'CROWNOPS_REQUIRE_MFA': '1',
 }
 
 

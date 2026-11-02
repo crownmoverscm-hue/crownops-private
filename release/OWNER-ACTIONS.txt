@@ -1,0 +1,93 @@
+FOR JONATHAN — DO NOT EXECUTE REAL SETUP UNTIL SEPARATELY APPROVED
+
+Target: limited manual-inquiry pilot, Monday November 9, 2026. Not a launch promise.
+Jonathan operates both accounts initially; Carl is excluded.
+Owner login: jonathanprobonas15@gmail.com
+Sales login: crownmovers.cm@gmail.com
+These are app identities only; no mailbox connection or Google sign-in.
+
+1. Send the final ZIP to Muse for targeted backup/tool/release-source review.
+   D-01 is already technically closed. Do not repeat the completed historical
+   27-check suite or the entire accepted investigation. Actual platform and
+   device checks still remain. This package does not authorize live actions.
+
+2. Approve the exact environment, cost, protected storage/bootstrap route,
+   offsite folder and retention only once blockers in RAILWAY-PROPOSAL.txt
+   and BUILD-AND-BOUNDARY.txt are resolved. No existing service is reused.
+
+3. AFTER real-account provisioning approval, privately prepare the two accounts
+   on a trusted owner computer. Use separate strong passwords in a password
+   manager. Use a different new random TOTP seed for each role; never reuse an
+   existing account's seed. Make two clearly named entries in real authenticator
+   apps: CrownOps Pilot Owner and CrownOps Pilot Sales. Standard parameters are
+   TOTP, SHA-1, six digits, 30 seconds. Use local manual secret entry or a locally
+   rendered QR only; no online QR service, screenshots in chat or emailed seeds.
+   A seed used to create an authenticator entry is a secret, never a report field.
+   Verify device clock accuracy. Apps may be on one device, but loss of that
+   device is a single-person custody risk. Two stored copies are not two people.
+
+4. Choose ONE reviewed provisioning route, not both. The unchanged qualified
+   D-01 provisioner is provided in tools/pilot/qualified_d01. It expects a private
+   0600 identities JSON under a 0700 directory, with owner/sales credentials and
+   seeds, plus the app secret privately supplied in the environment; no secret
+   value belongs in argv or shell history. Its input shape is documented in the
+   script, but no filled real input file belongs in this package or chat.
+   The aligned pilot_maintenance provision command is the alternative masked
+   terminal route; its CLI fixes the two emails, asks privately for credentials,
+   private seed-file paths and CURRENT real-device confirmation codes. This
+   aligned route needs Muse's targeted acceptance before real use. It must
+   refuse if the displayed codes do not match, secrets/passwords are shared,
+   schema/pins fail or the destination exists. Never use test fixture scripts
+   for real provisioning. Never create extra users, demo data or pricing seeds.
+
+5. Keep a NEW app encryption key and a DIFFERENT backup key. The app key must
+   decrypt the enrolled factors, not merely pass a format check. Record both
+   privately in two separately secured owner recovery locations. Keep recovery
+   key custody separate from encrypted backups and the app service; the web
+   service never receives the backup key. No secrets, recovery codes or QR data
+   go in chat/logs/Git/builds. Delete temporary enrollment inputs only after
+   personally verifying secure recovery copies (ordinary deletion is not wipe).
+
+6. Run the reviewed offline verify-ready command before locked startup. It
+   checks exactly the two approved identities/roles, two enabled decryptable
+   factors, source-data scope and integrity/FK results. Its staff_ids output is
+   non-authentication data; privately retain the Sales staff ID for assignment.
+   Run the dedicated factory with every D3 guard and CROWNOPS_REQUIRE_MFA=1.
+   Never use the normal app's default startup or disabled enrollment endpoints.
+
+7. AFTER approved isolated deployment, use fictional inquiries only. For EACH
+   account: password-only -> refusal; deliberately wrong six-digit code ->
+   refusal; wait for a fresh device code -> successful login with correct role.
+   To test replay, log out, and while that accepted code is still current try it
+   once again -> refusal. Wait for the NEXT code -> login succeeds. Record only
+   role, test name, timestamp and success/refusal. Never write down the code,
+   password, seed, session cookie or CSRF value. If the code rolled over before
+   retry, that is not valid same-step replay evidence; schedule a new controlled
+   attempt. Avoid repeated wrong attempts that trigger normal rate limiting.
+
+8. Fictional workflow (use reserved addresses, never compare against production):
+   a. Sign in as Owner. Create TEST Alex Example, client@example.invalid,
+      phone 514-555-0101; create a Moving inquiry with a valid future date.
+   b. Original subject: TEST CORE-MAIL-001. Original email body:
+      TEST ONLY: Please follow up about my move. This is fictional information.
+      Save once; expand Preserved original submission and compare exact text.
+   c. Open inquiry details. Enter the Sales staff ID from verify-ready into
+      Owner staff ID, choose In Progress, and Save changes. The accepted UI
+      uses staff IDs here; do not expect an unimplemented employee picker.
+   d. Sign in as Sales. Open that inquiry, add internal note TEST called for
+      clarification. Confirm it is labelled Internal note, not customer email.
+   e. Add follow-up TEST call back, with a valid date. After the fictional call,
+      click Complete / Terminer and confirm the TASK shows Done. Inquiry status
+      uses Closed when finished; there is no inquiry status called Done.
+   f. Refresh/sign out/back in: source, ownership, note and task remain. Preserve
+      the original; do not edit it to correct structured fields. If a stale-save
+      conflict appears, refresh/review before retrying. Enter another distinct
+      inquiry for the same client only after matching the existing client ID.
+
+9. Run the separately approved ACTUAL offsite backup/restore drill using this
+   fictional pilot data. Retain the original receipt separately, upload encrypted
+   archive/receipt only, retrieve and verify, restore to a NEW isolated path,
+   verify revoked cookies fail, fresh MFA for both succeeds, and original/audit
+   history is preserved. Do not reuse or overwrite the live DB path. Measure time,
+   archive size and memory. No customer record is allowed before actual readiness
+   and separate written pilot authorization. No automatic integration activation.

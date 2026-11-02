@@ -1,0 +1,37 @@
+Pilot release source is based on accepted 442d248 and changes exactly two
+application files, app/security.py and app/core_pilot.py, to the byte-identical
+D01-mfa-require-2 versions reviewed by Muse. Test updates are carried separately.
+No theme, quote, pricing, booking, integration or broader stack is imported.
+
+The image recipe is PROPOSED, not executed. Existing default Dockerfile and
+production startup are unchanged. There is no Docker executable in DEV's local
+workspace. No container image download, apt install or registry credential use
+is attempted. Before image build, obtain separate approval for an immutable
+Python 3.13 Linux x86_64 base digest. Never silently use a floating base tag.
+
+Approved official-PyPI wheel acquisition, separate from qualification:
+  python3.13 -m pip download --only-binary=:all: --require-hashes --no-deps --dest build/wheelhouse -r tools/pilot/requirements-python313.lock
+All 35 exact distributions are pinned by URL and SHA-256. Use only Python 3.13
+Linux x86_64; other platforms need separately reviewed compatible distribution
+hashes. requirements-offline.lock uses identical versions/hashes without direct
+URLs, so the proposed offline image build cannot fetch a URL despite --no-index.
+
+After approved acquisition/base availability, proposed build command:
+  docker build --pull=false --network=none --build-arg PYTHON_BASE=<approved-local-image@sha256:digest> -f release/Dockerfile.pilot -t crownops-core-v1-pilot:<candidate-sha> .
+Record base digest, wheel hashes, exact command, build output, resulting image
+digest, SBOM/package list, and verify guarded startup using disposable storage.
+Pinned inputs enable reproduction; a byte-identical OCI image is NOT claimed
+without controlled build timestamps/metadata and an actual second build.
+
+The recipe's build-time chown does NOT fix root-owned Railway mounted volumes.
+The actual mounted private directory must be provisioned for UID 10001 through
+a separately approved bounded maintenance/bootstrap context; app must not run
+permanently as root. Volume is not present during build or pre-deploy.
+No root bootstrap code is introduced here. If the platform path is unavailable,
+STOP rather than setting RAILWAY_RUN_UID=0 for the web process or chmod 0777.
+
+The supplied archive is a sanitized review mirror with one retained historical
+SETUP_TOKEN_HASH redaction in app/main.py. It is explicitly not a byte-exact
+git archive or deployment image. Final provenance lists original vs exported
+hashes. App/main.py is unchanged in the branch. CI executes the actual commit.
+No secret, DB, uploads or real keys may enter a build context or artifact.

@@ -1,0 +1,21 @@
+# PROPOSED OFFLINE BUILD ONLY. Not built/deployed by this change.
+# PYTHON_BASE must be an owner-approved local Python 3.13 x86_64 image by digest.
+# Build with --pull=false --network=none after approved wheel acquisition.
+ARG PYTHON_BASE
+FROM ${PYTHON_BASE}
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY tools/pilot/requirements-offline.lock /tmp/requirements.lock
+COPY build/wheelhouse /wheels
+RUN python -m pip install --no-index --find-links=/wheels --no-deps --require-hashes --only-binary=:all: -r /tmp/requirements.lock \
+    && python -m pip check \
+    && useradd --uid 10001 --create-home crown \
+    && mkdir -p /data/private /data/uploads \
+    && chown -R crown:crown /data \
+    && chmod 0700 /data/private /data/uploads
+COPY app /app/app
+COPY config /app/config
+COPY tools/pilot /app/tools/pilot
+USER 10001
+EXPOSE 8080
+CMD ["/bin/sh","-c","umask 0077; exec python -m uvicorn app.core_pilot:create_pilot_app --factory --host 0.0.0.0 --port ${PORT:-8080} --workers 1"]
