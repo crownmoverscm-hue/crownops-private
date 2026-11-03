@@ -1,0 +1,71 @@
+name: G5 no-CLI browser-source RESTRICTED review
+
+on:
+  push:
+    branches:
+      - review/g5-no-cli-browser-source-2026-11-03
+  workflow_dispatch:
+    inputs:
+      approved_networked_wheel_fetch:
+        description: 'Owner security approval recorded? Explicitly acknowledge 35 hash-pinned PyPI wheels.'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  static-review-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove exact reviewed app and maintenance code unchanged
+        run: |
+          set -euo pipefail
+          git diff --exit-code 098edf780d454b9032684075f77d348ce6a9bb55 HEAD -- app config tools/pilot g5/Dockerfile.g5 g5/CONTEXT-PINS.json .dockerignore
+          test -e .dockerignore
+          test ! -e release/Dockerfile.pilot
+      - name: Run only new source/fictional startup checks
+        run: |
+          python3 -m unittest discover -s tests -p test_g5_browser_source.py -v
+      - name: Scope restriction
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          changed=set(subprocess.check_output(['git','diff','--name-only','098edf780d454b9032684075f77d348ce6a9bb55','HEAD'],text=True).splitlines())
+          allowed={'g5/Dockerfile.g5-browser-source','g5/fictional_web_entry.py','tests/test_g5_browser_source.py','.github/workflows/g5-no-cli-review.yml','release/G5-NO-CLI-REVIEW-NOTES.md'}
+          assert changed <= allowed, 'Out-of-scope files: '+str(changed-allowed)
+          print('G5_STATIC_SCOPE_OK',len(changed))
+          PY
+
+  approved-container-build:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.approved_networked_wheel_fetch == true }}
+    needs: static-review-only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Pinned digest, hash-checked source-only Docker build; no Railway calls
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/g5-no-cli
+          docker build --pull=true --file g5/Dockerfile.g5-browser-source --tag crownops-g5-browser-review:test . > evidence/g5-no-cli/build.log 2>&1
+          docker image inspect --format '{{.Id}}' crownops-g5-browser-review:test > evidence/g5-no-cli/final-image-id.txt
+          docker run --rm --network=none --read-only --tmpfs /tmp:rw,nosuid,nodev --security-opt no-new-privileges --cap-drop ALL crownops-g5-browser-review:test python -c 'import os,sys; assert os.getuid()==10001 and os.getgid()==10001; assert sys.version_info[:3]==(3,13,18); print("G5_NONROOT_OK")' > evidence/g5-no-cli/runtime.txt
+          sha256sum g5/Dockerfile.g5-browser-source tools/pilot/requirements-python313.lock tools/pilot/requirements-offline.lock > evidence/g5-no-cli/input-hashes.txt
+          git rev-parse HEAD > evidence/g5-no-cli/source-commit.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g5-no-cli-review-${{ github.sha }}
+          path: evidence/g5-no-cli/
+          retention-days: 7
