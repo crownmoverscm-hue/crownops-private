@@ -1,0 +1,65 @@
+name: G5 isolated container qualification
+on:
+  push:
+    branches: [test/g5-container-qualification]
+permissions:
+  contents: read
+jobs:
+  bounded-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm unchanged accepted application and approved runner
+        run: |
+          mkdir -p evidence/g5
+          git diff --exit-code a56c575dea67924c233934318fc5162ee01f5eef -- app tools/pilot release
+          git rev-parse HEAD > evidence/g5/overlay-commit.txt
+          docker version > evidence/g5/docker-version.txt
+          python3 --version > evidence/g5/acquisition-python-version.txt
+      - name: Acquire only approved image with strict redirect policy
+        run: python3 g5/acquire_base.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Download approved pinned binary wheels separately
+        env:
+          PIP_CONFIG_FILE: /dev/null
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+        run: |
+          mkdir -p build/wheelhouse
+          python -m pip download --only-binary=:all: --require-hashes --no-deps --dest build/wheelhouse -r tools/pilot/requirements-python313.lock > evidence/g5/wheel-download.txt
+          sha256sum build/wheelhouse/* > evidence/g5/wheel-sha256.txt
+      - name: Load verified single base and build once offline
+        env:
+          DOCKER_BUILDKIT: '0'
+        run: |
+          set -o pipefail
+          docker load -i build/approved-python.tar > evidence/g5/base-load.txt
+          BASE_CONFIG=$(python -c "import json;print(json.load(open('evidence/g5/base-acquisition.json'))['local_image_config_digest'])")
+          test "$(docker image inspect --format '{{.Id}}' crownops-approved-python:3.13.18)" = "$BASE_CONFIG"
+          docker build --pull=false --network=none --build-arg PYTHON_BASE="$BASE_CONFIG" -f g5/Dockerfile.g5 -t crownops-g5-qualified:test . 2>&1 | tee evidence/g5/build.txt
+          docker image inspect --format '{{.Id}}' crownops-g5-qualified:test > evidence/g5/final-image-config-digest.txt
+          docker image inspect --format '{{json .RootFS.Layers}}' crownops-g5-qualified:test > evidence/g5/final-image-diffids.json
+      - name: Fictional storage, runtime and exclusive maintenance
+        run: python3 g5/orchestrate.py > evidence/g5/orchestration-output.txt 2>&1
+      - name: Preserve checksums and explicit execution status
+        if: always()
+        run: |
+          git diff --name-status a56c575dea67924c233934318fc5162ee01f5eef > evidence/g5/overlay-changed-files.txt
+          find g5 .github/workflows/g5-container.yml -type f -not -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum > evidence/g5/overlay-sha256.txt
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          p=Path('evidence/g5')
+          (p/'run.json').write_text(json.dumps({'overlay_commit':os.environ['GITHUB_SHA'],'accepted_source':'a56c575dea67924c233934318fc5162ee01f5eef','run_id':os.environ['GITHUB_RUN_ID'],'run_url':'https://github.com/'+os.environ['GITHUB_REPOSITORY']+'/actions/runs/'+os.environ['GITHUB_RUN_ID'],'base_digest':'sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9','build_executed':(p/'build.txt').exists(),'container_qualification_executed':(p/'container-results.json').exists(),'actual_Railway':'NOT TESTED','deployment':False,'real_accounts':False},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g5-container-evidence-${{ github.sha }}
+          path: evidence/g5/
+          retention-days: 14

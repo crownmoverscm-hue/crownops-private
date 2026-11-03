@@ -1,0 +1,16 @@
+# No frontend image, no apt, no networked RUN, no new application code.
+ARG PYTHON_BASE
+FROM ${PYTHON_BASE}
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp
+WORKDIR /app
+COPY tools/pilot/requirements-offline.lock /tmp/requirements.lock
+COPY build/wheelhouse /wheels
+RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels --no-deps --require-hashes --only-binary=:all: -r /tmp/requirements.lock \
+    && python -m pip check
+COPY app /app/app
+COPY config /app/config
+COPY tools/pilot /app/tools/pilot
+COPY g5 /opt/g5
+USER 10001:10001
+EXPOSE 8080
+CMD ["/bin/sh","-c","umask 0077; exec python -m uvicorn app.core_pilot:create_pilot_app --factory --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --no-access-log"]
