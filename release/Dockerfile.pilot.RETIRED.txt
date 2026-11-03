@@ -1,0 +1,27 @@
+The old release/Dockerfile.pilot proposal is RETIRED and removed in this
+packaging-only follow-up. Do not use its build-time volume chown approach.
+The single designated PILOT image recipe is g5/Dockerfile.g5, byte-identical
+to the successfully qualified 55b431a version. Repository-root Dockerfile is
+unchanged for existing services and is NOT the pilot recipe.
+
+Before any separately authorized future image build, create the bounded tar:
+  python g5/create_build_context.py --root . --output /PRIVATE/pilot-context.tar
+Use only the approved exact wheelhouse; source/wheel hash failures stop.
+The source pins intentionally reject sanitized main.py review mirrors. Real
+builds require exact Git source. No secrets/data/evidence/base-image tar enters
+the explicit context. .dockerignore is a secondary filter, not a guarantee
+against arbitrary secret content disguised as an approved source file.
+
+Future authorized build shape (NOT EXECUTED by this source-only change):
+  DOCKER_BUILDKIT=0 docker build --pull=false --network=none --build-arg PYTHON_BASE=<verified local config digest for approved image> -f g5/Dockerfile.g5 - < /PRIVATE/pilot-context.tar
+
+Base approval already exists: owner explicitly approved the linux/amd64 Python
+3.13.18 digest 70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9.
+That permission covered ONE completed practice build, not another build or any
+Railway deployment. Record the next separately authorized build/image digest;
+retain/export its loadable image under that authorization. Do not deploy the
+ephemeral prior local image ID as if it were available from a registry.
+
+No container build or new image acquisition occurs in this follow-up. Context
+builder tests are fictional packaging tests, not actual Docker-filter/build
+qualification. Full actual pinned source+wheel context is not regenerated here.

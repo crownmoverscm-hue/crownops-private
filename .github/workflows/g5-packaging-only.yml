@@ -1,0 +1,37 @@
+name: G5 source-only packaging checks
+on:
+  push:
+    branches: [fix/g5-release-packaging-runbooks]
+permissions:
+  contents: read
+jobs:
+  source-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm accepted app, tools and canonical recipe unchanged
+        run: |
+          mkdir -p evidence/g5-packaging
+          git diff --exit-code 55b431a3085acac42846179566b8d2e7daf07a8f -- app tools/pilot g5/Dockerfile.g5
+          git rev-parse HEAD > evidence/g5-packaging/commit.txt
+          python3 --version > evidence/g5-packaging/python-version.txt
+          test ! -e release/Dockerfile.pilot
+      - name: New packaging tests only, no image or dependency acquisition
+        run: |
+          set -o pipefail
+          python3 tests/test_g5_context.py 2>&1 | tee evidence/g5-packaging/context-tests.txt
+      - name: Record changed-file hashes
+        if: always()
+        run: |
+          git diff --name-status 55b431a3085acac42846179566b8d2e7daf07a8f > evidence/g5-packaging/changed-files.txt
+          sha256sum .dockerignore g5/CONTEXT-PINS.json g5/create_build_context.py tests/test_g5_context.py release/Dockerfile.pilot.RETIRED.txt release/BASE-IMAGE-AUTHORIZATION-RECORD.txt release/G5-SEQUENCING-AND-DRIFT.txt .github/workflows/g5-packaging-only.yml > evidence/g5-packaging/sha256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g5-packaging-${{ github.sha }}
+          path: evidence/g5-packaging/
+          retention-days: 14

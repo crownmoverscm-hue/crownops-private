@@ -1,0 +1,120 @@
+SOURCE-ONLY RUNBOOK — NO RAILWAY ACTION AUTHORIZED OR EXECUTED
+Application remains a56c575; qualified container overlay remains 55b431a.
+Single pilot image recipe: g5/Dockerfile.g5. Root Dockerfile for other services
+unchanged. Retired release/Dockerfile.pilot must not be selected.
+
+EXISTING OWNER BASE APPROVAL — DO NOT ASK AGAIN
+Owner explicitly authorized one isolated build using official linux/amd64 Python
+3.13.18 image sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9.
+That build completed in run 41585013763, overlay 55b431a. Copy the exact owner
+authorization record in the portable handoff to Muse. New real-Railway setup,
+another image acquisition/build, image retention/publishing and real-account
+creation are NOT covered by that consumed one-build permission.
+
+DEPENDENCIES BEFORE A DISPOSABLE RAILWAY QUALIFICATION CAN BE AUTHORIZED
+- Muse review of these packaging-only corrections and bounded context tests.
+- New retained image/build route, exact source+overlay pins, actual image digest
+  and pre-agreed transfer/retention. Prior test image was not retained/pushed.
+- Exact isolated project/service/environment/volume names, proposed region,
+  allowance, alert thresholds and authorized scope/cleanup limits. No shared
+  variable, OAuth key, production DB or existing service may be reused.
+- Expected scope IDs must be captured after permitted resource creation and
+  compared with runtime IDs before bootstrap. Do not invent them as live proof.
+- Agree platform-supported stop/maintenance handoff and restart policy before
+  any writer runs. A local Docker lockfile has no Railway locking authority.
+- Real staff accounts/MFA, offsite destination and customer pilot remain later
+  permissions. Initial Railway qualification should use @example.invalid staff,
+  fictional customers and temporary test keys only, no actual selected identities.
+
+ACTUAL PLATFORM SEQUENCING TO QUALIFY, AFTER SEPARATE OWNER APPROVAL
+Use only a NEW disposable isolated Railway project and a volume with no real data.
+Record its immutable IDs once approved; no exact IDs exist in this proposal.
+Disable auto-deploy/restart and record the approved commands/settings as evidence.
+
+Phase A: empty-volume preparation, no web process
+1. Verify selected project/service/environment/volume IDs are isolated; record
+   exclusion of current production, AI-staging and quote-staging resources.
+2. Set reviewed maintenance-only command to bounded empty-volume helper, with
+   temporary UID 0, no real key/data, no app import or generic web startup.
+3. Confirm exact bootstrap acknowledgment, approved scope ID matches, /data
+   mount path and Core/pilot/no-external/no-worker/MFA-required guards.
+4. Execute only under the approved qualification. Capture stdout, exit status,
+   two directory owners/modes, empty contents, and the platform deployment state.
+5. Confirm root preparation process exited; REMOVE root override/context before
+   any web process. If outcome uncertain/partial, STOP and inspect; never blindly
+   rerun against a populated volume or recursively repair it.
+
+Phase B: non-root exclusive maintenance/provisioning
+6. Select UID/GID 10001. Verify runtime UID and directory owners/modes survived
+   the real platform mount. If the platform does not preserve them, STOP.
+7. Prove no web deployment/process is active and no second writable volume user
+   exists. A quiet log, domain removal or operator checkbox alone is insufficient.
+   Capture platform deployment state plus supported process/mount/access evidence.
+8. Use a separately reviewed maintenance-only context on the SAME service/volume,
+   no app/worker, never a concurrent writable second service. If Railway cannot
+   provide a supported bounded handoff, STOP rather than improvise access.
+9. Provision only fictional two-account test data under UID10001 for this phase;
+   keep temporary key material out of image/build/logs. Run readiness checks.
+10. Capture integrity/FK/scope/modes, close every DB handle and exit maintenance.
+    Verify maintenance is stopped/removed before starting the web command.
+
+Phase C: locked web startup
+11. Set exact ten D3 values and dedicated factory, one worker, UID10001, private
+    database/sidecars 0600 and parent0700, no symlinks, umask0077. No fallback.
+12. Verify actual UID/GID, secure-cookie flags and behavior at the REAL HTTPS
+    origin, trusted forwarding/proxy boundaries, missing/invalid config refusal,
+    safe mode/symlink refusal, fictional MFA and denied business/provider paths.
+13. Verify no integrations/workers/upload paths activate. Network guards/profile
+    denial are not a claim of platform egress isolation; record actual limits.
+
+Phase D: stop, capture, recover and resume (FICTIONAL ONLY)
+14. Pause entry, stop web through scoped platform operation, prevent auto-restart/
+    auto-deploy, and obtain positive stopped-state evidence. Never DELETE or reset
+    the volume as a shutdown method. If stop or overlap is uncertain, STOP.
+15. Only after all writers are proven stopped, obtain maintenance context; repeat
+    the exclusivity checks. Capture with SQLite backup API/encryption/manifest.
+16. Test retrieval/readback using trusted receipt, hash AND size; distinguish
+    local simulation from external offsite exercise. Offsite connection/upload
+    is prohibited unless explicitly covered by a separate bounded approval.
+17. Restore into a NEW private destination; validate scope/integrity/FKs/originals/
+    audit, revoke auth capabilities, record pre/post fingerprints. Never overwrite
+    live DB. Close handles, remove maintenance, verify stopped, then approved
+    fictional cutover/start against recovered path. Prove old cookie denial and
+    fresh MFA, then health, modes, worker/route exclusions and safe stop again.
+18. Record restart/durability/monitoring/shutdown/rollback observations. No Docker
+    volume-deletion command is a Railway operation. Preserve disposable volume
+    until owner approves disposition; real/live volumes must always be preserved.
+
+POPULATED-VOLUME MODE OR OWNERSHIP DRIFT — FAIL CLOSED, DO NOT 'FIX' IN PLACE
+Trigger: factory refuses because DB or sidecar became 0644, owner changed, parent
+mode unsafe, symlink appeared or actual volume ownership differs after remount.
+1. Stop entry. Preserve error/timestamps and minimal metadata, never secrets.
+2. Stop and prove all writers stopped; disable restart/deploy loops. No factory
+   fallback, chmod0777, recursive chown/chmod, bootstrap or in-place replacement.
+3. Preserve affected DB/sidecars/volume as evidence; they may still contain the
+   newest committed state. Do not raw-copy a live SQLite main file or discard WAL.
+4. Prefer a previously verified encrypted recovery point with independently
+   retained trusted receipt. Record its age and possible data loss; owner decides
+   whether that loss is acceptable. Do not present a stale backup as latest data.
+5. If no acceptable recovery point exists, STOP for a separately scoped offline
+   preservation/recovery authorization. Do not silently modify the tool's private-
+   file gate to read unsafe files or repair source ownership to make capture pass.
+6. Prepare a NEW correctly owned private location through the approved mechanism,
+   never the populated-volume bootstrap. Restore and verify there; revoke auth
+   capabilities and record the new security fingerprint. Wrong key/hash/receipt/
+   scope/FK or existing destination refuses; uncertain artifacts remain isolated.
+7. Compare originals/audit and inquiry state; verify roles, MFA, old-session refusal
+   and permissions on recovered destination. Owner approves explicit cutover.
+8. Stop maintenance before web. Change only the approved DB target/image in the
+   new pilot; keep old copy isolated. No restore overwrite, volume deletion or
+   uncontrolled attempt to 'roll back' data via an older image.
+
+REMAINING DECISIONS / NON-CLAIMS
+G1–G4 preserved. G5 PARTIAL until focused review and actual separately authorized
+Railway evidence; G6/G7/G9 NOT TESTED. G8 formal single-custodian risk approval
+pending; choice to operate alone does not count as explicit residual-risk acceptance.
+G10 pricing not applicable. Offsite folder/7 daily–4 weekly–3 monthly retention,
+capacity and proposed USD15/month allowance are not approved purchases or hard
+spending limits. Actual plan/included usage/taxes/FX/build/retention costs unknown.
+No image build, deployment, Railway action, real account/data/key, provider or
+production restart occurs in this source-only follow-up. STOP for focused review.

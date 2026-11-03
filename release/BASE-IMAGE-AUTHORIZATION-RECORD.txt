@@ -1,0 +1,36 @@
+OWNER AUTHORIZATION RECORD — EXISTING APPROVAL, NOT A NEW REQUEST
+
+DEV transcription of the owner's written instruction in this conversation before
+GitHub run 41585013763. This is not an external digital signature or a claim that
+Muse already had the text. It supplies the missing authorization context.
+
+Owner wrote:
+"I authorize the G5 preparation assignment above, including one isolated container
+build and fictional-data qualification on an existing approved GitHub-hosted runner.
+
+Authorize downloading only the proposed official Linux/amd64 Python 3.13.18 image:
+python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9
+
+Use the bounded acquisition procedure and approved destinations in
+PLATFORM-AND-BUILD.txt. Stop on any additional image, unapproved destination,
+credential, paid resource or dependency substitution requirement.
+
+Temporary root execution is permitted only inside a disposable test container to
+qualify the bounded storage method. No privileged container, host/business-data
+mounts or real secrets. The final web process must run as UID 10001.
+
+Preserve the accepted application source. Identify and checksum any separate
+packaging or startup overlay. Retest only behavior affected by that overlay.
+
+No Railway changes, deployment, merge, real accounts, customer data or provider
+activation. Report container qualification separately from actual Railway checks,
+which remain NOT TESTED.
+
+Deliver the evidence for Muse's focused G5 review and stop."
+
+That one authorized practice build completed at overlay commit
+55b431a3085acac42846179566b8d2e7daf07a8f, CI run 41585013763. It did not retain or
+push a loadable final image. This record resolves only the missing base-approval
+documentation. It does not authorize another build, Railway qualification, real
+keys/accounts/data, any retention/purchase/custody decision or customer pilot.
+Do not ask the owner to approve this same historical base acquisition again.
