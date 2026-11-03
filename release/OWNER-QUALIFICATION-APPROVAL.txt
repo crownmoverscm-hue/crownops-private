@@ -1,0 +1,32 @@
+PROPOSED OWNER APPROVAL — NOT YET GRANTED
+
+Please approve only after reviewing the final candidate and Muse's focused review.
+
+I approve the disposable Railway qualification described in
+G5-DISPOSABLE-RAILWAY-EXECUTION.txt for the exact final candidate in candidate.json:
+one NEW project crownops-g5-disposable-20261109, environment qualification,
+one service core-v1-g5-test and one NEW private volume g5-disposable-private.
+Fictional identities/inquiries and temporary test keys only; no real staff accounts.
+
+I approve one new Railway build from the hash-checked minimal source/wheel context,
+using only the previously approved official linux/amd64 Python3.13.18 base digest
+70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9 and exact35
+reviewed wheels. Dependency/base acquisition only at the documented approved hosts;
+Railway authenticated upload/build/deploy/SSH/domain/file transfer is allowed only
+for these new IDs. No registry publishing, PAT, extra image, CLI installation,
+provider access, dependency substitution or rebuild. Stop if image identity/reuse
+or supported exclusive volume handoff cannot be established.
+
+I approve one bounded empty-volume UID0 helper deployment, followed by stopped-state
+verification and removal of root overrides before any UID10001 maintenance/web.
+I approve the documented HTTPS/MFA/refusal/stop/restart/encrypted retrieval/new-path
+restore-and-revocation tests, with no simultaneous writable maintenance/web access.
+
+Maximum24hours, USD5 incremental operator budget (review at USD3; billing can lag),
+no plan upgrade/purchase. Stop afterward, retain evidence and volume. Deletion of
+recorded new disposable resource IDs requires my explicit follow-up confirmation;
+no existing resource may be deleted or changed. Continued storage can incur cost.
+
+This is NOT deployment approval for a customer pilot, real-account creation,
+production changes, merge, integrations, theme release or offsite-provider activation.
+All listed safety stop conditions apply. Any required scope expansion stops work.

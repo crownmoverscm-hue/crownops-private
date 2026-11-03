@@ -28,7 +28,7 @@ jobs:
         if: always()
         run: |
           git diff --name-status 55b431a3085acac42846179566b8d2e7daf07a8f > evidence/g5-packaging/changed-files.txt
-          sha256sum .dockerignore g5/CONTEXT-PINS.json g5/create_build_context.py tests/test_g5_context.py release/Dockerfile.pilot.RETIRED.txt release/BASE-IMAGE-AUTHORIZATION-RECORD.txt release/G5-SEQUENCING-AND-DRIFT.txt .github/workflows/g5-packaging-only.yml > evidence/g5-packaging/sha256.txt
+          sha256sum .dockerignore g5/CONTEXT-PINS.json g5/create_build_context.py tests/test_g5_context.py release/Dockerfile.pilot.RETIRED.txt release/BASE-IMAGE-AUTHORIZATION-RECORD.txt release/G5-SEQUENCING-AND-DRIFT.txt release/G5-DISPOSABLE-RAILWAY-EXECUTION.txt release/OWNER-QUALIFICATION-APPROVAL.txt .github/workflows/g5-packaging-only.yml > evidence/g5-packaging/sha256.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:

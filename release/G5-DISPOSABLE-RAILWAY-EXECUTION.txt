@@ -1,0 +1,303 @@
+G5 DISPOSABLE RAILWAY QUALIFICATION — PROPOSAL, NOT EXECUTED
+2026-11-03. Source-only follow-up to 55b431a / application a56c575.
+Read this with G5-SEQUENCING-AND-DRIFT.txt. Existing services are out of scope.
+No live IDs, credentials, keys or customer data are included in this document.
+
+OWNER SUMMARY
+This is a practice installation using invented people and inquiries. Its purpose
+is to test Railway storage, permissions, HTTPS and recovery, not to launch CrownOps.
+Jonathan operates it. Carl is excluded. Real staff enrollment and customer use
+remain separately unauthorized. G3/G4 PASS are preserved; G5 is still PARTIAL.
+
+PROPOSED SCOPE / NAMES (NEW RESOURCES ONLY)
+Project: crownops-g5-disposable-20261109
+Environment: qualification
+Service: core-v1-g5-test
+Volume: g5-disposable-private, mounted at /data; 1 GB requested if supported.
+One running instance only; one service attached to this volume throughout.
+Region: US East (Virginia), only if available on the existing plan; otherwise STOP.
+No database add-on, second service, public database port, worker, cron, bucket,
+custom domain, provider secret, shared variable or existing project attachment.
+Use a new generated Railway HTTPS domain only in the web phase.
+Record immutable IDs after creation; names alone never authorize an operation.
+
+DOCUMENTED PLATFORM MECHANISM — NOT ACTUAL RAILWAY QUALIFICATION
+Official Railway docs retrieved 2026-11-03 establish these separate capabilities:
+- variables/reference: RAILWAY_RUN_UID selects main-process UID, including 0.
+- deployments/start-command: service start command can override Docker CMD.
+- deployments/restart-policy: NEVER prevents automatic crash restarts.
+- volumes and deployments/pre-deploy-command: volumes mount at runtime, NOT
+  pre-deploy; therefore this helper must be a START command, not pre-deploy.
+- volumes/reference: Railway prevents multiple active deployments mounted to
+  one service's volume, with downtime during replacement. Replicas unsupported.
+- deployments/reference: clean one-shot exit has COMPLETED lifecycle state.
+- cli/service: scoped service-file download/upload is supported.
+Thus the proposed bootstrap is a one-shot deployment of the SAME service, not a
+permanent root entrypoint or a second writable service. Root ends before another
+phase starts. Runtime support, ownership persistence and handoff must be observed
+on the new disposable resources. These docs do not prove those observations.
+If UID override, command override, completed one-shot lifecycle or positive
+stopped-state/volume exclusivity cannot be established, STOP; do not improvise.
+No pre-deploy volume access, host lockfile or Docker-only volume test is proof.
+
+0. APPROVAL AND IMAGE-INPUT HOLD POINT
+Do not run any following step until owner approves the scope and budget.
+The previous one-build approval is recorded in BASE-IMAGE-AUTHORIZATION-RECORD.txt;
+it is not being requested retroactively. That image was ephemeral, never pushed
+and not retained as a loadable image. This plan necessarily proposes ONE NEW
+Railway build from a bounded source upload; no registry publishing/PAT is proposed.
+No build is executed in this package. This new build needs explicit approval.
+
+Proposed build inputs:
+- Exact final packaging commit identified by the transfer's candidate.json.
+- Canonical g5/Dockerfile.g5, unchanged from qualified 55b431a.
+- PYTHON_BASE=docker.io/library/python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9
+- Linux/amd64 only. No additional base/frontend image, apt, source builds or tags.
+- Only the 35 exact wheels in CONTEXT-PINS.json / requirements-offline.lock.
+  Reacquire if necessary from the recorded official PyPI URLs with SHA256 checks;
+  no pip resolver/substitution. No dependency download during Docker RUN.
+- Use exact Git source, not the sanitized mirror (one main.py redaction). Build
+  context generator MUST refuse the redacted mirror, modified source or wheel.
+
+In an authorized runner with exact source and reviewed wheelhouse:
+  python3 g5/create_build_context.py --root . --output /PRIVATE/g5-context.tar
+Verify/list the tar, record size/SHA256, extract to a new private empty directory.
+The tar is only build input: 184 pinned files, 35 pinned wheels and .dockerignore.
+It excludes test evidence, keys, DBs, Git metadata and the base-image archive.
+Do not substitute a tar of the entire workspace. Test output in this handoff uses
+small fictional context fixtures, not a rebuilt full source/wheel context.
+
+Railway supports Docker ARG from matching service variables. Set
+RAILWAY_DOCKERFILE_PATH=g5/Dockerfile.g5 and PYTHON_BASE as above BEFORE upload.
+Use the existing owner-authorized Railway CLI, authenticated by owner privately;
+no new CLI installation or token creation is authorized by this source package.
+Future scoped upload shape (replace IDs only after approved creation):
+  railway up /PRIVATE/extracted-context --path-as-root --project PROJECT_ID --environment ENVIRONMENT_ID --service SERVICE_ID --json
+Never use an implicit linked project, --new, --yes, Git auto-deploy or floating branch.
+CLI upload/SSH/domain transport is Railway control-plane traffic, separate from
+application provider attempts. The proposed build may fetch only the approved
+base's registry auth/manifest/layers via auth.docker.io, registry-1.docker.io and
+production.cloudfront.docker.com. Approved wheel acquisition is only pypi.org and
+files.pythonhosted.org. No package/registry credentials or application providers.
+Railway's own build/control-plane infrastructure is intrinsic to this proposed
+platform test; it is NOT evidence of a destination-restricted Railway builder.
+If the platform requires an extra image, new destination, paid upgrade, credential,
+architecture substitution or unsupported build ARG, STOP before continuing.
+Capture exact source/context hash, resolved base, all build logs, deployment/build
+IDs and the image identifier Railway exposes. If an immutable final image identity
+cannot be obtained/reused, report BLOCKED for image provenance; do not claim exact
+image reproducibility or proceed to web qualification under an unknown image.
+Use the same retained built image for subsequent command/config phases where the
+platform supports it. If it rebuilds instead, STOP: one build is the proposed cap.
+This image-retention/config-redeploy capability is a platform hold point, not proven.
+
+1. CREATE AND CHECK THE EMPTY DISPOSABLE TARGET (AFTER APPROVAL ONLY)
+Jonathan creates an EMPTY new project/service/volume in dashboard, no connected
+Git source and no copied variables. Choose existing plan; refuse purchase/upgrade.
+Record workspace, project, environment, service, volume IDs and screenshots. Check
+none is an existing production, AI-staging or quote-staging ID. No volume clone.
+Set restart policy NEVER; disable auto-deploy, schedules, public domain and HTTP
+healthcheck for bootstrap/maintenance. No pre-deploy command. Overlap seconds 0.
+Verify new volume only; stop if unexpected file or previous attachment is found.
+
+2. ONE-TIME EMPTY-VOLUME BOOTSTRAP
+BEFORE first build/deployment select:
+Start Command: python /opt/g5/prepare_empty_volume.py
+RAILWAY_RUN_UID=0
+CROWNOPS_BOOTSTRAP_ACK=fresh-empty-core-v1-volume-only
+CROWNOPS_BOOTSTRAP_PROJECT_ID=<new approved project UUID>
+CROWNOPS_BOOTSTRAP_ENVIRONMENT_ID=<new approved environment UUID>
+CROWNOPS_BOOTSTRAP_SERVICE_ID=<new approved service UUID>
+CROWNOPS_PROFILE=core-v1; CROWNOPS_ENV=pilot
+CROWNOPS_ALLOW_EXTERNAL=0; CROWNOPS_RUN_WORKER=0; CROWNOPS_REQUIRE_MFA=1
+RAILWAY_VOLUME_MOUNT_PATH=/data must be PLATFORM PROVIDED from the new volume;
+RAILWAY_PROJECT_ID/ENVIRONMENT_ID/SERVICE_ID must be platform-provided too.
+Do not forge these IDs. No app secret, password, DB, account or Uvicorn yet.
+Run the single proposed bounded build/deploy only after the image hold point.
+Expected helper output: two directories prepared, UID/GID10001, mode0700,
+database_created=false, web_started=false, secrets_accessed=false; exit0.
+Capture terminal COMPLETED/exited state, not a web HEALTHY claim. Capture absence
+of DB/web listener, root-process exit and volume attachment/deployment IDs.
+Refusal/partial state => STOP, retain volume, inspect; never recursive repair.
+Remove bootstrap start command, UID0 and acknowledgment/approved-ID variables.
+Do not replay bootstrap against populated storage or run web under UID0.
+
+3. SAME-SERVICE NONROOT MAINTENANCE / FICTIONAL PROVISIONING
+Only after root deployment is proved stopped, select RAILWAY_RUN_UID=10001 and
+maintenance Start Command:
+  python -c 'import os,time; os.umask(0o077); time.sleep(86400)'
+This is a bounded maintenance holder, not app/worker/automation. Restart NEVER,
+no domain/HTTP healthcheck. Verify the platform reuses the approved image; STOP
+on rebuild. Verify no old active deployment or second writable attachment.
+Within scoped SSH capture id, /proc/1/status and /proc/self/status (UID/GID, CapEff,
+NoNewPrivs), /data mount and lstat owner/mode of private/uploads. Never dump env.
+Require UID/GID10001, private/uploads0700, no symlinks, no existing DB, zero web
+process/listener. Record available privilege/capability controls accurately; if
+root regain or unexpected capabilities are possible, STOP for focused review.
+Use the already reviewed fictional-only command:
+  python /opt/g5/container_fixture.py provision
+It creates owner@example.invalid and sales@example.invalid, two distinct MFA
+factors and private fictional credential files. These are NOT real Owner/Sales
+accounts or a real-account enrollment procedure. Never print those files, keys,
+codes or cookies; never upload them into evidence. Verify DB0600/FK0/integrityok,
+2 active users/2 MFA factors, 0 financial/booking records. No original real emails.
+Privately set CROWNOPS_SECRET_KEY from the generated fictional key via the owner's
+secure platform variable entry; do not echo it or send it through chat/logs.
+If secure transfer without disclosure is unavailable, STOP.
+Close maintenance/SSH processes; stop deployment, verify stopped before web.
+
+4. LOCKED WEB START AND REAL HTTPS
+Exactly ten existing D3 settings, no guard removed:
+CROWNOPS_PROFILE=core-v1
+CROWNOPS_ENV=pilot
+CROWNOPS_ALLOW_EXTERNAL=0
+CROWNOPS_RUN_WORKER=0
+CROWNOPS_PILOT_ACK=manual-inquiry-only
+CROWNOPS_SECURE_COOKIES=1
+CROWNOPS_REQUIRE_MFA=1
+CROWNOPS_DB=/data/private/pilot.sqlite3
+CROWNOPS_PUBLIC_URL=<exact new generated HTTPS origin, no path/query>
+CROWNOPS_SECRET_KEY=<fictional test key, private; never in this document>
+Retain RAILWAY_RUN_UID=10001, overlap0, one instance; remove maintenance override.
+Canonical image CMD:
+/bin/sh -c 'umask 0077; exec python -m uvicorn app.core_pilot:create_pilot_app --factory --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --no-access-log'
+No app.main fallback. No provider, OAuth, AI, SMTP or production secret variables.
+Enable only new service domain and suitable healthcheck on reviewed allowed path;
+confirm its actual response before selecting it. Do not invent a health endpoint.
+Capture UID/capabilities, DB/sidecar0600, parents0700, all ten settings by NAMES
+and non-secret values only, image/deployment IDs, terminal successful startup.
+Use real generated HTTPS origin: valid certificate/hostname, HTTP redirect with
+NO credential submission over HTTP; login response cookie Secure/HttpOnly/SameSite
+and browser behavior at real origin. Redact full Set-Cookie/token values.
+For both invented roles: no code401, wrongcode401, freshcode200, replay401; no code
+or password in capture. Use fresh windows to avoid confusing replay/rate limits.
+Create CORE-G5-001 fictional email-origin inquiry; preserve original hash, assign
+Sales, note/follow-up/status; capture readbacks and zero quotes/jobs/payments/invoices.
+Probe existing forbidden-route manifest with complete fictional requests; record
+actual route status/body and zero mutation. Do not rerun historical whole suites.
+Confirm no workers/provider secrets and collect available app/network logs; record
+actual attempts separately from Railway health/SSH/browser control traffic. An
+absence of provider secrets is not platform egress isolation; retain that limit.
+
+5. REAL-PLATFORM NEGATIVE STARTUP TESTS (FRESH STOP BETWEEN EACH)
+Missing CROWNOPS_REQUIRE_MFA, invalid value0 and contradictory ALLOW_EXTERNAL1:
+expect refused startup/no legacy fallback/no listener/no worker/provider action.
+Restore valid settings after each. NEVER test by permitting financial operations.
+Unsafe permissions: stopweb, exclusive nonroot maintenance, record original hash,
+change ONLY this disposable DB from0600 to0644; stopmaintenance; expectwebrefusal.
+Return through nonroot maintenance to recorded0600 ONLY for this deliberate test;
+verify hash unchanged. This is NOT a populated live-storage drift-repair policy.
+Symlink/config refusal uses a separate disposable test path; preserve original DB.
+No test mutates production, overwrites a DB or expands accepted application code.
+
+6. STOP / EXCLUSIVE BACKUP / DOWNLOAD / READBACK / RESTORE
+Stop entry; restart NEVER/auto-deployOFF; remove web deployment through scoped
+Railway stop/remove-deployment action, never delete service or volume. Record
+terminal stopped/removed state. Stop request or quiet logs is insufficient.
+Only then start SAME-SERVICE nonroot maintenance holder against SAME volume.
+Capture platform one-active-volume/deployment state, UID and no Uvicorn/writers.
+Do not launch a second service or rely on the Docker harness host lockfile.
+Run accepted core_maintenance CLI/scripts as separate processes (not app imports).
+Use their reviewed help and existing CLI test vector for exact argument names;
+private files/interactive input for fictional app and backup keys, never argv/env
+printing. SQLite backup API, writes already stopped, encrypted archive+manifest,
+trusted receipt captured separately. No raw live-DB download or copy.
+Download encrypted archive and receipt only using scoped Railway file download
+into new private local paths (no --overwrite). Record checksum AND byte size.
+Store trusted receipt independently before download; compare readback against it,
+not a receipt merely fetched beside the archive. Reupload encrypted copy to a NEW
+path and verify/decrypt/check FK/integrity/fingerprints with accepted tools.
+This is actual Railway retrieval/readback, NOT external offsite-backup acceptance.
+No Google Drive/S3/offsite connection is included in this qualification approval.
+Wrong key/size/hash/receipt, FK violation and existing restore destination refuse.
+Restore to /data/private/g5-recovered.sqlite3 (must not exist), revoke sessions and
+reusable tokens before serving; preserve originals/audit and record pre/post
+revocation fingerprints. Use only non-secret summary output. Close every handle.
+Stopmaintenance, verify stopped; change CROWNOPS_DB to new recovered path, reselect
+web CMD, same image/nonroot/ten guards; verify original inquiry, old-cookie401,
+fresh MFA, denied paths, modes. Run actual stop/restart and readback to demonstrate
+durability; record timings. No rollback by deleting volume or replacing live DB.
+
+7. DRIFT / SHUTDOWN / ROLLBACK / MONITORING
+Use G5-SEQUENCING-AND-DRIFT.txt for unexpected real drift: stop, preserve original
+DB/WAL, acceptable verified recovery point, NEW private restore path, verification,
+auth revocation, owner-approved cutover. Never in-place recursive chown/chmod.
+Monitor this test only: restart count, health errors/latency, disk usage, permission
+refusals, authentication errors and recorded provider-attempt evidence; no message
+content/secrets. Jonathan checks after EACH phase and hourly while running.
+No real email/SMS alert integration. Owner observes dashboard/records; automated
+monitoring/alerts for a customer pilot remain unqualified.
+Emergency: stop this service deployment, confirm stopped and no automatic return;
+retain volume. Do not alter any workspace-wide budget/production service.
+Rollback: stopped exclusive maintenance; use same previously verified immutable
+image/config with compatible DB, or restore verified backup to NEW path and revoke;
+verify before web resumes. Do not 'rollback' by a stale unreviewed app or DB overwrite.
+
+8. COST, CLEANUP AND EVIDENCE
+Proposed maximum test duration24hours; manual attended operation, no hidden timer.
+Current published resource rates: RAM USD10/GB-month, CPU20/vCPU-month, volume0.15/
+GB-month, egress0.05/GB. At measured average0.5GB RAM +0.25vCPU +1GB volume for one
+30th month, usage estimate USD0.34 plus egress/build/plan/taxes; not a quote.
+Propose USD5 incremental test ceiling, no subscription change or paid upgrade.
+Stop at USD3 observed/estimated usage for review; platform cost reporting may lag.
+This is an operator cap, NOT a technically enforced scoped Railway spending limit.
+Do not set a workspace hard limit that could stop existing CrownOps services.
+Later monthly pilot cost is unapproved/usage-dependent; test does not buy offsite.
+After evidence capture stop test, verify stopped, preserve sanitized evidence and
+resource-ID inventory. Delete ONLY newly recorded disposable resources if owner
+explicitly approves deletion of those IDs. Until then retain volume and disclose
+ongoing storage charges. Never delete an existing service/storage. Destroy fictional
+key material only after restore evidence/review and authorized final disposition.
+
+Required Muse evidence rows all start NOT TESTED: exact source/context/base/image
+identity; scoped resource IDs; bounded root exit; owner/modes/UID/capabilities;
+non-overlap per transition; ten guards/refusals; real TLS/cookies; fictional MFA;
+allowed inquiry/source hash and forbidden mutations; actual attempt observations;
+stop/restart; backup checksum+size/trusted receipt; new-path FK/revocation/oldcookie;
+monitoring/shutdown/rollback; billing observations and cleanup disposition.
+No invented PASS, hardcoded zero count, CI Docker result or simulated local copy
+can substitute for actual Railway observations. Record failures/blocked steps.
+
+STOP: wrong resource/scope, unsupported one-shot/handoff/image reuse, UID0web,
+unsafe storage/privilege, missingguard, additionalimage/destination/credential,
+provider attempt, nonfictional data, unexpected financial record, secret disclosure,
+unapproved cost/build/rebuild or uncertain active writer. Preserve evidence and
+stop THIS disposable test. No customer launch/real accounts authorized by this plan.
+
+MAINTENANCE COMMAND ANNEX (FUTURE SCOPED NONROOT CONTEXT ONLY)
+Run as separate processes inside stopped-web maintenance. Paths below contain
+ONLY fictional test material. Before backup create a private quiescence record
+containing operation_id, writer_stopped=true, uploads_disabled=true, referencing
+captured stopped-deployment evidence. That JSON is an acknowledgment, NOT a lock.
+Create a distinct fictional backup key in a 0600 file without printing it; never
+reuse fixture-app.key as backup key. No shell tracing or secret output.
+
+python /app/tools/pilot/maintenance/pilot_maintenance.py backup --database /data/private/pilot.sqlite3 --archive /data/private/g5-test.enc --backup-key-file /data/private/g5-backup.key --app-key-file /data/private/fixture-app.key --uploads-directory /data/uploads --receipt /data/private/g5-receipt.json --quiescence-record /data/private/g5-quiescence.json
+
+Transfer example using recorded NEW IDs and a new private local directory:
+railway service files download /data/private/g5-test.enc /PRIVATE/g5-downloaded.enc --project PROJECT_ID --environment ENVIRONMENT_ID --service SERVICE_ID
+railway service files download /data/private/g5-receipt.json /PRIVATE/g5-downloaded-receipt.json --project PROJECT_ID --environment ENVIRONMENT_ID --service SERVICE_ID
+
+Use the same scoped file-upload interface to new paths, no --overwrite. Independently
+retained trusted receipt must remain distinct from the downloaded receipt.
+python /app/tools/pilot/maintenance/pilot_maintenance.py verify-readback --archive /data/private/g5-returned.enc --receipt /data/private/g5-returned-receipt.json --trusted-receipt /data/private/g5-trusted-receipt.json --backup-key-file /data/private/g5-backup.key --app-key-file /data/private/fixture-app.key
+python /app/tools/pilot/maintenance/pilot_maintenance.py restore --archive /data/private/g5-returned.enc --database /data/private/g5-recovered.sqlite3 --backup-key-file /data/private/g5-backup.key --app-key-file /data/private/fixture-app.key --receipt /data/private/g5-trusted-receipt.json --recovery-receipt /data/private/g5-recovery-receipt.json
+
+Do NOT run CLI provision or verify-ready for this disposable identity fixture:
+those CLI operations intentionally pin the future real email identities. Use the
+already reviewed fictional fixture provisioner and scope/integrity functions for
+invented accounts. No weakening of real-account identity checks is proposed.
+Uploads/receipt files must arrive with owned0600 modes; verify before tool input.
+No secret files are downloaded as evidence. No unredacted cookie/header logs.
+
+OFFICIAL DOCUMENT LINKS (READ-ONLY SOURCES, 2026-11-03)
+https://docs.railway.com/variables/reference
+https://docs.railway.com/deployments/start-command
+https://docs.railway.com/deployments/restart-policy
+https://docs.railway.com/deployments/reference
+https://docs.railway.com/deployments/pre-deploy-command
+https://docs.railway.com/volumes/reference
+https://docs.railway.com/builds/dockerfiles
+https://docs.railway.com/cli/up
+https://docs.railway.com/cli/service
+https://docs.railway.com/pricing

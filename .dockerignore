@@ -36,3 +36,14 @@
 **/fixture-old-cookie
 **/evidence/
 **/uploads/
+**/.venv/
+**/venv/
+**/virtualenv/
+**/customer-data/
+**/private-data/
+**/artifacts/
+**/outputs/
+**/node_modules/
+**/*.tar
+**/*.tar.gz
+**/*.zip
