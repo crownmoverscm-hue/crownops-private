@@ -1,0 +1,4 @@
+release/Dockerfile.pilot is removed on this source-only branch.
+Original g5/Dockerfile.g5 remains byte-identical to reviewed55 as historical proof.
+The sole PROPOSED active browser-source recipe is g5/Dockerfile.g5-browser-source,
+pending focused approval and actual image build. No Railway recipe was changed.

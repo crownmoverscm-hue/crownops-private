@@ -1,0 +1,25 @@
+# FICTIONAL G5 REVIEW CANDIDATE ONLY. Separate packaging; does not change app code.
+# Exact reviewed Linux/amd64 Python 3.13.18 base; no floating tags or build ARG override.
+FROM docker.io/library/python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9 AS wheel_fetch
+ENV PIP_CONFIG_FILE=/dev/null PIP_DISABLE_PIP_VERSION_CHECK=1
+WORKDIR /wheel-build
+COPY tools/pilot/requirements-python313.lock /tmp/requirements-online.lock
+# The only networked RUN. Each requirement is an exact PyPI wheel URL + SHA-256.
+RUN python -m pip download --only-binary=:all: --no-deps --require-hashes --dest /wheels -r /tmp/requirements-online.lock
+
+FROM docker.io/library/python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp PIP_CONFIG_FILE=/dev/null PIP_DISABLE_PIP_VERSION_CHECK=1
+WORKDIR /app
+COPY tools/pilot/requirements-offline.lock /tmp/requirements-offline.lock
+COPY --from=wheel_fetch /wheels /wheels
+RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels --no-deps --require-hashes --only-binary=:all: -r /tmp/requirements-offline.lock \
+  && python -m pip check \
+  && python -c 'import sys; assert sys.version_info[:3] == (3,13,18)'
+COPY app /app/app
+COPY config /app/config
+COPY tools/pilot /app/tools/pilot
+COPY g5 /opt/g5
+USER 10001:10001
+EXPOSE 8080
+# Single fictional WEB command; bootstrap/maintenance are explicit phase overrides.
+CMD ["python", "/opt/g5/start_fictional_web.py"]

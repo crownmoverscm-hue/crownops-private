@@ -1,0 +1,42 @@
+name: G5 no-CLI source checks only
+on:
+  push:
+    branches: [fix/g5-no-cli-packaging-hardening]
+permissions:
+  contents: read
+jobs:
+  source-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact approved baseline payload unchanged
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/g5-no-cli
+          git diff --exit-code 55b431a3085acac42846179566b8d2e7daf07a8f HEAD -- app config tools/pilot g5/Dockerfile.g5 g5/prepare_empty_volume.py g5/container_fixture.py
+          test -f .dockerignore
+          test ! -e release/Dockerfile.pilot
+          git rev-parse HEAD > evidence/g5-no-cli/commit.txt
+          python3 --version > evidence/g5-no-cli/python-version.txt
+      - name: Focused tests without dependency acquisition or application execution
+        run: |
+          set -euo pipefail
+          python3 g5/test_fictional_web_start.py 2>&1 | tee evidence/g5-no-cli/private-key-startup-tests.txt
+          python3 g5/test_browser_packaging.py 2>&1 | tee evidence/g5-no-cli/packaging-contract-tests.txt
+          python3 tests/test_g5_context.py 2>&1 | tee evidence/g5-no-cli/context-tests.txt
+      - name: Record actual source evidence
+        if: always()
+        run: |
+          git diff --name-status 55b431a3085acac42846179566b8d2e7daf07a8f HEAD > evidence/g5-no-cli/changed-files.txt
+          git diff 55b431a3085acac42846179566b8d2e7daf07a8f HEAD > evidence/g5-no-cli/source-diff.patch
+          git diff --name-only --diff-filter=AM 55b431a3085acac42846179566b8d2e7daf07a8f HEAD -z | xargs -0 sha256sum > evidence/g5-no-cli/source-sha256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g5-no-cli-source-${{ github.sha }}
+          path: evidence/g5-no-cli/
+          retention-days: 14

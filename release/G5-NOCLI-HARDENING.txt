@@ -1,0 +1,65 @@
+G5 SOURCE-ONLY HARDENING — NOVEMBER 3, 2026
+
+EXACT BASE / SCOPE
+Base55b431a3085acac42846179566b8d2e7daf07a8f, tree107d4f35456cc99c66f1a129d44e529b0943d33e.
+Branch fix/g5-no-cli-packaging-hardening. It does NOT inherit098edf7 as a parent.
+Copied packaging helper/pins/tests/.dockerignore are separately identified source
+additions, supplied in full. Accepted app/config/tools/pilot and original G5
+bootstrap/fixture/Dockerfile remain byte-identical to55. No accepted branch/main edit.
+Superseded release/Dockerfile.pilot is removed. Single PROPOSED active image recipe
+for this branch is g5/Dockerfile.g5-browser-source; original g5/Dockerfile.g5 remains
+unchanged as historical qualified baseline, not a second active deployment recipe.
+No Railway source/path/config change has been made to select either recipe.
+
+FIXES VS THE UPLOADED NO-CLI MODEL
+1. .dockerignore is explicitly ADDED; it was absent in base55/a56. Deny-by-default,
+   source allowlist plus DB/key/secret/env/upload/cache/evidence/archive exclusions.
+2. Parent and every unchanged-source CI comparison use exact55, no base ambiguity.
+3. Draft image workflow now explicitly pulls the approved digest on a fresh runner,
+   checks linux/amd64 and known image-config identity, then builds. Correct g5/
+   paths and actual test files are present. Draft is INERT in g5/review-ci/, not an
+   executable Actions workflow. No image acquisition/build is triggered now.
+4. g5/start_fictional_web.py replaces unsafe shell-cat bridge. It verifies absolute
+   paths, no symlink in any component, private parent0700/owner, regular0600 owned
+   single-link44byte key, unchanged file during read, canonical Fernet key shape.
+   Refuses UID/GID/root/scope/guard mismatch, preexisting appsecret, invalidDB path
+   or port. No app import, secret argv/logs/traceback or fallback. exec preserves
+   nonroot identity and runs only the dedicated locked pilot factory.
+5. Dockerfile WEB CMD and web-phase command now both use that same Python launcher.
+   Root bootstrap and provisioning/maintenance remain explicit phase overrides.
+6. 8 context-test source files/helper are included, not only old log lines. New
+   focused source suite:24 private-file/launch +10 static packaging +8 context=42.
+   No claim that mocked exec tests are actual Uvicorn/container/Railway qualification.
+
+NETWORK / BUILD BOUNDARY
+The two-stage Dockerfile's35 exact-URL/hash wheel acquisition RUN is a proposed
+change from earlier offline builds. It is NOT covered by the old build PASS.
+Runtime stage installs from local wheels with --no-index/--no-deps/--require-hashes.
+Base is literal official digest in both stages; no base ARG override.
+No networked image build, pip download, Docker pull, registry publish or provider
+operation was executed in this source-only work. Build workflow remains INERT.
+Only the source-only workflow under.github/workflows runs:stdlib Python, read-only
+repo permission, no external deps or images. Existing broad CI is unchanged.
+
+Next owner decision: approve or reject ONE isolated CI qualification of the new
+networked packaging method, official digest and existing35 exact wheels only,
+no registry publishing/paid upgrade; keep total disposable-test allowanceUS$10.
+The old exact base approval andUS$10 allowance already appear in the owner messages;
+see OWNER-AUTHORIZATION-EVIDENCE.txt. Those are not missing owner decisions again.
+Old one-build approval was consumed; it is not permission for this new build.
+
+After owner approval, a reviewed activation commit may place the INERT build draft
+into.github/workflows. No such activation occurred. Review its remaining limit:
+explicit Docker pull and pinned wheel URLs are not independently enforced network
+allowlisting. If required endpoint restriction cannot be qualified on the runner,
+STOP for a bounded acquisition method; do not claim that hashes prove egress limits.
+Image tests in draft cover key launcher, missingconfig and UID, not full web/
+maintenance/TLS lifecycle; those remain separately required before G5PASS.
+
+AUTHORIZATION / STATUS
+G3/G4 PASS preserved. G5 PARTIAL; actual Railway NOT TESTED. All47 uploaded fictional
+model/static tests remain historical Muse-reproduced evidence, not real-platform
+proof. They were not rerun unnecessarily. Existing known French/UI/rawSQLite/no-key
+retry/custody/offsite/realMFA limitations are not silently closed.
+No staged Railway commit, service start, real credentials/accounts/customerdata,
+production/staging change, provider action, merge or deployment is authorized here.

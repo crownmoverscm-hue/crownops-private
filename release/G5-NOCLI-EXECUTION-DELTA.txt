@@ -1,0 +1,54 @@
+REPLACES UNSAFE WEB-KEY BRIDGE IN UPLOADED EXECUTION-METHOD.md
+Proposed only; no Railway phase is executed by this source candidate.
+
+After focused approval and actual image qualification, stage pinned GitHub source
+at the FINAL REVIEWED SHA of this branch. Staged:true, exact project/environment/
+service IDs mandatory. New image recipe:g5/Dockerfile.g5-browser-source.
+Re-read all staged changes; accept-deploy commits the WHOLE patch. No auto-deploy.
+Do not connect a floating source or start an app while the safety hold is open.
+
+SAME SERVICE/VOLUME PHASES
+1. Root ONCE: python /opt/g5/prepare_empty_volume.py; empty dedicated /data only,
+   exactbootstrapACK/UUIDs, restartNEVER/nohealthcheck/domain. No appsecret/web/DB.
+2. Positive root exit and no active writer. RemoveUID0/bootstrapACK before nextphase.
+3. UID/GID10001 one-shot: python /opt/g5/container_fixture.py provision.
+   Fictional owner@example.invalid +sales@example.invalid only. BothMFA, DB0600,
+   key0600 private0700; logs contain no secret/password/TOTP/cookie. Require exit.
+4. UID10001 WEB: python /opt/g5/start_fictional_web.py (same as DockerCMD).
+   CROWNOPS_G5_FIXTURE_ACK=fictional-g5-only-no-real-accounts.
+   Platform-provided project/environment/service UUIDs and volume path must exactly
+   match the authorized disposable target. Never fake runtime IDs as Railway proof.
+   Set existing seven D3 staticguard values, DBpath and actualHTTPSorigin; the tenth
+   guard CROWNOPS_SECRET_KEY is supplied internally from the checked private file.
+   Do NOT set/copy an appsecret Railway variable. Both existingfactory and strict
+   MFAguard remain; this fictional-only bridge is not real pilot key custody.
+5. Exact dashboardStop/Remove + all-deployment/volume readback beforemaintenance.
+   No quiet-log inference, two writers, secondservice or Docker-hostlock fallback.
+6. Nonroot maintenance holder only after webexit; use existing Railway browser
+   Console (documented GA) to execute reviewed maintenance commands and retrieve
+   ONLY encryptedarchive+nonsecretreceipt. No SSHkey/token/CLI installation.
+   Actual Console/0700directory/0600file access is NOT TESTED. If unavailable STOP.
+7. Trustedreceipt independently retained; SHA256+size/download/reupload/newpath
+   checks, FK0/integrity/originals/audit, revoke restored sessions/tokens. No rawDB/
+   key transfer. Stopmaintenance before recovered-path WEB. Oldcookie401/freshMFA.
+8. Verify realTLS/cookies/UID/caps/modes/guards/workerexclusion, restart/durability/
+   shutdown/rollback and actual provider-attempt observations; no simulatedPASS.
+
+EXACT SCOPE
+Project57252bd0-e32f-45aa-9e5b-05bf4a1f8a85
+Environment3fbd111f-5a26-4e1c-80ce-af91fa6247ab
+Service5ca1db2a-c51e-4476-b7f7-ba4a984075fc
+Volume b57f34fa-f0f0-4b6a-aeca-44731f8e8f68 /data1024MB
+Guard DB targets only/data/private/pilot.sqlite3 or/data/private/g5-recovered.sqlite3.
+The unchanged factory still checks all ten required values/schema/private storage.
+
+Use identical immutable built image for phase changes. If no retained image identity
+or supported image-reuse handoff exists,STOP. No public download endpoint, provider,
+new registrypublishing, newrealcredentials, defaultapp fallback or permanentroot.
+
+MaximumUS$10 incremental, no workspace-wide limits. Attended<=24h, review atUS$5,
+startshutdown byUS$8 estimated/observed cumulative to leave billinglagheadroom.
+No hard per-project spend cap has been established. No paidupgrade.
+Cleanup:stop this test, preserve sanitizedevidence, owner confirms exact newly
+created disposable IDs before deletion. Never delete existing CrownOps resources.
+Realoffsite recovery, realstaffMFA, solecustodian risk and finalcustomerGO remainlater.
