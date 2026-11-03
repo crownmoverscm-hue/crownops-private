@@ -1,0 +1,24 @@
+# G5 disposable fictional-only review candidate. NOT the accepted production Dockerfile.
+# Both stages use the exact reviewed Linux/amd64 Python 3.13.18 digest.
+# Networked hash-pinned wheel acquisition is a POLICY CHANGE: manual CI gate only.
+FROM docker.io/library/python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9 AS wheel_fetch
+ENV PIP_CONFIG_FILE=/dev/null PIP_DISABLE_PIP_VERSION_CHECK=1
+WORKDIR /wheel-build
+COPY tools/pilot/requirements-python313.lock /tmp/requirements-online.lock
+RUN python -m pip download --only-binary=:all: --no-deps --require-hashes --dest /wheels -r /tmp/requirements-online.lock
+
+FROM docker.io/library/python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp PIP_CONFIG_FILE=/dev/null
+WORKDIR /app
+COPY tools/pilot/requirements-offline.lock /tmp/requirements-offline.lock
+COPY --from=wheel_fetch /wheels /wheels
+RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels --no-deps --require-hashes --only-binary=:all: -r /tmp/requirements-offline.lock \
+  && python -m pip check \
+  && python -c 'import sys; assert sys.version_info[:3] == (3,13,18)'
+COPY app /app/app
+COPY config /app/config
+COPY tools/pilot /app/tools/pilot
+COPY g5 /opt/g5
+USER 10001:10001
+EXPOSE 8080
+CMD ["/bin/sh","-c","umask 0077; exec python -m uvicorn app.core_pilot:create_pilot_app --factory --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --no-access-log"]
