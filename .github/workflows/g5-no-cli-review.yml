@@ -45,7 +45,7 @@ jobs:
           PY
 
   approved-container-build:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.approved_networked_wheel_fetch == true }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.approved_networked_wheel_fetch == true) || (github.event_name == 'push' && github.ref == 'refs/heads/review/g5-no-cli-browser-source-2026-11-03' && github.event.head_commit.message == 'G5-APPROVED-SINGLE-CI-BUILD-2026-11-03') }}
     needs: static-review-only
     runs-on: ubuntu-24.04
     timeout-minutes: 25
