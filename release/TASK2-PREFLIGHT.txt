@@ -1,0 +1,56 @@
+TASK 2 PRE-ACTIVATION CHECK — BLOCKED
+
+CONTROLLED BUILD PAYLOAD
+91cea018abf6cf1622532f841a5ae813517dba33 remains unchanged.
+Reviewed controller source:9e97d1f9ad755f8a9eb02b7aac5ef2a3f20cde26,
+g5/review-ci/g5-one-use-91cea01-v1.yml.
+Full computed SHA256:03f2e4c23d15270f017a3469931042d5645edfc97f379afffd28971597ae65f2.
+Matches owner's supplied Muse prefix03f2e4c2. Full64-character Muse reference was
+not included in owner's message; independent reference comparison is limited to
+that prefix. Actual prospective copy is byte-identical to the reviewed source
+file: same Gitblob e3d1594d50dc4f9bd32f88bbab6ded9700041dfa, same complete content and computedSHA256.
+
+PROSPECTIVE ACTIVATION OBJECT, NOT ACTIVATED
+Unreferenced commit5a9c384be94a173d982845613132fb00d5d1eb88, parent91, adds exactly
+.github/workflows/g5-one-use-91cea01-v1.yml with that identical reviewed blob.
+No authorization branch/ref was created or moved to this commit. Creating a Git
+object is not a push/activation. No image workflow or CI was launched.
+Do not create authorize/g5-91cea01-once-v1 or otherwise reference this activation
+object without separate owner authorization and passing remaining checks.
+
+HISTORY
+Enumerated all 487 currently retained Actionsruns, 487 uniqueIDs,
+with complete workflowpaths. Zero matches for unique workflowpath or authorization
+branch. Total/latestID stable after pagination. Deleted history cannot be proven
+absent. Recheck immediately before any authorized activation; prior eligibility
+consumption or reset must STOP, never reset workflow/history to gain anotherbuild.
+
+BILLING — BLOCKED
+Actual incremental charges:UNKNOWN. Pending/unbilled testusage:UNKNOWN.
+RemainingUS$10 headroom:UNKNOWN. No direct invoice/billingledger is available via
+current connectedtools; execution/browser environment is unavailable too.
+Do not substitute CPUmetrics, CI timings, zero reported billablemilliseconds or
+an unprovisioned volume for cashbilling evidence. No billing permission/credential
+was created. Owner must provide/read actual Railway testproject usage plus GitHub
+Actions charges/included allowance and pendingcosts before chargeable execution.
+A sufficient balance is a precondition, not inferred from the allowance itself.
+
+PRICING DOCUMENTATION
+Latest owner instruction governs:CAD $35.99 fuel ONCE PER MOVE, not per truck.
+Corrected current MASTER-HANDOFF and BACKLOG planning wording. Historical packages
+and accepted application/calculation source are unchanged. This is documentation
+only, no quote/pricing activation or retroactive historical-rate change.
+
+STAGED RAILWAY STATE
+Resolved owner's report:4individualchanges grouped into2resources(service+volume).
+No staged changes committed; no new Railway calls/writes needed to reopen that count.
+
+REMAINING OWNER ACTIONS
+1. Supply/confirm actual billing+pendingusage and sufficient headroom withinUS$10.
+2. Supply Muse's full controllerdigest if a full-reference comparison is required;
+   verify the computed64-character value with Muse (not another policy decision).
+3. Separately authorize the ONE exact91 networked CI build when these checksclose.
+No controller activation, CI launch, image acquisition, Railway deployment, new
+credentials, providerconnection, realaccounts or customerdata authorized now.
+After any separately approved build deliver complete evidence to Muse FIRST,
+then consider Railway execution. G5 staysPARTIAL; customerpilot remainsNO-GO.

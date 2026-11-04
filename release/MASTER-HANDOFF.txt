@@ -134,7 +134,7 @@ DependencyupdatePRs remainseparate reviewedsecuritywork, no substitutions inG5.
 6. SETTLED COMPANY RULES / REMAINING DECISIONS
 GSTandQST computed independently onpre-taxapprovedbase; deterministicdecimal/cents
 rounding and immutabletax/ratesnapshots. Regularlocal3h, qualifyingafternoonlocal1h;
-transportoneadditionalcrew-hour ONCE per move; fuelCAD35.99 PERTRUCK settled.
+transportoneadditionalcrew-hour ONCE per move; fuel CAD $35.99 ONCE PER MOVE, per latest owner direction.
 Rates:actualcanonicalcrew/truckamounts/seasonal/peakdates anddated2027table still
 requireownerclosure beforequoteenabledrelease, never autoactivate2027/historicalreprice.
 Deposits:local300,smallafternoondelivery150,LDacceptedtransportfee. Smalldelivery
