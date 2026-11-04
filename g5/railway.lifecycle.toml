@@ -1,0 +1,14 @@
+# PROPOSAL ONLY. No service points to this file in this source-only candidate.
+# Requires separately reviewed root-start/Console-UID semantics and build approval.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "g5/Dockerfile.g5-browser-source"
+
+[deploy]
+startCommand = "python -I /opt/g5/lifecycle_entry.py"
+restartPolicyType = "NEVER"
+numReplicas = 1
+overlapSeconds = 0
+drainingSeconds = 30
+# No HTTP healthcheck in the maintenance hold. No inherited railway.toml healthcheck.
+# No new public port, secret variable, provider, worker or automatic phase switch.
