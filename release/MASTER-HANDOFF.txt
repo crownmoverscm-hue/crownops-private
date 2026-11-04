@@ -1,0 +1,192 @@
+CROWNOPS MASTER HANDOFF — NOVEMBER 3, 2026 — PLANNING / SOURCE PREPARATION ONLY
+
+PLAIN ENGLISH
+The small CRM has passed its earlier technical checks. Its new Railway packaging
+has passed42 source checks, independently reproduced by Muse. We still need a real
+build of THAT exact package, then an isolated Railway rehearsal and recoverytest.
+Full business integrations and AI are later releases; they cannot widen this pilot.
+No realcustomer launch date is approved. November9 remains a conditional target.
+
+1. EXACT EVIDENCE / DISCREPANCIES
+G1/G2 and accepted app security:PASS per independent record; realdeviceMFA later.
+G3 source:PASS preserved. G4 recoverytools:PASS fictional-only preserved.
+G5:PARTIAL, actualRailway NOT TESTED. G6-G9 operational gates remainopen.
+Reviewed payload91cea018abf6cf1622532f841a5ae813517dba33,
+branchfix/g5-no-cli-packaging-hardening, source-onlyrun41598550360 SUCCESS42tests.
+Older22984e58bebe24157125588fb604c3cd43c506db,
+branchreview/g5-no-cli-browser-source-2026-11-03,run41597986691 SUCCESS includes
+approved-container-build job. Its image PASS is never assigned to91.
+Actual91 image build:NOT RUN. Oldonebuild authorization consumed; no newapproval.
+Muse hardenedreview independently reproduced42 tests and verifiedCI/artifact; no
+new app/security suite is needed for controller-only changes.
+
+MissingearlierZIPs were supplied in91 handoff: original G5 transferf2269cf8...,
+47,111byte procedureZIP5d33d489..., plus model and review. .dockerignore is now an
+explicit91 addition; it was absent in55/a56.91's only parent55 resolvesbaseambiguity.
+Exactbase approval andUS$10 allowance are in owner's DEV messages; copiedexcerpts
+are supporting transcriptions, not new approvals or signatures. Owner can forward
+original messages to Muse; no duplicateapproval is requested. Newnetworkedbuild
+stillpending. Newcontroller fixespush/retry risk without changing91 payload.
+
+2. PRIORITY1 — G5 BLOCKERS / NEXT SAFE STEP
+A. NewCIbuild permission:await explicitowner approval of91+networkedfetch+onebuild.
+B. One-usecontroller:preparedinert, checkout91; run1/attempt1only. See README/tests.
+C. Actualbudgetremaining:UNKNOWN. TimingAPI foroldrun reports37seconds wallclock,
+0billableUbuntu milliseconds;91source-onlyrun13seconds,0billablemilliseconds.
+These API values are NOT a dollarinvoice or completeaccountusage. Available tools
+expose no scoped cashledger. NamedRailwayservice is staged-create/no deployments,
+so no observedrunningcontainer; do not infer totalproject/workspace charges0.
+Required before any chargeablebuild or Railwayexecution:Jonathan reviews usage for
+this testproject and relevantActionsruns, records paid/included usage, anypending
+charges and headroom withinUS$10. No sharedworkspace spendcontrol changes.
+D. BrowserConsole:generallyavailable per RailwayJune5changelog, but specificservice
+has no deployedcontainer. Private0700/0600 Console access and encrypteddownload/
+reupload cannot be verified from stagedresource metadata. Current assistantbrowser
+session previously required sign-in; owner's dashboard access does not transfer
+that session. No newCLI/SSHkey/token requested. Targetverification remainsHELD.
+E. Imageidentity/reuse:API redeploy documents reusing an existingbuild. On actual
+Railway must capture initial Railwayimage/build/deployment ID and show everyphase
+reuses it, not rebuilds. CI-localimage is not a remotelypublisheddeployableimage.
+F. Exclusivehandoff/TLS/restart/monitoring:documentation+Docker evidence only;
+actualplatformobservations stillrequired. No quietlog, removeddomain or localhost
+Dockerlock substitutes for terminatedwriters/uniquevolumeholder evidence.
+
+The next SAFE executable action now is the source-onlycontrollercheck and Muse
+review. No image/build/activation or stagedcommit is authorized by this handoff.
+If owner later approves oneCIbuild, activateexactcontrolleronly, test91, return raw
+logs+actualtestedSHA+imageID+35wheelhashes+guardresults to Muse before Railway.
+
+3. EXACT CONDITIONAL RAILWAY SEQUENCE — DO NOT EXECUTE YET
+Only project57252bd0-e32f-45aa-9e5b-05bf4a1f8a85,
+env3fbd111f-5a26-4e1c-80ce-af91fa6247ab,
+service5ca1db2a-c51e-4476-b7f7-ba4a984075fc,
+volume b57f34fa-f0f0-4b6a-aeca-44731f8e8f68 /data1024MB.
+FourchangesremainSTAGED; no source/variables/latestdeployment per currentreadback.
+Futurebootstrap:stagedpinnedGitHub91+g5/Dockerfile.g5-browser-source, noauto-deploy,
+restartNEVER/overlap0/oneinstance/nohealthcheck/domain. Root ONLY command
+python /opt/g5/prepare_empty_volume.py with exactscopeACK/IDs; noapp/DB/secrets.
+Requireexit0/rootgone/emptyprivatefoldersUID10001mode0700. STOP on unsupportedstate.
+RemoveUID0/ACK and bootstrapoverrides; positiveall-deployment readback, then ONE
+samebuild redeploy underUID/GID10001 for python /opt/g5/container_fixture.py provision.
+Requiretwofictional@example.invalidaccounts,2MFA,DB0600/integrity/FK, thenhelperexit.
+WEB commandpython /opt/g5/start_fictional_web.py; UID10001 andfixtureACK; tenD3values
+includingkey supplied privately by checkedfile, exactHTTPSorigin. Realcookie/MFA/
+forbiddenroute/capability checks. No catbridge, keyvariable, mainfactoryfallback.
+Stopweb usingexactdashboarddeployment; connectorreadback ALLinstancesstopped;
+nonrootmaintenanceholder onlynow, sameimage/samevolume, nosecondservice/replica.
+BrowserConsole confirmid/privatefilemetadata, no newauth/permission prompts. Use
+acceptedoffline maintenanceCLI as separateprocesses; archiveonlySQLiteAPI+manifest+
+encryption, keysseparate. Independentlyretain trustedreceipt, download ONLY.enc+
+receipt, verifyhash+size, reuploadNEWpath, authenticate/readback/FK/integrity.
+RestoreNEWDBpath, preserveoriginals/audit, revokeauth, recordfingerprint. Exitholder,
+provegone; resumeWEB sameimage onnewDBpath, oldcookie401/freshMFA/readbacks/restart.
+If Console missing/rootonly/fileaccessunsafe/transferblocked/newcredentialneeded,
+STOP. No rawDB/key/TOTP/cookie export or publicdownload endpoint.
+Emergencyshutdown stopservice/verifygone/retainvolume; mode-driftstop/preserveDB+WAL,
+verifiedbackup->NEWownedrestorepath->revoke->validate->ownercutover. Never repair
+populatedstorage withbootstrap/chmod777/recursivechown or overwriteDB.
+Cleanup requires explicitdisposableIDconfirmation afterevidencepreserved; noexisting
+service/project/storage deletion. Attended<=24h, reviewUS$5/shutdownbyUS$8 observed/
+estimated; reportinglag means no guaranteedhardprojectcap. US$10 totalceiling.
+
+4. RELEASES / IMPLEMENTATION BACKLOG (SEE BACKLOG.csv)
+OnlyReleaseA/G5sourceprep is authorized now. B/C/D items are planning, not permission
+to code/connect providers. Use isolatedbranches and independent acceptance peritem.
+A: manualemailinquiry, originals, clientmatch/dedup,notes/owner/tasks/status,
+existingOwner/Manager/SalesRBAC, mandatoryMFA, append-onlyapplicationaudit, safe
+backups/recovery. No imports/integrations/quotes/payment/AIactions. Exactlyfuture
+Owner jonathanprobonas15@gmail.com andSales crownmovers.cm@gmail.com only after
+realaccountapproval. Jonathanoperatesboth;Carl excluded;singlecustodian riskopen.
+B order:B1Wixwebhookintake ->B2QuickBooksapprovedquotes/tax/reconciliation ->
+B3oneapprovedprocessor/paymentverification ->B4capacity/crew/truck/scheduling.
+C: ConnectionsCenter usability after underlyingconnectorbackends qualified. Minimal
+secureOAuth/tokencustody/scopes foundation must precedeBprovideractivation; fullC
+screen is not a prerequisite forA and must not delayA.
+D: authorizedread/search/summaries first, draftsuggestions second, lowriskinternal
+writes third; sensitiveexternalfinancial/booking/customeractions require separate
+boundedapproval/revalidation/idempotency. No directLLMdatabase/providerwrites.
+
+5. EXISTING VS MISSING VS UNTESTED (SOURCE != PRODUCTION ACCEPTANCE)
+QualifiedA source:app/core_v1.py (manualroutes/retry/source/roles/staleversions),
+app/security.py (MFA),app/core_pilot.py (D3),tools/pilot/maintenance/core_maintenance.py
+andpilot_maintenance.py (fictionalrecovery). New91launcher sourcequalified, actual
+image/web/Console/realstaff/offsite/TLS/exclusiveRailwayaccess NOT TESTED.
+ExistingbutCore-disabled/unqualifiedforB:app/wix_sync.py,app/gmail_sync.py,
+app/providers.py,app/quickbooks_status.py,app/invoice_payments.py,
+app/invoice_quickbooks_delivery.py,app/availability.py,app/schedule_routes.py,
+app/main.py quote/accept/jobhandlers,app/worker.py andapp/ai.py. Reuseonlyafter
+scopedsource review and independenttests; presence is not operationalreadiness.
+Missing/NOT ESTABLISHED as acceptedcompletefeatures: unifiedConnectionsCenter,
+chosenpaymentprocessorproductionledger+refundcontrols, qualifiedbookingstatemachine,
+capacityracecontrols, generalAIreadpermissionlayer/approvaltoolrouter/actionjournal,
+productionmonitoring/offsite restore/runbook evidence. Somelegacyfragments exist;
+this is an acceptance-gap statement, not a claim no code exists anywhere.
+Fullfunctionality of draftPRs unverified; do not merge the stack:
+#87 StaffAI DRAFTopen;#88workflow DRAFTopen;#89Wixreadiness DRAFTopen;
+#90credentialreissue DRAFTopen;#91syntheticrecoveryrestriction DRAFTopen;
+#92Wixpreflight DRAFTopen;#93companysettings DRAFTopen. #59materials open/notdraft.
+PR#91restriction forfiveprotectedsyntheticaccounts,includingMaster, must persist;
+CoreA denies legacyrecovery for ALLaccounts regardlessPRmergestatus. Do not enable
+#90credentialreissue. Adapter3303910/currentmail24d6818 stayseparate QA;Estimate185
+neverresent/recreated; WordPress/replacementsite/theme redesign excluded.
+DependencyupdatePRs remainseparate reviewedsecuritywork, no substitutions inG5.
+
+6. SETTLED COMPANY RULES / REMAINING DECISIONS
+GSTandQST computed independently onpre-taxapprovedbase; deterministicdecimal/cents
+rounding and immutabletax/ratesnapshots. Regularlocal3h, qualifyingafternoonlocal1h;
+transportoneadditionalcrew-hour ONCE per move; fuelCAD35.99 PERTRUCK settled.
+Rates:actualcanonicalcrew/truckamounts/seasonal/peakdates anddated2027table still
+requireownerclosure beforequoteenabledrelease, never autoactivate2027/historicalreprice.
+Deposits:local300,smallafternoondelivery150,LDacceptedtransportfee. Smalldelivery
+classification separatefromordinaryafternooneligibility;required/pending/verified/
+applieddistinct; pendingpayment !=verifiedcredit. Noautomaticcharge/forfeit/refund.
+Acceptance !=hold !=depositreceipt !=finalconfirmation. Hold24elapsedhours from
+recordedsentwrittendepositinstructions AFTER availabilityverification; UTC/DST
+boundaries; expirySTAFFREVIEWONLY/noautocancel/forfeit/releasecommittedcapacity.
+Authorizedextensions auditreason; maximum/reservationauthority pendingdefinition.
+LocalconfirmationSales/Manager/Owner; LD/peak/exceptionManager/Owner. Requirelogged
+humanverificationcall, verifieddeposit, currentscope, freshcapacity and explicit
+in-transactionauthorizedaction; idempotent/concurrentrevalidation.
+Local/smalldelivery14days;LD21days;timelyrefund/transfer intentions; latehumanreview.
+Counsel:Quebeccontractformation/notices/dayscalculation/bilingualterms/hold/refunds;
+accountant:depositliability/taxpoint/GSTQST/refunds/reversals/variableLDdeposit.
+No legal/accounting signoff inferred frombusinesspolicyapproval.
+Ownerstillchoosesoneprocessor, smallservice/peak/exceptioncriteria, rounding,
+reservationauthority/extensionmaximum, offsite destination/retention/custodyrisk,
+realMFA/employeeaccess/pilotGO. Bdecisions do NOT block isolatedmanualA demonstration.
+
+7. EFFORT / REALISTIC MILESTONES
+Planningranges,NOTquotes/deadlinecommitments; oneexperiencedengineer+separateQA+
+availableowner, reusablecode onlyafterreview, externalapprovalwaits additional.
+A remaining:2-5developmentdays AFTER access/buildapproval/platformcapabilities;
+then operationalreview/realMFA/offsite drill/ownerseparateGO. Nov9 possibleonlyif
+allgatesactuallyclose; currentNO-GO, no honestfixedlaunchpromise. Fictional demo can
+precedecustomerpilot after relevantisolation evidence, not countasproductionGO.
+B1Wix4-8devdays;B2QuickBooks8-15;B3payments8-15;B4scheduling10-20 (total30-58devdays,
+roughly6-12weeks withQA/waits possiblylonger). C8-15devdays. Dread-only5-10;
+Dapprovedactions15-30. Broadvision approximately3-6months atthese assumptions,
+not an approveddeliverydate; rescopeaftereachreleaseevidence. Do not askJonathan
+to configureallstaff/materials/integrations beforetwoaccountmanualrehearsalworks.
+
+MILESTONES
+M0:source91+42 accepted; controllerprep separatelyreviewed. M1:owneronebuildapproval,
+actual91imagequalified+Museverification. M2:conditionaldisposableRailwaypractice
+withfictionalidentities, platform/e2erecoveryevidence. M3:separatepilotsetupapproval,
+exacttworealaccounts+realdeviceMFA, realoffsitebackup/restore, custody/monitoring/
+rollback, independentacceptance, finalwrittenGO. ReleaseA limitedcustomeruseonlythen.
+B1-B4,C,D each have own scopeddevelopment/providerwrite/sandbox/activationapproval.
+No monthlycostceiling for fullB/C/D exists; obtain estimates before any newpaidresource.
+
+8. FOCUSED MUSE HANDOFF
+Do not repeatthe42app/packagingtests absentpayloadchanges. Review controllerdiff,
+checkout91pin, run1/attempt1 gates, no dispatch/reusabletrigger, concurrency,readonly
+permissions, failedfirstattemptconsumption and separatecontrollersha/sourceSHA.
+Run10newgate-model/staticchecks; qualify as modeled/source, not realGitHubscheduling.
+Check freshrun/inactiveimageworkflow. No newbuildPASS, noRailwaystateassumption.
+Use actualmetadata forold229run and91sourceCI, read-onlystagedservice proof. GitHub
+billingtiming is not an invoice; mark cashcapacityUNKNOWN. Preserve everyPARTIAL/
+NOTTESTED gap. Next imageevidence must identifycontrollerSHA,testedsource91,imageID,
+35wheelSHA/URLs,logs/runtimeUID/refusals,actualtestcounts/durations/failedsteps.
+Then platformreview needs realConsole/TLS/cookies/scope/exclusivewriters/image-reuse/
+retrieval/newpathrestore/revocation/stop/restart/shutdown/rollback/cost/cleanup.
+Stopifnewaccess/paidresource/providers/customerdata/unsupportedplatform/unsafevolume.

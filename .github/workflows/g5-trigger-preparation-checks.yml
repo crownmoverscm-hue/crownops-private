@@ -1,0 +1,33 @@
+name: G5 trigger preparation checks only
+on:
+  push:
+    branches: [prep/g5-single-use-91cea01]
+permissions:
+  contents: read
+jobs:
+  source-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Preserve exact reviewed build payload
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/g5-trigger
+          git diff --exit-code 91cea018abf6cf1622532f841a5ae813517dba33 HEAD -- app config tools/pilot g5/Dockerfile.g5-browser-source g5/start_fictional_web.py .dockerignore
+          test ! -e .github/workflows/g5-one-use-91cea01-v1.yml
+          git rev-parse HEAD > evidence/g5-trigger/controller-preparation-sha.txt
+      - name: Gate model and static contract only
+        run: |
+          set -euo pipefail
+          python3 g5/review-ci/test_one_use_gate.py 2>&1 | tee evidence/g5-trigger/gate-tests.txt
+          sha256sum g5/review-ci/g5-one-use-91cea01-v1.yml g5/review-ci/test_one_use_gate.py > evidence/g5-trigger/source-sha256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g5-trigger-preparation-${{ github.sha }}
+          path: evidence/g5-trigger/
+          retention-days: 14

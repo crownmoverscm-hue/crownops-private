@@ -1,0 +1,99 @@
+# INERT PREPARATION ONLY. No owner approval for new build exists yet.
+# Activate only after explicit approval by copying this file to the UNIQUE
+# .github/workflows/g5-one-use-91cea01-v1.yml on authorize/g5-91cea01-once-v1.
+# Checkout pins reviewed payload91, separate from controller/activation SHA.
+# First run/first attempt only; failures/cancellation consume eligibility.
+name: G5 one-use reviewed91cea01 build v1 INACTIVE
+on:
+  push:
+    branches: [authorize/g5-91cea01-once-v1]
+permissions:
+  contents: read
+concurrency:
+  group: crownops-g5-91cea01-one-authorization-v1
+  cancel-in-progress: false
+jobs:
+  fictional-build:
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'crownmoverscm-hue/crownops-private' &&
+      github.ref == 'refs/heads/authorize/g5-91cea01-once-v1' &&
+      github.run_number == '1' && github.run_attempt == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 91cea018abf6cf1622532f841a5ae813517dba33
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Refuse anything except exact reviewed payload and one attempt
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/authorize/g5-91cea01-once-v1
+          test "$GITHUB_RUN_NUMBER" = 1
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(git rev-parse HEAD)" = 91cea018abf6cf1622532f841a5ae813517dba33
+          test -z "$(git status --porcelain)"
+      - name: Confirm unchanged approved payload
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/g5-browser
+          git diff --exit-code 55b431a3085acac42846179566b8d2e7daf07a8f HEAD -- app config tools/pilot g5/Dockerfile.g5 g5/prepare_empty_volume.py g5/container_fixture.py
+          python3 g5/test_fictional_web_start.py
+          python3 g5/test_browser_packaging.py
+      - name: Explicit official digest acquisition on fresh runner
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 docker.io/library/python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9 2>&1 | tee evidence/g5-browser/base-pull.txt
+          docker image inspect docker.io/library/python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9 > evidence/g5-browser/base-inspect.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('evidence/g5-browser/base-inspect.json'))[0]
+          assert d['Architecture']=='amd64' and d['Os']=='linux'
+          assert d['Id']=='sha256:b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79'
+          assert any(s.endswith('@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9') for s in d['RepoDigests'])
+          PY
+      - name: Build reviewed networked acquisition stage then offline runtime
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --pull=false --file g5/Dockerfile.g5-browser-source --tag crownops-g5-browser-review:test . 2>&1 | tee evidence/g5-browser/build.txt
+          docker image inspect --format '{{.Id}}' crownops-g5-browser-review:test > evidence/g5-browser/image-config-id.txt
+      - name: Nonroot tests in actual image, external network disabled
+        run: |
+          set -euo pipefail
+          docker run --rm --network=none --read-only --tmpfs /tmp:rw,nosuid,nodev --security-opt no-new-privileges --cap-drop ALL crownops-g5-browser-review:test python /opt/g5/test_fictional_web_start.py 2>&1 | tee evidence/g5-browser/key-tests-in-image.txt
+          docker run --rm --network=none --read-only --tmpfs /tmp:rw,nosuid,nodev --security-opt no-new-privileges --cap-drop ALL crownops-g5-browser-review:test python -c 'import os,sys; assert os.getuid()==os.getgid()==10001; assert sys.version_info[:3]==(3,13,18); print("UID10001_PYTHON31318_OK")' | tee evidence/g5-browser/runtime.txt
+          set +e
+          docker run --rm --network=none --read-only --tmpfs /tmp:rw,nosuid,nodev --security-opt no-new-privileges --cap-drop ALL crownops-g5-browser-review:test > evidence/g5-browser/missing-config.txt 2>&1
+          rc=$?
+          set -e
+          test "$rc" -eq 1
+          grep -Fx 'REFUSED: fictional G5 web startup did not complete.' evidence/g5-browser/missing-config.txt
+      - name: Offline dependency and wheel evidence from actual image
+        run: |
+          set -euo pipefail
+          docker run --rm --network=none crownops-g5-browser-review:test python -m pip freeze --all > evidence/g5-browser/freeze.txt
+          docker run --rm --network=none crownops-g5-browser-review:test python -m pip check > evidence/g5-browser/pip-check.txt
+          docker run --rm --network=none crownops-g5-browser-review:test python -c 'from pathlib import Path; import hashlib,json; print(json.dumps({p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(Path("/wheels").glob("*.whl"))},sort_keys=True))' > evidence/g5-browser/wheel-hashes.json
+          python3 - <<'PY'
+          import json
+          expected=json.load(open('g5/CONTEXT-PINS.json'))['wheel_sha256']
+          assert json.load(open('evidence/g5-browser/wheel-hashes.json'))==expected
+          PY
+      - name: Source provenance and explicit limitations
+        if: always()
+        run: |
+          mkdir -p evidence/g5-browser
+          git rev-parse HEAD > evidence/g5-browser/git-sha.txt
+          printf '%s\n' "$GITHUB_WORKFLOW_SHA" > evidence/g5-browser/controller-sha.txt
+          printf '%s %s %s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT" > evidence/g5-browser/run-identity.txt
+          sha256sum g5/Dockerfile.g5-browser-source g5/start_fictional_web.py .dockerignore tools/pilot/requirements-python313.lock tools/pilot/requirements-offline.lock > evidence/g5-browser/input-hashes.txt
+          printf '%s\n' 'Image remains local-only, never published. No Railway proof. Full web/maintenance lifecycle NOT TESTED by this workflow.' > evidence/g5-browser/limits.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g5-exact-91cea01-one-use-${{ github.run_id }}
+          path: evidence/g5-browser/
+          retention-days: 14
