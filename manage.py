@@ -31,6 +31,7 @@ s=sub.add_parser('installation-identity',help='Explicitly record whether this da
 s.add_argument('--mode',required=True,choices=['legacy-crown','unconfigured']);s.add_argument('--reason',required=True)
 s=sub.add_parser('backup-run',help='Scheduled backup: snapshot, restore test, retention, status for monitoring (exit 1 on failure)')
 s.add_argument('--dir',default=os.getenv('CROWNOPS_BACKUPS',''));s.add_argument('--keep',type=int,default=int(os.getenv('CROWNOPS_BACKUP_KEEP','14')));s.add_argument('--no-verify',action='store_true')
+s=sub.add_parser('ops-check',help='Operational status for monitoring: exit 0 ok, 1 warning, 2 critical (no customer data)')
 s=sub.add_parser('db-status',help='Read-only schema version, pending migrations and schema problems (exit 1 if action is needed)')
 s=sub.add_parser('setup-code',help='Generate a private one-installation web setup code and the hash to store as CROWNOPS_SETUP_CODE_HASH')
 s=sub.add_parser('company-profile',help='Set the company identity used in client emails and documents (new installations must run this)')
@@ -54,7 +55,7 @@ try:
         if path.exists():raise ValueError('Restoration never overwrites a database. Stop the server and choose a NEW empty instance path.')
         from app.backups import restore_archive
         print(restore_archive(Path(a.archive),path));sys.exit(0)
-    if a.command not in ('serve','backup','backup-run','doctor','setup-code','db-status'):
+    if a.command not in ('serve','backup','backup-run','doctor','setup-code','db-status','ops-check'):
         initialize(path)
     if a.command=='init':
         from app.main import create_user
@@ -116,6 +117,10 @@ try:
         except Exception as ex:
             print(json.dumps({'state':'failed','error':str(ex)[:300]}),file=sys.stderr);sys.exit(1)
         print(json.dumps({k:result[k] for k in ('state','archive','bytes','sha256','schema_version','upload_files','restore_verified','backup_seconds','total_seconds','kept','pruned')},indent=2))
+    elif a.command=='ops-check':
+        from app.ops_status import collect
+        report=collect(path);print(json.dumps(report,indent=2))
+        sys.exit({'ok':0,'warning':1}.get(report['state'],2))
     elif a.command=='db-status':
         if not path.exists():raise ValueError('No database at this path.')
         from app.migrations import status

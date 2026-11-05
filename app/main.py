@@ -197,43 +197,42 @@ def create_app(database_path=None, *, core_pilot=False):
     from contextlib import asynccontextmanager,suppress
     @asynccontextmanager
     async def lifespan(_app):
+        async def run_job(name,message,func,*args):
+            # Every background job logs failures, records a heartbeat for monitoring and keeps running.
+            from .ops_status import record_job
+            import logging
+            try:
+                await asyncio.to_thread(func,*args);error=None
+            except Exception as ex:
+                logging.getLogger('crownops').error(message);error=type(ex).__name__
+            try:await asyncio.to_thread(record_job,path,name,error)
+            except Exception:logging.getLogger('crownops').error('Background job status could not be recorded for %s.',name)
         async def review_worker():
             from .worker import tick
             while True:
-                try:await asyncio.to_thread(tick,path)
-                except Exception:
-                    import logging
-                    logging.getLogger('crownops').error('Draft workflow run failed; inspect the database and workflow configuration. No automatic payment or email was attempted.')
+                await run_job('drafts','Draft workflow run failed; inspect the database and workflow configuration. No automatic payment or email was attempted.',tick,path)
                 await asyncio.sleep(60)
         async def inquiry_worker():
             from .automatic_intake import run_intake
             while True:
-                await asyncio.to_thread(run_intake,path,new_lead)
+                # Previously unguarded: one failure stopped intake until restart.
+                await run_job('intake','Inquiry intake could not finish; it will retry. No inquiry was discarded.',run_intake,path,new_lead)
                 await asyncio.sleep(120)
         async def connection_worker():
             from .providers import maintain_connections
             while True:
-                try:await asyncio.to_thread(maintain_connections,path)
-                except Exception:
-                    import logging
-                    logging.getLogger('crownops').error('Connection maintenance will retry. Saved authorizations retained.')
+                await run_job('connections','Connection maintenance will retry. Saved authorizations retained.',maintain_connections,path)
                 await asyncio.sleep(900)
         async def estimate_worker():
             from .estimate_delivery import poll_estimates
             while True:
-                try:await asyncio.to_thread(poll_estimates,path)
-                except Exception:
-                    import logging
-                    logging.getLogger('crownops').error('Estimate status check could not finish. No automatic email was attempted.')
+                await run_job('estimates','Estimate status check could not finish. No automatic email was attempted.',poll_estimates,path)
                 await asyncio.sleep(120)
         estimate_task=asyncio.create_task(estimate_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
         async def receipt_worker():
             from .invoice_payments import poll_quickbooks_receipts
             while True:
-                try:await asyncio.to_thread(poll_quickbooks_receipts,path)
-                except Exception:
-                    import logging
-                    logging.getLogger('crownops').error('Receipt synchronization could not finish. No payment or accounting write was attempted.')
+                await run_job('receipts','Receipt synchronization could not finish. No payment or accounting write was attempted.',poll_quickbooks_receipts,path)
                 await asyncio.sleep(300)
         receipt_task=asyncio.create_task(receipt_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
         connection_task=asyncio.create_task(connection_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
@@ -1607,5 +1606,7 @@ def create_app(database_path=None, *, core_pilot=False):
     register_pricing_policy(app,path,auth)
     from .branding import register_branding
     register_branding(app,path)
+    from .ops_status import register_ops_status
+    register_ops_status(app,path,auth)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app
