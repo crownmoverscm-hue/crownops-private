@@ -20,7 +20,7 @@ def create_deposit_checkout(path,qid,lid,actor):
     from .core_v1 import deny_if_enabled
     deny_if_enabled("create deposit checkout")
     token=os.getenv('SQUARE_ACCESS_TOKEN');loc=os.getenv('SQUARE_LOCATION_ID')
-    if not token or not loc:raise HTTPException(503,'Card deposits are not configured. Ask Crown for its approved payment instructions.')
+    if not token or not loc:raise HTTPException(503,'Card deposits are not configured. Ask the moving company for its approved payment instructions.')
     with transaction(path) as db:
         q=one(db,"SELECT * FROM quotes WHERE id=? AND lead_id=? AND status='Accepted'",(qid,lid))
         if not q:raise HTTPException(409,'Accept the reviewed estimate before paying its deposit.')
@@ -33,7 +33,7 @@ def create_deposit_checkout(path,qid,lid,actor):
         from .company_profile import ready_profile
         company=ready_profile(db,'creating deposit checkouts')
         if env=='production' and (lid.startswith('DEMO-') or l['email'].endswith('.invalid')):raise HTTPException(409,'Fictional clients cannot create production card deposits.')
-        if not quote_scope_current(db,q,l) or pending_scope_changes(db,lid):raise HTTPException(409,'Ask Crown to review the latest changes before paying.')
+        if not quote_scope_current(db,q,l) or pending_scope_changes(db,lid):raise HTTPException(409,'Ask the moving company to review the latest changes before paying.')
         balance=deposit_state(db,lid,q)
         if balance['pending_cents']:raise HTTPException(409,'A deposit has already been recorded and is awaiting verification. Do not pay again.')
         if not balance['due_cents']:raise HTTPException(409,'No deposit is outstanding.')

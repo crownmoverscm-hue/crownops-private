@@ -537,7 +537,7 @@ def register_ux_features(app,path,auth):
 
     @app.get('/api/ux/jobs/{jid}/crew-hours')
     def crew_hours(jid:str,u=Depends(auth)):
-        if u['role'] not in OFFICE|{'crew'}:raise HTTPException(403,'Crown staff only.')
+        if u['role'] not in OFFICE|{'crew'}:raise HTTPException(403,'Staff only.')
         with closing(connect(path)) as db:
             j=one(db,'SELECT * FROM jobs WHERE id=?',(jid,))
             if not j:raise HTTPException(404,'Job not found.')
@@ -606,7 +606,7 @@ def register_ux_features(app,path,auth):
     @app.get('/api/ux/employee-directory')
     def employee_directory(start:str='',end:str='',u=Depends(auth)):
         # Everyone gets the internal contact directory; only payroll/management gets private HR/pay fields.
-        if u['role'] not in OFFICE|{'crew'}:raise HTTPException(403,'Directory access is restricted to Crown staff.')
+        if u['role'] not in OFFICE|{'crew'}:raise HTTPException(403,'Directory access is restricted to company staff.')
         end_d=_date_arg(end,'end date') if end else date.today(); start_d=_date_arg(start,'start date') if start else end_d-timedelta(days=13)
         if end_d<start_d or (end_d-start_d).days>366:raise HTTPException(422,'Choose a payroll range up to one year.')
         private=u['role'] in PRIVATE_HR

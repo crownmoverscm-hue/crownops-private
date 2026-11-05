@@ -87,7 +87,7 @@ def register_final_features(app, path, auth):
     @app.get('/api/ux/final/job/{jid}')
     def final_job(jid: str, u=Depends(auth)):
         if u['role'] not in STAFF:
-            raise HTTPException(403, 'Crown staff only.')
+            raise HTTPException(403, 'Staff only.')
         with closing(connect(path)) as db:
             j = one(db, 'SELECT * FROM jobs WHERE id=?', (jid,))
             if not j:
@@ -144,7 +144,7 @@ def register_final_features(app, path, auth):
     @app.get('/api/ux/final/schedule')
     def final_schedule(start: str='', end: str='', scope: str='all', u=Depends(auth)):
         if u['role'] not in STAFF:
-            raise HTTPException(403, 'Crown staff only.')
+            raise HTTPException(403, 'Staff only.')
         if scope not in ('all','mine'):raise HTTPException(422,'Choose My Jobs or All Jobs.')
         with closing(connect(path)) as db:
             identity=schedule_identity(db,u)

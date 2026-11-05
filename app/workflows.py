@@ -104,7 +104,7 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
         if not re.fullmatch(r'[A-Za-z0-9_-]{12,120}',rid):raise HTTPException(422,'Reload the form to create a valid submission ID.')
         ip=stamp_hash(request.client.host if request.client else 'local');since=(datetime.now(timezone.utc)-timedelta(hours=1)).isoformat(timespec='seconds')
         with transaction(path) as db:
-            if db.execute("SELECT count(*) FROM audit WHERE actor=? AND action='Intake event captured' AND created_at>?",('public:'+ip,since)).fetchone()[0]>=8:raise HTTPException(429,'Too many submissions. Please contact Crown directly.')
+            if db.execute("SELECT count(*) FROM audit WHERE actor=? AND action='Intake event captured' AND created_at>?",('public:'+ip,since)).fetchone()[0]>=8:raise HTTPException(429,'Too many submissions. Please contact the moving company directly.')
             r=ingest_event(db,{'event_id':'webform:'+rid,'kind':'form','lead':l,'source':'CrownOps EN/FR form','permission_to_contact':True,'body':text(data.get('body',''))},'public:'+ip,new_lead)
             if not r.get('duplicate'):
                 from .client_communications import portal_link

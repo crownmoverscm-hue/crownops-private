@@ -108,7 +108,7 @@ def square_deposits_enabled(client_email=''):
 def square_deposit_gate(client_email):
     env=square_deposit_environment()
     if not square_deposits_enabled(client_email):
-        raise HTTPException(503,'Card deposits are not enabled for this project. Ask Crown for its approved payment instructions.')
+        raise HTTPException(503,'Card deposits are not enabled for this project. Ask the moving company for its approved payment instructions.')
     return env
 
 def square_connection_status():
