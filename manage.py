@@ -27,6 +27,7 @@ s=sub.add_parser('verify-backup',help='Verify checksums and restore privately to
 s=sub.add_parser('reset-mfa',help='Emergency local account recovery after verifying identity');s.add_argument('--email',required=True);s.add_argument('--reason',required=True)
 s=sub.add_parser('worker',help='Generate approved-rule tasks and unsent drafts; no automatic external writes');s.add_argument('--once',action='store_true');s.add_argument('--interval',type=int,default=60)
 s=sub.add_parser('doctor',help='Show configuration switches without exposing secrets')
+s=sub.add_parser('setup-code',help='Generate a private one-installation web setup code and the hash to store as CROWNOPS_SETUP_CODE_HASH')
 s=sub.add_parser('company-profile',help='Set the company identity used in client emails and documents (new installations must run this)')
 s.add_argument('--name',required=True);s.add_argument('--phone',required=True);s.add_argument('--email',required=True);s.add_argument('--timezone',required=True)
 s.add_argument('--short-name',default='');s.add_argument('--time-label',default='');s.add_argument('--time-label-fr',default='')
@@ -43,7 +44,7 @@ try:
         if path.exists():raise ValueError('Restoration never overwrites a database. Stop the server and choose a NEW empty instance path.')
         from app.backups import restore_archive
         print(restore_archive(Path(a.archive),path));sys.exit(0)
-    if a.command not in ('serve','backup','doctor'):
+    if a.command not in ('serve','backup','doctor','setup-code'):
         initialize(path)
     if a.command=='init':
         from app.main import create_user
@@ -92,8 +93,14 @@ try:
             print(json.dumps(tick(path)),flush=True)
             if a.once:break
             time.sleep(a.interval)
+    elif a.command=='setup-code':
+        import secrets,hashlib
+        code=secrets.token_urlsafe(24)
+        print('Give this setup code only to the new owner, privately. It is shown once and is not stored:\n  '+code)
+        print('Store this in the deployment secrets (not in Git):\n  CROWNOPS_SETUP_CODE_HASH='+hashlib.sha256(code.encode()).hexdigest())
+        print('Remove CROWNOPS_SETUP_CODE_HASH after the owner account exists.')
     elif a.command=='doctor':
-        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','quickbooks_environment':os.getenv('QBO_ENV','sandbox'),'quickbooks_sandbox_writes':os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES')=='1','quickbooks_production_writes':os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','company_profile_configured':_company_configured(path),'notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
+        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','quickbooks_environment':os.getenv('QBO_ENV','sandbox'),'quickbooks_sandbox_writes':os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES')=='1','quickbooks_production_writes':os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','company_profile_configured':_company_configured(path),'web_setup_enabled':bool(__import__('re').fullmatch(r'[0-9a-fA-F]{64}',os.getenv('CROWNOPS_SETUP_CODE_HASH','').strip())),'notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
 except (ValueError,sqlite3.Error,OSError,zipfile.BadZipFile) as ex:
     print('Error: '+str(ex),file=sys.stderr);sys.exit(1)
 except KeyboardInterrupt:print('\nStopped.')

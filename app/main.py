@@ -41,7 +41,15 @@ OPERATORS={'owner','manager','sales','dispatch'}
 READERS=OPERATORS|{'accounting'}
 QUOTERS={'owner','manager','sales'}
 COOKIE='crownops_session'
-SETUP_TOKEN_HASH='a2f107444f141c2a3d61af99ec02063038c77b60c0f639ef6bf7f5304fa21bb1'
+# Web owner setup is per-installation: set CROWNOPS_SETUP_CODE_HASH to the SHA-256 of a private,
+# random setup code (`manage.py setup-code`). Without it, create the owner with `manage.py init`.
+# A shared hardcoded hash would let anyone who knows one installation's code claim another's Owner.
+SETUP_TOKEN_HASH=''
+
+
+def setup_code_hash():
+    value=(SETUP_TOKEN_HASH or os.getenv('CROWNOPS_SETUP_CODE_HASH','')).strip().lower()
+    return value if re.fullmatch(r'[0-9a-f]{64}',value) else ''
 from .pricing import calculate_with_overrides
 from .operations import check_fleet_dispatch, require_hos_dispatch_verification
 from .job_planning import can_plan_jobs, require_planner, planning_resources
@@ -335,8 +343,11 @@ def create_app(database_path=None, *, core_pilot=False):
         with closing(connect(path)) as db:
             if db.execute('SELECT 1 FROM users LIMIT 1').fetchone():
                 raise HTTPException(409,'Initial setup is already complete.')
+        expected=setup_code_hash()
+        if not expected:
+            raise HTTPException(503,'Web setup is not enabled for this installation. Create the owner with manage.py init.')
         code=bounded(data.get('setup_code',''),'Setup code',200)
-        if not code or not hmac.compare_digest(sha(code),SETUP_TOKEN_HASH):
+        if not code or not hmac.compare_digest(sha(code),expected):
             raise HTTPException(401,'Setup code is incorrect.')
         name=bounded(data.get('name',''),'Name',150)
         email=valid_email(bounded(data.get('email',''),'Email',254))
