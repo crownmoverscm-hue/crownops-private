@@ -43,12 +43,18 @@ def main(db_path, cfg):
         insert(db, 'pricing_versions', dict(id='PV', label='Company', rates_json='{}', settings_json='{}', approved=1, created_at=now()))
         insert(db, 'annual_rate_periods', dict(id='RATE', label='Company rates', start_date='2026-01-01', end_date='2099-12-31', active=1, version=1, note='',
                                                approved_by='owner', created_at=now(), **{f'rate_{n}_cents': c for n, c in cfg['rates'].items()}))
-        put_setting(db, 'client_terms', {'approved': True, 'version': 'terms-1', 'text': 'Fictional booking terms.'})
         put_setting(db, 'billing_policy', {'approved': True, 'terms': {'issuer': {'name': cfg['profile']['name'], 'address': cfg['address'],
                     'email': cfg['profile']['email'], 'phone': cfg['profile']['phone']}, 'taxes': cfg['taxes'], 'catalogue': [],
                     'hourly_rate': 1, 'minimum_hours': 0, 'transport_amount': 0, 'fuel_amount': 0, 'discount_amount': 0, 'approval_reference': 'Approved'}})
     staff = TestClient(app); staff.cookies.set('crownops_session', token); staff.headers['x-csrf-token'] = token + '-csrf'
     ok(staff.put('/api/company/pricing-policy', json={**cfg['pricing'], 'approved': True, 'version': 0}))
+    ok(staff.post('/api/platform/settings/client_terms', json={'approved': True, 'version': 'terms-1',
+        'review_note': 'Reviewed by the fictional owner',
+        'text': 'Fictional booking terms for ' + cfg['profile']['name'] + ' written by the owner for this test only.'}))
+    template_key = 'moving-fr' if cfg['language'] == 'French' else 'moving-en'
+    template = next(t for t in ok(staff.get('/api/crm/templates/manage')) if t['template_key'] == template_key)
+    ok(staff.put('/api/crm/templates/' + template_key, json={'title': template['body']['title'], 'approved': True, 'updated_at': template['updated_at'],
+        'liability': cfg['pricing']['limited_liability_text'] + ' (owner-written fictional wording)', 'fragile': ''}))
     status = ok(staff.get('/api/company/setup-status'))
     quote = ok(staff.post('/api/crm/quotes', json=dict(
         service_type='Moving', language=cfg['language'], template_key='moving-fr' if cfg['language'] == 'French' else 'moving-en', move_date='2026-11-20', movers=2, trucks=1, hours_low=3, hours_high=4,

@@ -381,11 +381,16 @@ def schema(path):
           ("long-en","Long Distance","English","Long Distance Moving - English (blank)",{"title":"Long-Distance Moving Service","liability":"Free limited liability coverage: $0.60/lb per article.","fragile":"Fragile-item packing requirements and any replacement-value insurance must be reviewed before the move.","blank_notes":"Blank long-distance template: enter agreed service hours, fixed transportation fee or transport hours, distance, stops and special handling."}),
           ("long-fr","Long Distance","French","Déménagement longue distance - Français (vierge)",{"title":"Service de déménagement longue distance","liability":"Responsabilité limitée gratuite : 0,60 $/lb par article.","fragile":"Les exigences d'emballage des objets fragiles et toute assurance de valeur de remplacement doivent être révisées avant le déménagement.","blank_notes":"Modèle longue distance vierge : inscrire les heures convenues, les frais fixes de transport ou les heures de transport, la distance, les arrêts et la manutention spéciale."}),
         ]
+        legacy=company_profile(db)["mode"]=="legacy-crown"
         for key,service,lang,name,body in defaults:
             if not one(db,"SELECT id FROM crm_quote_templates WHERE template_key=?",(key,)):
+                if not legacy:
+                    # COM-4b: a new company never inherits Crown's liability or service wording. Templates start
+                    # inactive with empty terms; an Owner/Manager writes and approves their own before quoting.
+                    body={"title":body["title"],"liability":"","fragile":""}
                 insert(db,"crm_quote_templates",dict(id=uid("TMPL"),template_key=key,service_type=service,
-                  language=lang,name=name,body_json=dumps(body),active=1,updated_at=now()))
-        if one(db,"SELECT name FROM sqlite_master WHERE type='table' AND name='material_catalog'"):
+                  language=lang,name=name,body_json=dumps(body),active=1 if legacy else 0,updated_at=now()))
+        if legacy and one(db,"SELECT name FROM sqlite_master WHERE type='table' AND name='material_catalog'"):
             if not one(db,"SELECT id FROM material_catalog WHERE code='TV_PROTECTION_PACKAGE'"):
                 insert(db,"material_catalog",dict(id=uid("MAT"),code="TV_PROTECTION_PACKAGE",
                   name="TV protection - bubble wrap + cardboard",category="Protection",sell_cents=3500,cost_cents=0,
@@ -751,6 +756,37 @@ def register_sales_crm_v6(app,path,auth,public_url):
             insert(db,"leads",rec);insert(db,"client_account_leads",dict(client_id=cid,lead_id=lid,created_at=now()))
             db.execute("UPDATE client_accounts SET updated_at=? WHERE id=?",(now(),cid));audit(db,u["id"],"New service added to client","leads",lid,{"client_id":cid})
         return {"lead_id":lid,"client_id":cid}
+
+    @app.get("/api/crm/templates/manage")
+    def manage_templates(u=Depends(auth)):
+        """All quote templates, including inactive ones awaiting the owner's wording and approval."""
+        from .platform_common import OFFICE
+        require_role(u,OFFICE)
+        with closing(connect(path)) as db:out=rows(db,"SELECT * FROM crm_quote_templates ORDER BY service_type,language")
+        for r in out:r["body"]=json.loads(r.pop("body_json"))
+        return out
+
+    @app.put("/api/crm/templates/{key}")
+    def save_template(key:str,data:dict,u=Depends(auth)):
+        """Owner/Manager wording and approval. Only approved (active) templates can be used for estimates."""
+        from .platform_common import MANAGERS,text
+        from .store import audit
+        require_role(u,MANAGERS)
+        if set(data)-{"title","liability","fragile","blank_notes","approved","updated_at"}:raise HTTPException(422,"Unknown template field.")
+        body={k:text(data.get(k) or "",k.replace("_"," ").capitalize(),4000).strip() for k in ("title","liability","fragile","blank_notes")}
+        if any(c in v for v in body.values() for c in "<>"):raise HTTPException(422,"Template wording cannot contain angle brackets.")
+        approved=data.get("approved") is True
+        if approved and not (body["title"] and body["liability"]):
+            raise HTTPException(422,"Enter your company's service title and liability terms before approving this template.")
+        with transaction(path) as db:
+            t=one(db,"SELECT * FROM crm_quote_templates WHERE template_key=?",(key,))
+            if not t:raise HTTPException(404,"Template not found.")
+            if data.get("updated_at")!=t["updated_at"]:raise HTTPException(409,"This template changed since you opened it. Refresh and review it.")
+            if not body["blank_notes"]:body.pop("blank_notes")
+            stamp=datetime.now(timezone.utc).isoformat(timespec="microseconds")  # precise token for stale-edit detection
+            db.execute("UPDATE crm_quote_templates SET body_json=?,active=?,updated_at=? WHERE id=?",(dumps(body),int(approved),stamp,t["id"]))
+            audit(db,u["id"],"Quote template approved" if approved else "Quote template saved (not approved)","crm_quote_templates",t["id"],{"template_key":key})
+            r=one(db,"SELECT * FROM crm_quote_templates WHERE id=?",(t["id"],));r["body"]=json.loads(r.pop("body_json"));return r
 
     @app.get("/api/crm/templates")
     def templates(u=Depends(auth)):

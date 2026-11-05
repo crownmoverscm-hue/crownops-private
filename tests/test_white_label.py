@@ -209,7 +209,8 @@ class SetupStatusTests(Installation):
         return {i['key']: i['state'] for i in self.c['sales'].get('/api/company/setup-status').json()['items']}
 
     def test_checklist_moves_from_incomplete_to_pending_to_approved(self):
-        self.assertEqual(self.states(), {'identity': 'incomplete', 'logo': 'optional', 'pricing': 'incomplete', 'rates': 'incomplete', 'billing': 'incomplete'})
+        self.assertEqual(self.states(), {'identity': 'incomplete', 'logo': 'optional', 'pricing': 'incomplete', 'rates': 'incomplete', 'billing': 'incomplete',
+                                         'templates': 'incomplete', 'terms': 'incomplete'})
         self.configure()
         draft = self.c['owner'].put('/api/company/pricing-policy', json={**self.POLICY, 'approved': False, 'version': 0})
         self.assertEqual(draft.status_code, 200, draft.text)
@@ -224,6 +225,8 @@ class SetupStatusTests(Installation):
             insert(db, 'annual_rate_periods', dict(id='R1', label='All year', start_date='2026-01-01', end_date='2099-12-31', rate_2_cents=12000, rate_3_cents=16000,
                                                    rate_4_cents=20000, rate_5_cents=24000, rate_6_cents=28000, active=1, version=1, note='', approved_by='owner', created_at=now()))
             put_setting(db, 'billing_policy', {'approved': True, 'terms': {'issuer': {'name': COMPANY['name']}}})
+            put_setting(db, 'client_terms', {'approved': True, 'version': 't1', 'text': 'Fictional owner-written booking terms.'})
+            db.execute("UPDATE crm_quote_templates SET active=1 WHERE template_key='moving-en'")
         status = self.c['sales'].get('/api/company/setup-status').json()
         self.assertTrue(status['ready'], status)
         unapprove = self.c['owner'].put('/api/company/pricing-policy', json={**self.POLICY, 'approved': False, 'version': 2})

@@ -294,9 +294,10 @@ def register_operations(app,path,auth):
         if key=='media_program':
             require_role(u,{'owner'})
             if data.get('approved') and len(text(data.get('release_text_fr',''),'French permission',20000))<50:raise HTTPException(422,'Supply reviewed French permission before activation.')
-            if data.get('credit_mode') not in ('before_tax','after_tax'):raise HTTPException(422,'Choose whether the $50 credit is before or after taxes.')
+            if data.get('credit_mode') not in ('before_tax','after_tax'):raise HTTPException(422,'Choose whether the testimonial credit is before or after taxes.')
             if not isinstance(data.get('channels'),list) or not data['channels'] or set(data['channels'])-{'Website','Social posts','Advertising'}:raise HTTPException(422,'Choose permitted promotional channels. Public review incentives are not supported.')
-            data['amount_cents']=5000
+            from .pricing_policy import pricing_policy,testimonial_credit_cents
+            with closing(connect(path)) as cdb:data['amount_cents']=testimonial_credit_cents(pricing_policy(cdb))
         if key=='payroll_policy':
             from .payroll_periods import validate_policy
             data=validate_policy(data)

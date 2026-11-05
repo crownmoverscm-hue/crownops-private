@@ -18,7 +18,7 @@ function png(){ // 8x8 solid PNG built in memory
  async function pills(p){return p.locator('table tbody tr').evaluateAll(rows=>rows.map(r=>r.innerText.replace(/\s+/g,' ').trim()));}
  async function row(p,label,state){await p.locator('table tbody tr').filter({hasText:label}).filter({hasText:state}).first().waitFor({timeout:15000});}
  const owner=await login('owner',1440);
- let status=await pills(owner);assert.deepEqual(status.filter(s=>/Incomplete/.test(s)).length,3,'identity, pricing and billing start incomplete: '+status);
+ let status=await pills(owner);assert.deepEqual(status.filter(s=>/Incomplete/.test(s)).length,5,'identity, pricing, billing, templates and terms start incomplete: '+status);
  assert.equal(await owner.getByLabel('Company name',{exact:true}).inputValue(),'','no Crown defaults are prefilled');
  assert.equal(await owner.getByLabel('Local fuel per truck ($)',{exact:true}).inputValue(),'','no default prices are prefilled');
  await owner.getByLabel('Company name',{exact:true}).fill('Fictional Prairie Movers');
@@ -39,7 +39,13 @@ function png(){ // 8x8 solid PNG built in memory
  await row(owner,'Pricing policy','Pending approval');
  await owner.getByRole('checkbox',{name:'I have reviewed these prices and approve them for estimates'}).check();
  await owner.getByRole('button',{name:'Save pricing',exact:true}).click();await owner.getByText('Pricing approved.').waitFor();
- for(const [label,state] of [['Company identity and contact','Approved'],['Logo (optional)','Approved'],['Pricing policy','Approved'],['Hourly crew rates','Approved'],['Tax and invoice settings','Incomplete']])await row(owner,label,state);
+ await owner.locator('summary',{hasText:'Local Moving - English'}).click();
+ assert.equal(await owner.getByLabel('Liability terms (required to approve)').first().inputValue(),'','no Crown liability wording is prefilled');
+ const form=owner.locator('form[data-key="moving-en"]');
+ await form.getByLabel('Liability terms (required to approve)').fill('Released value as stated in our signed moving agreement.');
+ await form.getByRole('checkbox',{name:'Approved for estimates'}).check();await form.getByRole('button',{name:'Save template',exact:true}).click();
+ await owner.getByText('Template saved.').waitFor();
+ for(const [label,state] of [['Quote templates and liability wording','Approved'],['Client booking terms','Incomplete'],['Company identity and contact','Approved'],['Logo (optional)','Approved'],['Pricing policy','Approved'],['Hourly crew rates','Approved'],['Tax and invoice settings','Incomplete']])await row(owner,label,state);
  await noOverflow(owner,'owner settings');
  const portal=await owner.context().newPage();await portal.goto(base+'/portal');const html=await portal.content();
  assert.ok(!/Crown Movers|514-606-4030|\bCrown\b(?!Ops)/.test(html),'portal page shows no Crown identity');

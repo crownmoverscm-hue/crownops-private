@@ -152,6 +152,16 @@ def setup_status(db):
     terms = billing.get('terms') or {}
     items.append({'key': 'billing', 'label': 'Tax and invoice settings',
                   'state': 'approved' if billing.get('approved') and (terms.get('issuer') or {}).get('name') else ('pending approval' if billing else 'incomplete')})
+    try:
+        active_templates = db.execute('SELECT count(*) FROM crm_quote_templates WHERE active=1').fetchone()[0]
+        any_templates = db.execute('SELECT count(*) FROM crm_quote_templates').fetchone()[0]
+    except Exception:  # table is created with the sales CRM schema
+        active_templates = any_templates = 0
+    items.append({'key': 'templates', 'label': 'Quote templates and liability wording', 'count': active_templates,
+                  'state': ('legacy' if legacy else 'approved') if active_templates else ('pending approval' if any_templates and legacy else 'incomplete')})
+    terms = settings(db, 'client_terms', {}) or {}
+    items.append({'key': 'terms', 'label': 'Client booking terms',
+                  'state': 'approved' if terms.get('approved') and terms.get('text') else ('pending approval' if terms else 'incomplete')})
     required = [i for i in items if i['key'] != 'logo']
     return {'items': items, 'ready': all(i['state'] in ('approved', 'legacy') for i in required), 'mode': profile['mode']}
 

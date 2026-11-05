@@ -17,8 +17,8 @@
  const pill=state=>{const [cls,label]=STATE[state]||['',state];return `<span class="pill ${cls}">${h(label)}</span>`;};
  const input=(name,label,value='',extra='')=>`<div class="form-field"><label for="cp-${name}">${label}</label><input id="cp-${name}" name="${name}" value="${h(value??'')}" ${extra} ${manager()?'':'disabled'}></div>`;
  X.pageRenderers.company=async function(){
-  const [status,profile,pricing]=await Promise.all([api('/company/setup-status'),api('/company/profile'),api('/company/pricing-policy')]);
-  Object.assign(C,{status,profile,pricing});
+  const [status,profile,pricing,templates]=await Promise.all([api('/company/setup-status'),api('/company/profile'),api('/company/pricing-policy'),api('/crm/templates/manage')]);
+  Object.assign(C,{status,profile,pricing,templates});
   const readOnly=manager()?'':xnote('Only an Owner or Manager can change these settings.','teal');
   const checklist=`<div class="table-wrap"><table><tbody>${status.items.map(i=>`<tr><td>${h(i.label)}</td><td>${pill(i.state)}</td></tr>`).join('')}</tbody></table></div>`+
    (status.ready?xnote('Setup is complete. Estimates, client messages and invoices can use these settings.','teal'):xnote('Finish the incomplete items before preparing estimates, client messages or invoices.'));
@@ -42,10 +42,15 @@
    ${input('limited_liability_text','Limited liability wording',pol.limited_liability_text||'','maxlength="200"')}</div>
    <h3>Junk removal tiers</h3><div class="grid2">${TIERS.map(([k,l])=>input('junk_name_'+k,l+' name',(tiers[k]||[])[0]||'','maxlength="80"')+input('junk_price_'+k,l+' price ($)',(tiers[k]||[])[1]||'','inputmode="decimal"')).join('')}</div>
    ${manager()?`<label class="checkbox-label full"><input type="checkbox" name="approved"> I have reviewed these prices and approve them for estimates</label><button type="submit" class="btn-primary">Save pricing</button>`:''}</form>`;
-  const related=`<div class="grid3">${panel('Hourly crew rates',`${pill((status.items.find(i=>i.key==='rates')||{}).state)}<p class="small muted">Crew rates by date and crew size live in the rate calendar.</p><button class="btn-soft" data-page="rates">Open rate calendar</button>`)}
+  const area=(name,label,value='',extra='')=>`<div class="form-field full"><label for="cp-${name}">${label}</label><textarea id="cp-${name}" name="${name}" rows="3" maxlength="4000" ${extra} ${manager()?'':'disabled'}>${h(value||'')}</textarea></div>`;
+  const templateForms=xnote('Write your own service and liability wording. CrownOps does not supply legal terms; have your terms reviewed before approving them.','teal')+templates.map(t=>`<details class="panel panel-body"><summary class="strong">${h(t.name)} ${pill(t.active?'approved':(t.body.liability?'pending approval':'incomplete'))}</summary>
+   <form data-company-form="template" data-key="${h(t.template_key)}" data-updated="${h(t.updated_at)}"><div class="grid2">${input('tpl_title_'+t.template_key,'Service title',t.body.title||'','maxlength="200"')}</div>
+   ${area('tpl_liability_'+t.template_key,'Liability terms (required to approve)',t.body.liability)}${area('tpl_fragile_'+t.template_key,'Fragile items and service limits (optional)',t.body.fragile)}
+   ${manager()?`<label class="checkbox-label full"><input type="checkbox" name="approved" ${t.active?'checked':''}> Approved for estimates</label><button type="submit" class="btn-soft">Save template</button>`:''}</form></details>`).join('');
+  const related=`<div class="grid3">${panel('Client booking terms',`${pill((status.items.find(i=>i.key==='terms')||{}).state)}<p class="small muted">The terms clients accept with an estimate.</p><button class="btn-soft" data-page="policies">Open booking terms</button>`)}${panel('Hourly crew rates',`${pill((status.items.find(i=>i.key==='rates')||{}).state)}<p class="small muted">Crew rates by date and crew size live in the rate calendar.</p><button class="btn-soft" data-page="rates">Open rate calendar</button>`)}
    ${panel('Tax and invoice settings',`${pill((status.items.find(i=>i.key==='billing')||{}).state)}<p class="small muted">Invoice issuer, address and tax registrations.</p><button class="btn-soft" data-page="policies">Open invoice setup</button>`)}
    ${panel('Company email',`<p class="small muted">Connect and approve the mailbox that sends client email.</p><button class="btn-soft" data-page="connections">Open connections</button>`)}</div>`;
-  return head('Company profile','Identity, branding and pricing used across estimates, client messages and invoices.')+readOnly+panel('Setup status',checklist)+panel('Company identity',identity)+panel('Logo',logo)+panel('Pricing policy',pricingForm)+related;
+  return head('Company profile','Identity, branding and pricing used across estimates, client messages and invoices.')+readOnly+panel('Setup status',checklist)+panel('Company identity',identity)+panel('Logo',logo)+panel('Pricing policy',pricingForm)+panel('Quote templates',templateForms)+related;
  };
  function num(v){return String(v||'').trim();}
  document.addEventListener('submit',async e=>{
@@ -53,6 +58,7 @@
   const kind=f.dataset.companyForm,d=Object.fromEntries(new FormData(f).entries());
   try{
    if(kind==='profile'){await api('/company/profile',{method:'PUT',data:{...d,version:C.profile.version}});toast('Company profile saved.');}
+   if(kind==='template'){await api('/crm/templates/'+encodeURIComponent(f.dataset.key),{method:'PUT',data:{title:d['tpl_title_'+f.dataset.key],liability:d['tpl_liability_'+f.dataset.key],fragile:d['tpl_fragile_'+f.dataset.key],approved:f.approved.checked,updated_at:f.dataset.updated}});toast('Template saved.');}
    if(kind==='logo'){const fd=new FormData();fd.append('file',f.logo.files[0]);await api('/company/logo',{method:'POST',form:fd});toast('Logo saved.');}
    if(kind==='pricing'){
     const truck=num(d.truck_minimums)?num(d.truck_minimums).split(',').map(x=>x.split(':').map(y=>parseInt(y.trim(),10))):[];
