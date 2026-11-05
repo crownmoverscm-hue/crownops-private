@@ -235,11 +235,22 @@ def create_app(database_path=None, *, core_pilot=False):
                 await run_job('receipts','Receipt synchronization could not finish. No payment or accounting write was attempted.',poll_quickbooks_receipts,path)
                 await asyncio.sleep(300)
         receipt_task=asyncio.create_task(receipt_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
+        async def backup_worker():
+            # Opt-in daily backup inside the single application process, for hosts where a
+            # separate scheduled container cannot mount the database volume.
+            from .backups import scheduled_backup_tick
+            while True:
+                await run_job('backups','Scheduled backup could not finish; the previous verified backup is kept. See ops-check.',scheduled_backup_tick,path)
+                await asyncio.sleep(600)
+        backup_task=asyncio.create_task(backup_worker()) if not core_v1_profile and os.getenv('CROWNOPS_BACKUP_HOUR','').strip() else None
         connection_task=asyncio.create_task(connection_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
         intake_task=asyncio.create_task(inquiry_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
         task=asyncio.create_task(review_worker()) if not core_v1_profile and os.getenv('CROWNOPS_RUN_WORKER')=='1' else None
         try:yield
         finally:
+            if backup_task:
+                backup_task.cancel()
+                with suppress(asyncio.CancelledError):await backup_task
             if receipt_task:
                 receipt_task.cancel()
                 with suppress(asyncio.CancelledError):await receipt_task

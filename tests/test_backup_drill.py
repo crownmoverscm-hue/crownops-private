@@ -175,6 +175,49 @@ class BackupDrill(unittest.TestCase):
         self.assertEqual(status['archive'], made[-1])  # the last good backup stays on record
         self.assertEqual(len(list(self.backups.glob('crownops-backup-*.zip'))), 2)  # nothing partial was published
 
+    def test_5_restored_users_sign_in_again_and_a_wrong_key_is_detected(self):
+        """Restore revokes sessions but keeps accounts: the owner signs in with password and MFA.
+        Restoring under a different CROWNOPS_SECRET_KEY locks MFA users out, so ops-check must say so."""
+        import base64, secrets as pysecrets
+        from app.backups import restore_archive, run_scheduled_backup
+        from app.main import PASSWORDS, create_app, sha as token_hash
+        from app.ops_status import collect
+        from app.platform_common import encrypt
+        from app.security import totp
+        from app.store import insert, now, transaction
+        mfa_secret = base64.b32encode(pysecrets.token_bytes(20)).decode()
+        old_token = 'drill-old-session-token'
+        with transaction(self.db) as db:
+            insert(db, 'users', dict(id='DRILL-OWNER', email='drill.owner@example.invalid', name='Drill Owner', role='owner',
+                                     password_hash=PASSWORDS.hash('Drill-passphrase-2026!'), active=1, created_at=now()))
+            insert(db, 'auth_factors', dict(user_id='DRILL-OWNER', secret_ciphertext=encrypt({'secret': mfa_secret}), enabled=1, created_at=now()))
+            insert(db, 'sessions', dict(token_hash=token_hash(old_token), user_id='DRILL-OWNER', csrf='c', expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat()))
+        archive = self.backups / run_scheduled_backup(self.db, keep=5, verify=False)['archive']
+        target = Path(self.temp.name) / 'restored-login' / 'crownops.sqlite3'
+        restore_archive(archive, target)
+
+        def sign_in(client, step_offset=0):
+            code = totp(mfa_secret, int(time.time() // 30) + step_offset)
+            return client.post('/api/login', json={'email': 'drill.owner@example.invalid', 'password': 'Drill-passphrase-2026!', 'mfa_code': code})
+
+        app = create_app(target)
+        stale = TestClient(app); stale.cookies.set('crownops_session', old_token)
+        self.assertEqual(stale.get('/api/me').status_code, 401)  # pre-restore session is revoked
+        fresh = TestClient(app)
+        self.assertEqual(fresh.post('/api/login', json={'email': 'drill.owner@example.invalid', 'password': 'Drill-passphrase-2026!'}).status_code, 401)
+        self.assertEqual(sign_in(fresh).status_code, 200)  # password and MFA survive the restore
+        self.assertEqual(fresh.get('/api/me').json()['user']['id'], 'DRILL-OWNER')
+        self.assertNotIn('secret_key_mismatch', [f['code'] for f in collect(target)['findings']])
+
+        other_key = Fernet.generate_key().decode()
+        with patch.dict(os.environ, {'CROWNOPS_SECRET_KEY': other_key}):
+            report = collect(target)
+            mismatch = [f for f in report['findings'] if f['code'] == 'secret_key_mismatch']
+            self.assertEqual(report['state'], 'critical'); self.assertEqual(mismatch[0]['unreadable'], 1)
+            self.assertNotIn(mfa_secret, json.dumps(report))
+            wrong = TestClient(create_app(target))
+            self.assertEqual(sign_in(wrong, 1).status_code, 401)  # MFA cannot be checked with the wrong key
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -44,6 +44,30 @@ def _age_hours(stamp):
     return (datetime.now(timezone.utc) - moment).total_seconds() / 3600
 
 
+def _encrypted_values_unreadable(db):
+    """Count MFA secrets and provider credentials the configured key cannot decrypt.
+    Values are decrypted in memory only and never returned or logged."""
+    from cryptography.fernet import Fernet, InvalidToken
+    sources = (('auth_factors', 'secret_ciphertext'), ('oauth_credentials', 'ciphertext'))
+    values = []
+    for table, column in sources:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            values += [r[0] for r in db.execute(f'SELECT {column} FROM {table}') if r[0]]
+    if not values:
+        return 0, 0
+    try:
+        box = Fernet(os.getenv('CROWNOPS_SECRET_KEY', '').encode())
+    except ValueError:
+        return len(values), len(values)
+    unreadable = 0
+    for value in values:
+        try:
+            box.decrypt(value.encode())
+        except (InvalidToken, ValueError):
+            unreadable += 1
+    return unreadable, len(values)
+
+
 def collect(path):
     from .migrations import status as schema_status
     from .platform_common import settings
@@ -74,13 +98,21 @@ def collect(path):
             max_age = _setting_float('CROWNOPS_BACKUP_MAX_AGE_HOURS', 26)
             age = _age_hours(backup['last_success_at']) if backup.get('last_success_at') else None
             report['backup'] = {'state': backup.get('state', 'never'), 'age_hours': round(age, 1) if age is not None else None,
-                                'restore_verified': backup.get('restore_verified'), 'bytes': backup.get('bytes')}
+                                'restore_verified': backup.get('restore_verified'), 'encrypted': bool(backup.get('encrypted')), 'bytes': backup.get('bytes')}
             if backup.get('state') == 'failed':
                 add('critical', 'backup_failed', 'The most recent backup failed: ' + str(backup.get('last_error', ''))[:120])
             if age is None:
                 add('warning' if backup.get('state') != 'failed' else 'critical', 'backup_missing', 'No successful backup is recorded.')
             elif age > max_age:
                 add('critical', 'backup_stale', f'The last successful backup is {age:.0f} hours old (limit {max_age:.0f}).')
+            offsite = backup.get('offsite') or {}
+            report['backup']['offsite'] = {'state': offsite.get('state', 'not_configured'), 'at': offsite.get('at')}
+            if offsite.get('state') == 'failed':
+                add('critical', 'offsite_copy_failed', offsite.get('error') or 'The offsite copy of the last backup failed.')
+            elif not os.getenv('CROWNOPS_BACKUP_OFFSITE_COMMAND', '').strip() and os.getenv('CROWNOPS_ENV', 'test') == 'production':
+                add('warning', 'offsite_not_configured', 'No offsite backup copy is configured (CROWNOPS_BACKUP_OFFSITE_COMMAND).')
+            if age is not None and not backup.get('encrypted') and os.getenv('CROWNOPS_ENV', 'test') == 'production':
+                add('warning', 'backup_unencrypted', 'The last backup is not encrypted. Set CROWNOPS_BACKUP_KEY (manage.py backup-key).')
             unknown = {r[0]: r[1] for r in db.execute("SELECT status,count(*) FROM outbound_messages WHERE status IN ('Unknown','Failed','Sending') GROUP BY status")}
             report['client_messages_needing_review'] = unknown
             if unknown.get('Unknown') or unknown.get('Failed'):
@@ -89,6 +121,13 @@ def collect(path):
             report['integration_operations_needing_review'] = stuck
             if stuck.get('Unknown') or stuck.get('Mismatch'):
                 add('warning', 'integration_reconciliation', 'Accounting or payment operations need reconciliation.', **{k.lower(): v for k, v in stuck.items()})
+            unreadable, encrypted = _encrypted_values_unreadable(db)
+            report['encrypted_values'] = {'stored': encrypted, 'unreadable': unreadable}
+            if unreadable:
+                # Typical cause: a restore or redeploy with a different CROWNOPS_SECRET_KEY.
+                # MFA users are locked out and provider connections stop working.
+                add('critical', 'secret_key_mismatch', 'Stored encrypted values cannot be read with the configured application key.',
+                    unreadable=unreadable, stored=encrypted)
             jobs = settings(db, JOB_KEY, {}) or {}
             report['background_jobs'] = {k: {'consecutive_failures': v.get('consecutive_failures', 0), 'last_ok_at': v.get('last_ok_at')} for k, v in jobs.items()}
             for name, job in jobs.items():

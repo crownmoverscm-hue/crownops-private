@@ -33,6 +33,7 @@ s=sub.add_parser('backup-run',help='Scheduled backup: snapshot, restore test, re
 s.add_argument('--dir',default=os.getenv('CROWNOPS_BACKUPS',''));s.add_argument('--keep',type=int,default=int(os.getenv('CROWNOPS_BACKUP_KEEP','14')));s.add_argument('--no-verify',action='store_true')
 s=sub.add_parser('ops-check',help='Operational status for monitoring: exit 0 ok, 1 warning, 2 critical (no customer data)')
 s=sub.add_parser('db-status',help='Read-only schema version, pending migrations and schema problems (exit 1 if action is needed)')
+s=sub.add_parser('backup-key',help='Generate a backup encryption key to store as CROWNOPS_BACKUP_KEY (separate from CROWNOPS_SECRET_KEY and from the backups)')
 s=sub.add_parser('setup-code',help='Generate a private one-installation web setup code and the hash to store as CROWNOPS_SETUP_CODE_HASH')
 s=sub.add_parser('company-profile',help='Set the company identity used in client emails and documents (new installations must run this)')
 s.add_argument('--name',required=True);s.add_argument('--phone',required=True);s.add_argument('--email',required=True);s.add_argument('--timezone',required=True)
@@ -112,11 +113,12 @@ try:
         except HTTPException as ex:raise ValueError(ex.detail)
         print(json.dumps({'identity_mode':a.mode,'effective_identity':profile['mode'],'company':profile['name']},indent=2))
     elif a.command=='backup-run':
-        from app.backups import run_scheduled_backup
-        try:result=run_scheduled_backup(path,a.dir or None,keep=a.keep,verify=not a.no_verify)
+        from app.backups import run_backup_cycle
+        try:result=run_backup_cycle(path,a.dir or None,keep=a.keep,verify=not a.no_verify)
         except Exception as ex:
             print(json.dumps({'state':'failed','error':str(ex)[:300]}),file=sys.stderr);sys.exit(1)
-        print(json.dumps({k:result[k] for k in ('state','archive','bytes','sha256','schema_version','upload_files','restore_verified','backup_seconds','total_seconds','kept','pruned')},indent=2))
+        print(json.dumps({k:result[k] for k in ('state','archive','bytes','sha256','schema_version','upload_files','restore_verified','encrypted','backup_seconds','total_seconds','kept','pruned','offsite')},indent=2))
+        if (result.get('offsite') or {}).get('state')=='failed':sys.exit(1)
     elif a.command=='ops-check':
         from app.ops_status import collect
         report=collect(path);print(json.dumps(report,indent=2))
@@ -134,8 +136,12 @@ try:
         print('Give this setup code only to the new owner, privately. It is shown once and is not stored:\n  '+code)
         print('Store this in the deployment secrets (not in Git):\n  CROWNOPS_SETUP_CODE_HASH='+hashlib.sha256(code.encode()).hexdigest())
         print('Remove CROWNOPS_SETUP_CODE_HASH after the owner account exists.')
+    elif a.command=='backup-key':
+        from app.backup_crypto import generate_key
+        print('Store this only in the secret store as CROWNOPS_BACKUP_KEY, and keep an offline copy with the owner. It is not stored anywhere else.')
+        print('Without it, encrypted backups cannot be restored:\n  CROWNOPS_BACKUP_KEY='+generate_key())
     elif a.command=='doctor':
-        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','quickbooks_environment':os.getenv('QBO_ENV','sandbox'),'quickbooks_sandbox_writes':os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES')=='1','quickbooks_production_writes':os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','company_profile_configured':_company_configured(path),'installation_identity':_identity(path),'web_setup_enabled':bool(__import__('re').fullmatch(r'[0-9a-fA-F]{64}',os.getenv('CROWNOPS_SETUP_CODE_HASH','').strip())),'notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
+        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','quickbooks_environment':os.getenv('QBO_ENV','sandbox'),'quickbooks_sandbox_writes':os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES')=='1','quickbooks_production_writes':os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'backup_encryption_configured':bool(os.getenv('CROWNOPS_BACKUP_KEY','').strip()),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','company_profile_configured':_company_configured(path),'installation_identity':_identity(path),'web_setup_enabled':bool(__import__('re').fullmatch(r'[0-9a-fA-F]{64}',os.getenv('CROWNOPS_SETUP_CODE_HASH','').strip())),'notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
 except (ValueError,sqlite3.Error,OSError,zipfile.BadZipFile) as ex:
     print('Error: '+str(ex),file=sys.stderr);sys.exit(1)
 except KeyboardInterrupt:print('\nStopped.')

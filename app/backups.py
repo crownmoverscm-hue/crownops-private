@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import zipfile
 from .store import connect, now
+from .backup_crypto import ENCRYPTED_SUFFIX, configured_key, encrypt_file, is_encrypted, plain_archive
 
 
 def file_hash(path):
@@ -62,19 +63,28 @@ def run_scheduled_backup(path, backup_dir=None, uploads=None, keep=14, verify=Tr
     started = time.monotonic(); stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')  # microseconds: name order == creation order for retention
     archive = backup_dir / (ARCHIVE_PREFIX + stamp + '-' + secrets.token_hex(4) + '.zip')
     try:
-        make_backup(path, archive, uploads)
+        key = configured_key()  # inside try: a bad key is a recorded backup failure
+        if key is None:
+            make_backup(path, archive, uploads)
+        else:
+            archive = archive.with_name(archive.name + ENCRYPTED_SUFFIX)
+            backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with tempfile.TemporaryDirectory(prefix='.crownops-plain-', dir=backup_dir) as tmp:
+                plain = Path(tmp) / 'archive.zip'
+                make_backup(path, plain, uploads)
+                encrypt_file(plain, archive, key)
         archive.chmod(0o600)
         backup_seconds = round(time.monotonic() - started, 3)
         checked = verify_backup(archive) if verify else inspect_archive(archive)
         total_seconds = round(time.monotonic() - started, 3)
-        kept = sorted(backup_dir.glob(ARCHIVE_PREFIX + '*.zip'))
+        kept = sorted(p for p in backup_dir.glob(ARCHIVE_PREFIX + '*') if p.name.endswith(('.zip', '.zip' + ENCRYPTED_SUFFIX)))
         removed = []
         for old in kept[:-keep]:
             if old.name != archive.name and not old.is_symlink():
                 old.unlink(); removed.append(old.name)
         record = {'state': 'ok', 'last_success_at': now(), 'archive': archive.name, 'bytes': archive.stat().st_size,
                   'sha256': file_hash(archive), 'schema_version': checked.get('schema_version'), 'upload_files': checked['upload_files'],
-                  'restore_verified': bool(checked.get('restore_verified')), 'backup_seconds': backup_seconds,
+                  'restore_verified': bool(checked.get('restore_verified')), 'encrypted': key is not None, 'backup_seconds': backup_seconds,
                   'total_seconds': total_seconds, 'kept': min(len(kept), keep), 'pruned': removed}
         with transaction(path) as db:
             previous = settings(db, 'backup_status', {}) or {}
@@ -141,6 +151,9 @@ def make_backup(path, dest, uploads):
 
 
 def inspect_archive(archive):
+    if is_encrypted(archive):
+        with plain_archive(archive) as plain:
+            return {**inspect_archive(plain), 'encrypted': True}
     with zipfile.ZipFile(archive) as z:
         names = z.namelist()
         if 'database.sqlite3' not in names or len(names)!=len(set(names)):
@@ -186,6 +199,9 @@ def restore_archive(archive, path):
     path = Path(path).absolute()
     if path.exists() or path.is_symlink() or (path.parent/'uploads').exists():
         raise ValueError('Use a new empty target instance, never an existing database/uploads folder.')
+    if is_encrypted(archive):
+        with plain_archive(archive) as plain:
+            return restore_archive(plain, path)
     inspect_archive(archive)
     with zipfile.ZipFile(archive) as z, tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp); z.extractall(root)
@@ -218,7 +234,80 @@ def restore_archive(archive, path):
 def verify_backup(archive):
     from .core_v1 import deny_if_enabled
     deny_if_enabled("Backup and restore operations")
-    result = inspect_archive(archive)
-    with tempfile.TemporaryDirectory() as tmp:
-        restore_archive(archive, Path(tmp)/'restore'/'crownops.sqlite3')
-    return {**result,'restore_verified':True}
+    with plain_archive(archive) as plain:  # decrypt once for both checks
+        result = inspect_archive(plain)
+        with tempfile.TemporaryDirectory() as tmp:
+            restore_archive(plain, Path(tmp)/'restore'/'crownops.sqlite3')
+    return {**result,'restore_verified':True,'encrypted':is_encrypted(archive)}
+
+
+def run_offsite_copy(path, archive):
+    """Hand the newest archive to the operator's offsite command (CROWNOPS_BACKUP_OFFSITE_COMMAND).
+
+    The command is split without a shell and receives the archive path as its last
+    argument, for example `rclone copyto --config /secrets/rclone.conf` or a script that
+    uploads to approved encrypted storage. CrownOps never chooses or contacts a storage
+    provider itself. Output is not stored (it may contain bucket names or URLs); only the
+    exit status is recorded for monitoring.
+    """
+    import shlex, subprocess
+    from .platform_common import put_setting, settings
+    from .store import transaction
+    command = os.getenv('CROWNOPS_BACKUP_OFFSITE_COMMAND', '').strip()
+    if not command:
+        return None
+    try:
+        timeout = int(os.getenv('CROWNOPS_BACKUP_OFFSITE_TIMEOUT', '3600'))
+        done = subprocess.run(shlex.split(command) + [str(archive)], capture_output=True, timeout=timeout, check=False)
+        outcome = {'state': 'ok' if done.returncode == 0 else 'failed', 'at': now(), 'archive': Path(archive).name,
+                   'error': '' if done.returncode == 0 else 'Offsite command exited with status ' + str(done.returncode)}
+    except (OSError, ValueError, subprocess.TimeoutExpired) as ex:
+        outcome = {'state': 'failed', 'at': now(), 'archive': Path(archive).name, 'error': 'Offsite command could not run: ' + type(ex).__name__}
+    with transaction(path) as db:
+        put_setting(db, 'backup_status', {**(settings(db, 'backup_status', {}) or {}), 'offsite': outcome})
+    return outcome
+
+
+def run_backup_cycle(path, backup_dir=None, keep=None, verify=True):
+    """Backup (with restore test and retention), then the optional offsite copy."""
+    from .production import storage_paths
+    keep = keep if keep is not None else int(os.getenv('CROWNOPS_BACKUP_KEEP', '14'))
+    record = run_scheduled_backup(path, backup_dir, keep=keep, verify=verify)
+    backups = Path(backup_dir or storage_paths(path)[2]).absolute()
+    record['offsite'] = run_offsite_copy(storage_paths(path)[0], backups / record['archive'])
+    return record
+
+
+def backup_due(path, at=None):
+    """True when the in-process daily backup (CROWNOPS_BACKUP_HOUR, business time zone) should run:
+    the hour has passed today, no backup succeeded today, and no attempt failed in the last hour."""
+    from datetime import datetime, timedelta, timezone
+    from .business_zone import BUSINESS_ZONE
+    from .platform_common import settings
+    hour = os.getenv('CROWNOPS_BACKUP_HOUR', '').strip()
+    if not hour:
+        return False
+    if not hour.isdigit() or not 0 <= int(hour) <= 23:
+        raise ValueError('CROWNOPS_BACKUP_HOUR must be an hour from 0 to 23.')
+    moment = (at or datetime.now(timezone.utc)).astimezone(BUSINESS_ZONE)
+    if moment.hour < int(hour):
+        return False
+    with closing(connect(path)) as db:
+        status = settings(db, 'backup_status', {}) or {}
+
+    def parsed(stamp):
+        try:
+            return datetime.fromisoformat(str(stamp).replace('Z', '+00:00')).astimezone(BUSINESS_ZONE)
+        except ValueError:
+            return None
+    success = parsed(status['last_success_at']) if status.get('last_success_at') else None
+    if success and success.date() == moment.date():
+        return False
+    failure = parsed(status['last_failure_at']) if status.get('last_failure_at') else None
+    return not (failure and moment - failure < timedelta(hours=1))
+
+
+def scheduled_backup_tick(path):
+    """Called by the application's background loop; does nothing unless a backup is due."""
+    if backup_due(path):
+        run_backup_cycle(path)
