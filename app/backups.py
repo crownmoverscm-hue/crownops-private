@@ -35,6 +35,62 @@ def verify_referenced_files(db, uploads):
                 raise ValueError('A referenced private upload failed its stored checksum. Repair storage before recovery.')
 
 
+def _app_version():
+    from .version import APP_VERSION
+    return APP_VERSION
+
+
+ARCHIVE_PREFIX = 'crownops-backup-'
+
+
+def run_scheduled_backup(path, backup_dir=None, uploads=None, keep=14, verify=True):
+    """One unattended backup: snapshot, optional full restore test, retention, status record.
+
+    Only archives this function created (crownops-backup-*.zip) are ever pruned. The
+    outcome is stored in the `backup_status` setting for monitoring; error text is
+    limited to the exception message (no paths beyond the archive name, no secrets).
+    """
+    import secrets, time
+    from datetime import datetime, timezone
+    from .production import storage_paths
+    from .platform_common import put_setting, settings
+    from .store import transaction
+    path, default_uploads, default_backups, _ = storage_paths(path)
+    backup_dir = Path(backup_dir or default_backups).absolute(); uploads = Path(uploads or default_uploads)
+    if type(keep) is not int or not 1 <= keep <= 3650:
+        raise ValueError('Keep between 1 and 3650 backups.')
+    started = time.monotonic(); stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')  # microseconds: name order == creation order for retention
+    archive = backup_dir / (ARCHIVE_PREFIX + stamp + '-' + secrets.token_hex(4) + '.zip')
+    try:
+        make_backup(path, archive, uploads)
+        archive.chmod(0o600)
+        backup_seconds = round(time.monotonic() - started, 3)
+        checked = verify_backup(archive) if verify else inspect_archive(archive)
+        total_seconds = round(time.monotonic() - started, 3)
+        kept = sorted(backup_dir.glob(ARCHIVE_PREFIX + '*.zip'))
+        removed = []
+        for old in kept[:-keep]:
+            if old.name != archive.name and not old.is_symlink():
+                old.unlink(); removed.append(old.name)
+        record = {'state': 'ok', 'last_success_at': now(), 'archive': archive.name, 'bytes': archive.stat().st_size,
+                  'sha256': file_hash(archive), 'schema_version': checked.get('schema_version'), 'upload_files': checked['upload_files'],
+                  'restore_verified': bool(checked.get('restore_verified')), 'backup_seconds': backup_seconds,
+                  'total_seconds': total_seconds, 'kept': min(len(kept), keep), 'pruned': removed}
+        with transaction(path) as db:
+            previous = settings(db, 'backup_status', {}) or {}
+            put_setting(db, 'backup_status', {**record, 'last_failure_at': previous.get('last_failure_at'), 'last_error': previous.get('last_error')})
+        return record
+    except Exception as ex:
+        failure = {'state': 'failed', 'last_failure_at': now(), 'last_error': str(ex)[:300]}
+        try:
+            with transaction(path) as db:
+                previous = settings(db, 'backup_status', {}) or {}
+                put_setting(db, 'backup_status', {**previous, **failure})
+        except Exception:
+            pass  # the database itself may be the problem; the raised error still reports it
+        raise
+
+
 def make_backup(path, dest, uploads):
     from .core_v1 import deny_if_enabled
     deny_if_enabled("Backup and restore operations")
@@ -51,8 +107,9 @@ def make_backup(path, dest, uploads):
         with tempfile.TemporaryDirectory() as tmp:
             snapshot = Path(tmp)/'database.sqlite3'
             with closing(connect(path)) as source, closing(sqlite3.connect(snapshot)) as target:
-                source.backup(target)
+                source.backup(target)  # SQLite online backup: a consistent snapshot of the live database
                 needed = referenced_uploads(target)
+                schema_version = target.execute('PRAGMA user_version').fetchone()[0]
                 if target.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
                     raise ValueError('Source database integrity check failed.')
                 verify_referenced_files(target,uploads)
@@ -69,7 +126,8 @@ def make_backup(path, dest, uploads):
                     manifest[member] = {'sha256':file_hash(file),'bytes':file.stat().st_size}
                     archive.write(file, member)
                 archive.writestr('BACKUP_INFO.json', json.dumps({
-                    'format_version':2,'created_at':now(),'files':manifest,
+                    'format_version':2,'created_at':now(),'files':manifest,'schema_version':schema_version,
+                    'app_version':_app_version(),'secret_values_included':False,
                     'db_sha256':manifest['database.sqlite3']['sha256'],
                     'contains_private_data':True,'encryption_key_included':False,
                     'instruction':'Keep this private archive and the original CROWNOPS_SECRET_KEY separately. Restore only to a new instance with external actions off.'}, indent=2))
@@ -113,7 +171,11 @@ def inspect_archive(archive):
             with z.open('database.sqlite3') as source:
                 if hashlib.file_digest(source,'sha256').hexdigest()!=info['db_sha256']:
                     raise ValueError('Backup database checksum failed.')
+        from .migrations import CURRENT_VERSION
+        if int(info.get('schema_version') or 0) > CURRENT_VERSION:
+            raise ValueError('This backup comes from a newer CrownOps schema (version '+str(info.get('schema_version'))+'). Restore it with that release or newer.')
         return {'created_at':info.get('created_at'),'format_version':info.get('format_version',1),
+                'schema_version':info.get('schema_version'),'app_version':info.get('app_version'),
                 'upload_files':sum(name.startswith('uploads/') for name in names),
                 'all_files_hashed':manifest is not None}
 
