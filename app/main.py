@@ -1102,7 +1102,8 @@ def create_app(database_path=None, *, core_pilot=False):
             before['crew_ids']=sorted(x['resource_id'] for x in previous if x['resource_type']=='employee')
             before['truck_ids']=sorted(x['resource_id'] for x in previous if x['resource_type']=='vehicle')
             start,end,crew,trucks=check_job_resources(db,data,jid)
-            qid=data.get('quote_id') or None
+            # Only an explicit quote_id changes the link; omitting it must never silently unlink the accepted estimate.
+            qid=(data.get('quote_id') or None) if 'quote_id' in data else j['quote_id']
             q=one(db,'SELECT * FROM quotes WHERE id=? AND lead_id=?',(qid,j['lead_id'])) if qid else None
             if qid and not q:raise HTTPException(422,'Estimate must belong to this move project.')
             if qid!=j['quote_id'] and one(db,'SELECT id FROM job_invoices WHERE job_id=?',(jid,)):raise HTTPException(409,'Invoice terms already exist. Have management reconcile billing before changing the accepted estimate link.')

@@ -176,6 +176,13 @@ def register_pricing_policy(app, path, auth):
             policy['version'] = int(current.get('version', 0)) + 1
             if policy['approved']:
                 policy['approved_by'] = u['id']; policy['approved_at'] = now()
+                # Audit snapshot: estimates reference the latest approved pricing_versions row, so each
+                # estimate records the exact approved policy it was priced with. Hourly rates stay in the
+                # owner's rate calendar, so this snapshot carries no seasonal workbook rates.
+                import json as _json
+                db.execute('INSERT INTO pricing_versions(id,label,rates_json,settings_json,approved,approved_by,approved_at,created_at) VALUES(?,?,?,?,1,?,?,?)',
+                           ('PRICE-POLICY-' + str(policy['version']), 'Company pricing policy v' + str(policy['version']), '[]',
+                            _json.dumps(policy, sort_keys=True), u['id'], policy['approved_at'], now()))
             elif current.get('approved'):
                 # Keep pricing with the approved policy while a new draft is reviewed.
                 raise HTTPException(409, 'An approved pricing policy is in use. Save changes with approval, or keep the current policy.')

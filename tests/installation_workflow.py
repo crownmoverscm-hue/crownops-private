@@ -40,7 +40,6 @@ def main(db_path, cfg):
     with transaction(db_path) as db:
         insert(db, 'users', dict(id='owner', email=cfg['owner_email'], name='Fictional Owner', role='owner', password_hash='x', active=1, created_at=now()))
         insert(db, 'sessions', dict(token_hash=sha(token), user_id='owner', csrf=token + '-csrf', expires_at=expires))
-        insert(db, 'pricing_versions', dict(id='PV', label='Company', rates_json='{}', settings_json='{}', approved=1, created_at=now()))
         insert(db, 'annual_rate_periods', dict(id='RATE', label='Company rates', start_date='2026-01-01', end_date='2099-12-31', active=1, version=1, note='',
                                                approved_by='owner', created_at=now(), **{f'rate_{n}_cents': c for n, c in cfg['rates'].items()}))
         put_setting(db, 'billing_policy', {'approved': True, 'terms': {'issuer': {'name': cfg['profile']['name'], 'address': cfg['address'],
