@@ -36,7 +36,9 @@ def print_controls(html):
     return html.replace('</head>', '<style>.document-print{padding:12px;background:#fff3e9;margin-bottom:24px}.document-print button{padding:12px 18px;font:inherit;cursor:pointer}@media print{.document-print{display:none}}</style><script src="/static/document_print.js" defer></script></head>').replace('<body>', '<body><div class="document-print"><button id="document-print">Print / save as PDF</button><p>Choose “Save as PDF” in your browser’s print window.</p></div>')
 
 
-def quote_print(q):
+def quote_print(q, company=None):
+    from .company_profile import profile_or_legacy
+    company_name=profile_or_legacy(company)['name']
     """Render saved client-facing values only; never include internal notes or links."""
     e=lambda x:escape(str(x or ''), quote=True)
     cash=lambda x:'CA$'+format(int(x or 0)/100, ',.2f')
@@ -62,7 +64,7 @@ def quote_print(q):
     template=inp.get('template_snapshot') or {}
     terms=''.join('<p>'+e(inp.get(key))+'</p>' for key in ('client_note','service_line_note','payment_terms') if inp.get(key))
     terms+=''.join('<p>'+e(template.get(key))+'</p>' for key in ('liability','fragile','blank_notes') if template.get(key))
-    html='<!doctype html><html lang="'+('fr' if fr else 'en')+'"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+e(q['id'])+'</title><style>body{font:17px/1.6 Arial,sans-serif;color:#242424;max-width:850px;margin:auto;padding:24px}h1{border-bottom:4px solid #b84a0b;padding-bottom:16px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #ddd;vertical-align:top}p,td{white-space:pre-line;overflow-wrap:anywhere}.total{font-size:26px;font-weight:700}@media print{tr{break-inside:avoid}}</style></head><body><h1>Crown Movers</h1><h2>'+t('Moving estimate','Devis de déménagement')+'</h2><p>'+e(inp.get('quote_title'))+'</p><p>'+e(q['id'])+' · '+t('Revision','Révision')+' '+str(q['revision'])+' · '+e(q['status'])+'</p>'
+    html='<!doctype html><html lang="'+('fr' if fr else 'en')+'"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+e(q['id'])+'</title><style>body{font:17px/1.6 Arial,sans-serif;color:#242424;max-width:850px;margin:auto;padding:24px}h1{border-bottom:4px solid #b84a0b;padding-bottom:16px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #ddd;vertical-align:top}p,td{white-space:pre-line;overflow-wrap:anywhere}.total{font-size:26px;font-weight:700}@media print{tr{break-inside:avoid}}</style></head><body><h1>'+e(company_name)+'</h1><h2>'+t('Moving estimate','Devis de déménagement')+'</h2><p>'+e(inp.get('quote_title'))+'</p><p>'+e(q['id'])+' · '+t('Revision','Révision')+' '+str(q['revision'])+' · '+e(q['status'])+'</p>'
     if q['status']=='Draft':html+='<strong>'+t('DRAFT — for review only','BROUILLON — pour révision seulement')+'</strong>'
     html+='<table>'+details+'</table>'+materials+'<p class="total">'+cash(r.get('low_cents'))+' – '+cash(r.get('high_cents'))+'</p><p>'+t('Estimate before applicable taxes. Actual charges depend on agreed terms and completed service.','Estimation avant les taxes applicables. Le montant final dépend des modalités convenues et du service effectué.')+'</p>'+terms+'<p>'+t('Quote acceptance is separate from booking confirmation.','L’acceptation du devis est distincte de la confirmation de réservation.')+'</p></body></html>'
     return print_controls(html)
@@ -114,9 +116,10 @@ def register_document_browser(app,path,auth,public_url):
     @app.get('/api/documents/quotes/{qid}/print')
     def print_quote(qid:str,u=Depends(auth)):
         require_role(u,OFFICE)
-        with closing(connect(path)) as db:q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
+        from .company_profile import company_profile
+        with closing(connect(path)) as db:q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,));company=company_profile(db)
         if not q:raise HTTPException(404,'Estimate not found.')
-        return HTMLResponse(quote_print(q),headers={'Cache-Control':'no-store'})
+        return HTMLResponse(quote_print(q,company),headers={'Cache-Control':'no-store'})
 
     @app.get('/api/documents/invoices/{iid}/print')
     def print_invoice(iid:str,u=Depends(auth)):

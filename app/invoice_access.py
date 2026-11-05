@@ -7,6 +7,7 @@ from fastapi import BackgroundTasks,Depends,HTTPException,Request
 from fastapi.responses import FileResponse,HTMLResponse,JSONResponse
 from .store import connect,transaction,one,insert,audit,now
 from .platform_common import stamp_hash,invoice_current,queue_message,live_enabled
+from .company_profile import company_profile,profile_for_path,client_name_of,call_hint
 
 COOKIE='crownops_invoice'
 
@@ -19,13 +20,13 @@ def invoice_access_link(db,inv,recipient,actor,base):
 
 def scoped_invoice(db,session):
     inv,calc=invoice_current(db,session['invoice_id'])
-    if inv['status']!='Issued' or inv['revision']!=session['revision']:raise HTTPException(409,'This invoice has been updated. Please ask Crown Movers for the current invoice link.')
+    if inv['status']!='Issued' or inv['revision']!=session['revision']:raise HTTPException(409,'This invoice has been updated. Please ask '+client_name_of(company_profile(db))+' for the current invoice link.')
     saved=one(db,'SELECT document_json FROM invoice_revisions WHERE invoice_id=? AND revision=?',(inv['id'],inv['revision']))
-    if not saved:raise HTTPException(409,'The issued invoice is unavailable. Please contact Crown Movers.')
+    if not saved:raise HTTPException(409,'The issued invoice is unavailable. Please contact '+client_name_of(company_profile(db))+'.')
     doc=json.loads(saved['document_json'])
     lead=one(db,'SELECT l.email,l.language FROM leads l JOIN jobs j ON j.lead_id=l.id WHERE j.id=?',(inv['job_id'],))
     approved={str(doc['terms']['customer'].get('email') or '').lower(),lead['email'].lower()}
-    if session['recipient'].lower() not in approved:raise HTTPException(401,'This invoice link is no longer valid. Ask Crown Movers for a new link.')
+    if session['recipient'].lower() not in approved:raise HTTPException(401,'This invoice link is no longer valid. Ask '+client_name_of(company_profile(db))+' for a new link.')
     return inv,calc,doc
 
 
@@ -34,7 +35,7 @@ def register_invoice_access(app,path,public_url,secure):
         raw=request.cookies.get(COOKIE,'')
         with closing(connect(path)) as db:
             session=one(db,'SELECT * FROM invoice_access_sessions WHERE token_hash=? AND expires_at>?',(stamp_hash(raw),now())) if raw else None
-            if not session:raise HTTPException(401,'Your invoice access has expired. Use the private link in your invoice email or call Crown Movers.')
+            if not session:raise HTTPException(401,'Your invoice access has expired. Use the private link in your invoice email or call '+client_name_of(profile_for_path(path))+'.')
             scoped_invoice(db,session)
         if request.method not in ('GET','HEAD','OPTIONS') and not hmac.compare_digest(session['csrf'],request.headers.get('x-csrf-token','')):raise HTTPException(403,'Reopen your invoice before continuing.')
         return session
@@ -51,7 +52,7 @@ def register_invoice_access(app,path,public_url,secure):
 
     @app.post('/api/invoice-access/request-link')
     def request_access(data:dict,request:Request,background:BackgroundTasks):
-        reply={'ok':True,'message':'If this invoice link is eligible, a fresh private link will be emailed to its saved recipient. For help, call 514-606-4030.'}
+        reply={'ok':True,'message':'If this invoice link is eligible, a fresh private link will be emailed to its saved recipient.'+call_hint(profile_for_path(path),' For help, call ')+('.' if call_hint(profile_for_path(path),'x') else '')}
         if data.get('website'):return reply
         raw=data.get('token','')
         if not isinstance(raw,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,150}',raw):return reply
@@ -72,8 +73,9 @@ def register_invoice_access(app,path,public_url,secure):
             if one(db,'SELECT id FROM outbound_messages WHERE event_key=?',(key,)):return reply
             link=invoice_access_link(db,inv,invite['recipient'],'invoice-access-request',public_url)
             fr=str(doc.get('language','EN')).lower().startswith('fr')
-            subject='Votre accès à la facture Crown Movers' if fr else 'Your Crown Movers invoice access'
-            body=(f"Bonjour,\n\nVoici votre nouvel accès privé à la facture {inv['number']}.\n\nConsulter ma facture :\n{link}\n\nCe lien donne accès à cette facture seulement. Une question? Appelez le 514-606-4030.\n\nMerci,\nL’équipe Crown Movers" if fr else f"Hi,\n\nHere is your fresh private access to invoice {inv['number']}.\n\nOpen my invoice:\n{link}\n\nThis link provides access to this invoice only. Questions? Call 514-606-4030.\n\nThank you,\nThe Crown Movers team")
+            c=company_profile(db)
+            subject='Votre accès à la facture '+c['name'] if fr else 'Your '+c['name']+' invoice access'
+            body=(f"Bonjour,\n\nVoici votre nouvel accès privé à la facture {inv['number']}.\n\nConsulter ma facture :\n{link}\n\nCe lien donne accès à cette facture seulement. Une question? Appelez le {c['phone']}.\n\nMerci,\nL’équipe {c['name']}" if fr else f"Hi,\n\nHere is your fresh private access to invoice {inv['number']}.\n\nOpen my invoice:\n{link}\n\nThis link provides access to this invoice only. Questions? Call {c['phone']}.\n\nThank you,\nThe {c['name']} team")
             msg=queue_message(db,lead['id'],subject,body,'Invoice access','invoice-access-request',key,jid=inv['job_id'])
             db.execute('UPDATE outbound_messages SET recipient=?,source_version=NULL WHERE id=?',(invite['recipient'],msg['id']))
             if live_enabled():
@@ -85,7 +87,7 @@ def register_invoice_access(app,path,public_url,secure):
     @app.post('/api/invoice-access/exchange')
     def exchange(data:dict,request:Request):
         raw=data.get('token','')
-        if not isinstance(raw,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,150}',raw):raise HTTPException(401,'This invoice link is invalid or expired. Please contact Crown Movers.')
+        if not isinstance(raw,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,150}',raw):raise HTTPException(401,'This invoice link is invalid or expired. Please contact '+client_name_of(profile_for_path(path))+'.')
         with transaction(path) as db:
             invite=one(db,'SELECT * FROM invoice_access_invites WHERE token_hash=? AND used_at IS NULL AND expires_at>?',(stamp_hash(raw),now()))
             if not invite:

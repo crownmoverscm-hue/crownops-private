@@ -9,6 +9,7 @@ from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .platform_common import *
 from .photo_safety import READY_STATUSES, photo_mode, upload_policy, require_room, process_photo,process_video
 from .client_communications import CONTACT_FIELDS, pending_scope_changes, quote_scope_current
+from .company_profile import profile_for_path,short_of,client_name_of,call_hint
 
 PORTAL_COOKIE='crownops_client'
 CLIENT_FIELDS={'client_name','phone','pickup','dropoff','boxes','inventory','pickup_access','dropoff_access','pickup_walk','dropoff_walk','heavy_items','move_date','home_size'}
@@ -58,11 +59,13 @@ def register_portal(app,path,auth,public_url,secure):
                 leads=rows(db,"SELECT * FROM leads WHERE lower(email)=? AND notifications_suppressed=0 ORDER BY updated_at DESC LIMIT 5",(email,))
                 if not leads:return
                 first=leads[0];fr=str(first['language']).lower().startswith('fr')
-                body=(f"Bonjour {first['client_name']},\n\nVoici votre nouvel accès privé à Crown Movers.\n" if fr else f"Hi {first['client_name']},\n\nHere is your fresh private access to Crown Movers.\n")
+                from .company_profile import ready_profile
+                c=ready_profile(db,'sending client access links')
+                body=(f"Bonjour {first['client_name']},\n\nVoici votre nouvel accès privé à {c['name']}.\n" if fr else f"Hi {first['client_name']},\n\nHere is your fresh private access to {c['name']}.\n")
                 for lead in leads:
                     body+='\n'+('Service : ' if fr else 'Service: ')+(lead['move_date'] or ('Date à confirmer' if fr else 'Date to confirm'))+'\n'+portal_link(db,lead,'client-access-request',public_url,tab='estimates')+'\n'
-                body+=('\nVous pouvez consulter votre devis et vos factures, ajouter des photos ou demander un rappel.\n\nChaque lien ouvre un dossier privé. Si vous n’avez pas demandé cet accès, ignorez ce courriel.\n\nL’équipe Crown Movers\n514-606-4030' if fr else '\nYou can view your estimate and invoices, add photos, or request a callback.\n\nEach link opens a private service file. If you did not request access, you can ignore this email.\n\nThe Crown Movers team\n514-606-4030')
-                msg=queue_message(db,first['id'],'Votre accès Crown Movers' if fr else 'Your Crown Movers access',body,'Reply','client-access-request','client-access:'+uid('LINK'))
+                body+=('\nVous pouvez consulter votre devis et vos factures, ajouter des photos ou demander un rappel.\n\nChaque lien ouvre un dossier privé. Si vous n’avez pas demandé cet accès, ignorez ce courriel.\n\nL’équipe '+c['name']+'\n'+c['phone'] if fr else '\nYou can view your estimate and invoices, add photos, or request a callback.\n\nEach link opens a private service file. If you did not request access, you can ignore this email.\n\nThe '+c['name']+' team\n'+c['phone'])
+                msg=queue_message(db,first['id'],'Votre accès '+c['name'] if fr else 'Your '+c['name']+' access',body,'Reply','client-access-request','client-access:'+uid('LINK'))
                 db.execute("UPDATE outbound_messages SET status='Approved',approved_by='client-access-request' WHERE id=?",(msg['id'],))
             process_mail(path,msg['id'])
         except Exception:
@@ -73,11 +76,11 @@ def register_portal(app,path,auth,public_url,secure):
     def request_link(data:dict,request:Request,tasks:BackgroundTasks):
         from .account_access import recovery_rate_limit
         email=text(data.get('email',''),'Email',254).lower()
-        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):raise HTTPException(422,'Enter the email address used for your Crown Movers request.')
+        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):raise HTTPException(422,'Enter the email address used for your '+client_name_of(profile_for_path(path))+' request.')
         if not data.get('website'):
             with transaction(path) as db:allowed=recovery_rate_limit(db,request,email,purpose='client-link')
             if allowed:tasks.add_task(deliver_client_access,email)
-        return {'ok':True,'message':'If this email has an active Crown Movers file, we will send a private link. Check your inbox and spam folder. For help, call 514-606-4030.'}
+        return {'ok':True,'message':'If this email has an active '+client_name_of(profile_for_path(path))+' file, we will send a private link. Check your inbox and spam folder.'+call_hint(profile_for_path(path),' For help, call ')+('.' if call_hint(profile_for_path(path),'x') else '')}
 
     @app.post('/api/leads/{lid}/portal-invite')
     def invite(lid:str,data:dict,u=Depends(auth)):
@@ -157,7 +160,7 @@ def register_portal(app,path,auth,public_url,secure):
             card_deposit_available=square_deposits_enabled(l['email']) and bool(os.getenv('SQUARE_ACCESS_TOKEN') and os.getenv('SQUARE_LOCATION_ID'))
             public_deposit={'enabled':False}
             if dep.get('approved') and dep.get('enabled') and dep.get('recipient_email'):
-                public_deposit={'enabled':True,'recipient_name':dep.get('recipient_name','Crown Movers'),
+                public_deposit={'enabled':True,'recipient_name':dep.get('recipient_name',client_name_of(profile_for_path(path))),
                   'recipient_email':dep.get('recipient_email',''),'auto_deposit':bool(dep.get('auto_deposit',True)),
                   'reference_note':dep.get('reference_note','')}
             from .media_links import listing
@@ -207,7 +210,7 @@ def register_portal(app,path,auth,public_url,secure):
             submitted_details(db,l['id'])
             db.execute("UPDATE outbound_messages SET status='Cancelled',error='Client replied; review changes first' WHERE lead_id=? AND category='Follow-up' AND status IN ('Draft','Approved')",(l['id'],))
             audit(db,'client:'+c['email'],'Move changes submitted for review','client_changes',rec['id'])
-        return {'ok':True,'status':'Pending review','message':'Your changes were submitted. Dates and accepted prices do not change until Crown reviews them.'}
+        return {'ok':True,'status':'Pending review','message':'Your changes were submitted. Dates and accepted prices do not change until '+short_of(profile_for_path(path))+' reviews them.'}
 
     @app.get('/api/client-changes')
     def change_list(u=Depends(auth)):
@@ -245,14 +248,14 @@ def register_portal(app,path,auth,public_url,secure):
         if data.get('agree') is not True or not text(data.get('signed_name',''),'Name',200):raise HTTPException(422,'Read the terms and confirm your agreement.')
         with transaction(path) as db:
             terms=settings(db,'client_terms',{})
-            if not terms.get('approved') or data.get('terms_version')!=terms.get('version'):raise HTTPException(409,'Approved booking terms are not available or changed. Contact Crown.')
+            if not terms.get('approved') or data.get('terms_version')!=terms.get('version'):raise HTTPException(409,'Approved booking terms are not available or changed. Contact '+short_of(profile_for_path(path))+'.')
             q=one(db,'SELECT * FROM quotes WHERE id=? AND lead_id=?',(qid,c['lead_id']))
             if not q:raise HTTPException(404,'Quote not found.')
             if q['status']=='Accepted':return {'ok':True,'already_accepted':True,'booking_confirmed':bool(one(db,"SELECT id FROM jobs WHERE quote_id=? AND status IN ('Confirmed','In progress','Completed')",(qid,)))}
             if one(db,'SELECT quote_id FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,)):
-                raise HTTPException(409,'Please accept this estimate using the QuickBooks email. If you cannot find it, request a callback here or call 514-606-4030.')
+                raise HTTPException(409,'Please accept this estimate using the QuickBooks email. If you cannot find it, request a callback here'+call_hint(profile_for_path(path),' or call ')+'.')
             from .quote_options import expired_quote
-            if expired_quote(q):raise HTTPException(409,'This estimate has expired. Request a callback so Crown can review and renew it.')
+            if expired_quote(q):raise HTTPException(409,'This estimate has expired. Request a callback so '+short_of(profile_for_path(path))+' can review and renew it.')
             l=one(db,'SELECT * FROM leads WHERE id=?',(c['lead_id'],))
             if q['status']!='Approved' or not quote_scope_current(db,q,l):raise HTTPException(409,'This estimate needs review before acceptance.')
             if one(db,"SELECT id FROM quotes WHERE lead_id=? AND revision>? AND status IN ('Approved','Accepted')",(l['id'],q['revision'])):raise HTTPException(409,'A newer estimate is available. Refresh to review the latest revision.')
@@ -268,7 +271,7 @@ def register_portal(app,path,auth,public_url,secure):
             prepare_deposit_request(db,qid,'client:'+c['email'])
             add_task(db,c['lead_id'],'Verify deposit and assign crew/truck after acceptance',l['assigned_to'],'accepted:'+qid)
             audit(db,'client:'+c['email'],'Quote accepted in portal','quotes',qid,{'terms_version':terms['version'],'tentative_job_id':job['id'] if job else None})
-        return {'ok':True,'booking_confirmed':False,'tentative_job_id':job['id'] if job else None,'message':'Estimate accepted. Your requested date is now held as tentative while Crown verifies the deposit and final booking details.'}
+        return {'ok':True,'booking_confirmed':False,'tentative_job_id':job['id'] if job else None,'message':'Estimate accepted. Your requested date is now held as tentative while '+short_of(profile_for_path(path))+' verifies the deposit and final booking details.'}
 
     def get_file(db,aid,lid=None,u=None):
         r=one(db,'SELECT * FROM attachments WHERE id=? AND deleted_at IS NULL',(aid,))
@@ -335,13 +338,13 @@ def register_portal(app,path,auth,public_url,secure):
                     from .client_participation import check_participant
                     check_participant(db,participant,video=True)
                 if client_session and not one(db,'SELECT token_hash FROM portal_sessions WHERE token_hash=? AND expires_at>?',(client_session['token_hash'],now())):
-                    raise HTTPException(401,'Your private session expired. Ask Crown for a new link.')
+                    raise HTTPException(401,'Your private session expired. Ask '+short_of(profile_for_path(path))+' for a new link.')
                 if photo_mode():
                     existing=one(db,'SELECT * FROM attachments WHERE lead_id=? AND job_id IS ? AND sha256=? AND category=? AND deleted_at IS NULL',(lid,jid,digest_value,category))
                     if existing:return safe_attachment(existing)
                 total=db.execute('SELECT coalesce(sum(size),0) FROM attachments WHERE lead_id=? AND deleted_at IS NULL',(lid,)).fetchone()[0]
                 if total+n>int(os.getenv('CROWNOPS_PROJECT_UPLOAD_MB','128' if photo_mode() else '1000'))*1024*1024:
-                    raise HTTPException(413,'This moving file has reached its upload limit. Contact Crown.')
+                    raise HTTPException(413,'This moving file has reached its upload limit. Contact '+short_of(profile_for_path(path))+'.')
                 global_total=db.execute('SELECT coalesce(sum(size),0) FROM attachments WHERE deleted_at IS NULL').fetchone()[0]
                 if photo_mode() and global_total+n>int(os.getenv('CROWNOPS_PHOTO_STORAGE_MB','128'))*1024*1024:
                     raise HTTPException(507,'Company photo storage has reached its limit. Contact the owner to increase storage.')
@@ -438,7 +441,7 @@ def register_portal(app,path,auth,public_url,secure):
                 if (old['phone'],old['preferred_time'],old['message'])!=(phone,preferred,message):raise HTTPException(409,'This callback was already saved. Refresh to send a new request.')
                 return {'ok':True,'reference':old['id'],'duplicate':True}
             cutoff=(datetime.now(timezone.utc)-timedelta(minutes=15)).isoformat(timespec='seconds')
-            if db.execute('SELECT count(*) FROM client_callbacks WHERE lead_id=? AND created_at>?',(c['lead_id'],cutoff)).fetchone()[0]>=3:raise HTTPException(429,'Your callback requests are with the team. For urgent help, call 514-606-4030.')
+            if db.execute('SELECT count(*) FROM client_callbacks WHERE lead_id=? AND created_at>?',(c['lead_id'],cutoff)).fetchone()[0]>=3:raise HTTPException(429,'Your callback requests are with the team. '+call_hint(profile_for_path(path),'For urgent help, call ')+('.' if call_hint(profile_for_path(path),'x') else ''))
             lid=c['lead_id'];lead=one(db,'SELECT * FROM leads WHERE id=?',(lid,));cid=uid('CALLBACK')
             insert(db,'client_callbacks',dict(id=cid,lead_id=lid,request_key=key,phone=phone,preferred_time=preferred,message=message,created_at=now()))
             add_task(db,lid,'Client requested a callback: '+phone+(' · '+preferred if preferred else ''),lead['assigned_to'],key='callback:'+cid)

@@ -18,12 +18,14 @@ from .photo_safety import READY_STATUSES
 
 COOKIE='crownops_participation'
 STAFF={'owner','manager','sales','crew'}
-PROFILES=[{'id':'main','label':'Crown Movers — main profile','url':'https://g.page/r/CacaJ3Q-wayMEBM/review'},
-          {'id':'french','label':'Crown Movers — French profile','url':'https://g.page/r/CUQdPArzzqz_EAE/review'}]
+from .company_profile import LEGACY_REVIEW_PROFILES as PROFILES
 DISCLOSURE='The customer received a $50 moving discount for participating in this testimonial.'
 
 def policy(db):
-    return settings(db,'participation_policy',{'profiles':PROFILES})
+    # Only the original installation defaults to Crown's Google profiles; new companies add their own.
+    from .company_profile import company_profile
+    default=[dict(p) for p in PROFILES] if company_profile(db)['mode']=='legacy-crown' else []
+    return settings(db,'participation_policy',{'profiles':default})
 
 def secure_google_url(value):
     value=text(value,'Google review link',2000)
@@ -189,6 +191,8 @@ def register_client_participation(app,path,auth,public_url,secure):
             l=one(db,'SELECT * FROM leads WHERE id=?',(j['lead_id'],));fr=str(l['language']).lower().startswith('fr')
             profile=next((p for p in policy(db)['profiles'] if p['id']==data.get('profile')),None)
             if not profile:raise HTTPException(422,'Choose the profile that handled this service.')
+            from .company_profile import ready_profile
+            company_name=ready_profile(db,'preparing client review requests')['name']
             key='participation:'+kind+':'+jid
             old=one(db,'SELECT * FROM outbound_messages WHERE event_key=?',(key,))
             if old and old['status'] in ('Sending','Sent','Unknown','Approved'):return {k:old[k] for k in ('id','status','recipient','subject','body')}
@@ -196,16 +200,16 @@ def register_client_participation(app,path,auth,public_url,secure):
                 raise HTTPException(409,'The video offer must be approved and the final invoice must still be a draft. You can share the independent review or free-entry link instead.')
         if kind=='participation':
             link=open_offer(jid,{'profile':profile['id']},u)['url']
-            body=(f"Bonjour {l['client_name']},\n\nVoici le lien demandé pendant votre service :\n{link}\n\nVous pouvez choisir chaque option séparément. La vidéo facultative donne droit à 50 $ de rabais selon les conditions, avant l’émission de la facture finale. Aucun avis Google ni éloge n’est exigé. Lorsqu’un tirage est ouvert, son inscription est gratuite, sans achat, avis ou vidéo.\n\nMerci,\nCrown Movers" if fr else f"Hi {l['client_name']},\n\nHere is the link you requested during your service:\n{link}\n\nEach choice is independent. The optional video earns a $50 discount under the participation terms, before the final invoice is issued. No Google review or praise is required. When a draw is open, entry is free without a purchase, review or video.\n\nThank you,\nCrown Movers")
+            body=(f"Bonjour {l['client_name']},\n\nVoici le lien demandé pendant votre service :\n{link}\n\nVous pouvez choisir chaque option séparément. La vidéo facultative donne droit à 50 $ de rabais selon les conditions, avant l’émission de la facture finale. Aucun avis Google ni éloge n’est exigé. Lorsqu’un tirage est ouvert, son inscription est gratuite, sans achat, avis ou vidéo.\n\nMerci,\n{company_name}" if fr else f"Hi {l['client_name']},\n\nHere is the link you requested during your service:\n{link}\n\nEach choice is independent. The optional video earns a $50 discount under the participation terms, before the final invoice is issued. No Google review or praise is required. When a draw is open, entry is free without a purchase, review or video.\n\nThank you,\n{company_name}")
         else:
-            body=(f"Bonjour {l['client_name']},\n\nMerci d’avoir choisi Crown Movers. Si vous le souhaitez, partagez un avis honnête sur votre expérience :\n{profile['url']}\n\nToute opinion est bienvenue. Aucun rabais ni accès au tirage ne dépend de votre avis.\n\nMerci,\nCrown Movers" if fr else f"Hi {l['client_name']},\n\nThank you for choosing Crown Movers. If you wish, share an honest review of your experience:\n{profile['url']}\n\nAll opinions are welcome. No discount or draw entry depends on your review.\n\nThank you,\nCrown Movers")
+            body=(f"Bonjour {l['client_name']},\n\nMerci d’avoir choisi {company_name}. Si vous le souhaitez, partagez un avis honnête sur votre expérience :\n{profile['url']}\n\nToute opinion est bienvenue. Aucun rabais ni accès au tirage ne dépend de votre avis.\n\nMerci,\n{company_name}" if fr else f"Hi {l['client_name']},\n\nThank you for choosing {company_name}. If you wish, share an honest review of your experience:\n{profile['url']}\n\nAll opinions are welcome. No discount or draw entry depends on your review.\n\nThank you,\n{company_name}")
         with transaction(path) as db:
             service(db,jid,u)
             old=one(db,'SELECT * FROM outbound_messages WHERE event_key=?',(key,))
             if old and old['status'] in ('Draft','Cancelled','Failed'):
-                db.execute("UPDATE outbound_messages SET subject=?,body=?,recipient=?,status='Draft',error='' WHERE id=?",('Merci | Thank you — Crown Movers',body,l['email'],old['id']))
+                db.execute("UPDATE outbound_messages SET subject=?,body=?,recipient=?,status='Draft',error='' WHERE id=?",('Merci | Thank you — '+company_name,body,l['email'],old['id']))
                 m=one(db,'SELECT * FROM outbound_messages WHERE id=?',(old['id'],))
-            else:m=queue_message(db,j['lead_id'],'Merci | Thank you — Crown Movers',body,'Review request' if kind=='review' else 'Video invitation',u['id'],key,jid)
+            else:m=queue_message(db,j['lead_id'],'Merci | Thank you — '+company_name,body,'Review request' if kind=='review' else 'Video invitation',u['id'],key,jid)
         return {**{k:m[k] for k in ('id','recipient','subject','body')},'status':m.get('status','Draft')}
 
     @app.post('/api/jobs/{jid}/participation/email/{mid}/send')

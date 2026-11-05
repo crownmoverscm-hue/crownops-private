@@ -47,6 +47,12 @@ LEGACY_TAXES = [
     {'name': 'GST', 'rate_percent': 5.0, 'registration': '737446534RT001'},
     {'name': 'QST', 'rate_percent': 9.975, 'registration': '1227197265TQ001'},
 ]
+LEGACY_INVOICE_FOOTER = ('Thank you for choosing Crown Movers. Questions? Call 514-606-4030.',
+                         'Merci d’avoir choisi Crown Movers. Une question? Appelez le 514-606-4030.')
+LEGACY_REVIEW_PROFILES = [
+    {'id': 'main', 'label': 'Crown Movers — main profile', 'url': 'https://g.page/r/CacaJ3Q-wayMEBM/review'},
+    {'id': 'french', 'label': 'Crown Movers — French profile', 'url': 'https://g.page/r/CUQdPArzzqz_EAE/review'},
+]
 LEGACY_COMMUNICATIONS = {
     'connected_mailbox': 'crownmovers.cm@gmail.com',
     'send_as': 'info@crownmovers.ca',
@@ -175,6 +181,29 @@ def require_ready(company, action):
 
 def ready_profile(db, action):
     return require_ready(company_profile(db), action)
+
+
+def profile_for_path(path):
+    with closing(connect(path)) as db:
+        return company_profile(db)
+
+
+def client_name_of(company):
+    """Name for client-visible copy; never another company's name when unconfigured."""
+    return company['name'] if company.get('ready') else 'the moving company'
+
+
+def short_of(company):
+    return company['short_name'] if company.get('ready') else 'the moving company'
+
+
+def call_hint(company, prefix):
+    """' or call 514-…' style fragment, empty when no usable phone is configured."""
+    return prefix + company['phone'] if company.get('ready') and company.get('phone') else ''
+
+
+def is_legacy(company):
+    return company is None or company.get('mode') == LEGACY_MODE
 
 
 def profile_or_legacy(company):

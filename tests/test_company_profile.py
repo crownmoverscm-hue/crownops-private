@@ -31,7 +31,8 @@ NEW_COMPANY = {
 # Modules that compose client-facing messages. Brand text belongs only in app/company_profile.py.
 OUTBOUND_MODULES = ['client_communications', 'sales_crm_v6', 'workflows', 'extensions', 'sales_journey',
                     'review_features', 'conversations', 'providers', 'worker', 'invoice_quickbooks_delivery',
-                    'operations', 'ux_features', 'staff_onboarding', 'account_access', 'estimate_delivery']
+                    'operations', 'ux_features', 'staff_onboarding', 'account_access', 'estimate_delivery',
+                    'portal', 'invoice_access', 'client_participation', 'document_browser', 'main', 'invoices', 'deposits']
 
 
 class CompanyFixture(unittest.TestCase):
@@ -338,3 +339,69 @@ class NewInstallationFailClosedTests(CompanyFixture):
             unready = company_profile(db)
         with self.assertRaises(HTTPException):
             invoice_body({'client_name': 'C', 'language': 'English'}, {'number': 'I'}, {'total_cents': 1, 'deposit_cents': 0, 'balance_cents': 1}, 'https://x.invalid', company=unready)
+
+
+class ClientPagesAndDocumentsTests(CompanyFixture):
+    """COM-2b server side: pages, documents and review links follow the company profile."""
+
+    def page(self, lang='en'):
+        return self.public.get('/portal/missing?lang=' + lang, headers={'accept': 'text/html'})
+
+    def test_legacy_error_page_keeps_crown_contact(self):
+        html = self.page().text
+        self.assertIn('Call Crown Movers at (514) 606-4030', html); self.assertIn('href="tel:+15146064030"', html)
+
+    def test_configured_error_page_uses_company_contact(self):
+        self.save()
+        for lang in ('en', 'fr'):
+            with self.subTest(lang=lang):
+                html = self.page(lang).text
+                self.assertIn(NEW_COMPANY['name'], html); self.assertIn('href="tel:+16045550142"', html)
+                self.assertIsNone(LEGACY_MARKERS.search(html), html)
+
+    def test_unconfigured_error_page_has_no_call_button_or_crown(self):
+        from app.platform_common import put_setting
+        with transaction(self.path) as db:
+            put_setting(db, 'company_identity_mode', 'unconfigured')
+        html = self.page().text
+        self.assertNotIn('tel:', html); self.assertIsNone(LEGACY_MARKERS.search(html))
+
+    def test_portal_link_request_reply_uses_company(self):
+        self.save()
+        reply = self.public.post('/api/portal/request-link', json={'email': 'nobody@example.invalid'})
+        self.assertEqual(reply.status_code, 200, reply.text)
+        self.assertIn(NEW_COMPANY['name'], reply.json()['message']); self.assertIn(NEW_COMPANY['phone'], reply.json()['message'])
+        self.assertIsNone(LEGACY_MARKERS.search(reply.text))
+
+    def test_review_profiles_default_to_crown_only_for_legacy_install(self):
+        from app.client_participation import policy
+        from app.platform_common import put_setting
+        with closing(connect(self.path)) as db:
+            self.assertEqual([p['id'] for p in policy(db)['profiles']], ['main', 'french'])
+        with transaction(self.path) as db:
+            put_setting(db, 'company_identity_mode', 'unconfigured')
+        with closing(connect(self.path)) as db:
+            self.assertEqual(policy(db)['profiles'], [])
+        self.save()
+        with closing(connect(self.path)) as db:
+            self.assertEqual(policy(db)['profiles'], [])
+
+    def test_invoice_document_footer_uses_stamped_company_and_legacy_otherwise(self):
+        from app.invoices import invoice_html
+        import inspect
+        from app import invoices
+        self.assertIn("doc['company']={'name':company['name'],'phone':company['phone']}", inspect.getsource(invoices))
+        doc_src = inspect.getsource(invoice_html)
+        self.assertIn("document.get('company')", doc_src); self.assertIn('LEGACY_INVOICE_FOOTER', doc_src)
+
+    def test_quote_email_export_is_not_signed_by_a_person_for_other_companies(self):
+        from app.main import quote_document
+        from app.company_profile import validate_profile
+        company = {**validate_profile(NEW_COMPANY), 'configured': True, 'ready': True, 'mode': 'configured'}
+        q = {'result_json': '{"movers":2,"trucks":1,"hourly_rate_cents":10000,"service_low":2,"service_high":3,"transport_cents":0,"fuel_cents":0,"materials_cents":0,"other_cents":0,"discount_cents":0,"low_cents":20000,"high_cents":30000,"minimum_hours":3}'}
+        for language in ('English', 'French'):
+            subject, body = quote_document(q, {'client_name': 'C', 'language': language}, company)
+            self.assertNotIn('Jonathan', body); self.assertIsNone(LEGACY_MARKERS.search(subject + body))
+            self.assertTrue(body.endswith(NEW_COMPANY['name'] + '\n' + NEW_COMPANY['phone']))
+        legacy_subject, legacy_body = quote_document(q, {'client_name': 'C', 'language': 'English'})
+        self.assertIn('Jonathan here!', legacy_body); self.assertTrue(legacy_body.endswith('Jonathan\nCrown Movers\n514-606-4030'))

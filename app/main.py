@@ -118,14 +118,17 @@ def create_user(path, email, name, password, role='owner', employee_id=None, ini
     return safe_user(u)
 
 
-def quote_document(q, lead):
+def quote_document(q, lead, company=None):
+    from .company_profile import profile_or_legacy,is_legacy
+    c=profile_or_legacy(company);legacy=is_legacy(company)
+    signature=('Jonathan\n' if legacy else '')+c['name']+'\n'+c['phone']
     r=json.loads(q['result_json']);lang=str(lead.get('language','English')).lower()
     fr=lang.startswith('fr')
     money=lambda c: f'CA${c/100:,.2f}'
     name=lead.get('client_name','')
     if fr:
-        subject='Votre estimation de demenagement | Crown Movers'
-        body=(f'Bonjour {name},\n\nJonathan ici! Merci pour les details de votre demenagement.\n\n'
+        subject='Votre estimation de demenagement | '+c['name']
+        body=(f'Bonjour {name},\n\n'+('Jonathan ici! ' if legacy else '')+'Merci pour les details de votre demenagement.\n\n'
           f'Depart : {lead.get("pickup","")}\nDestination : {lead.get("dropoff","")}\n'
           f'Date souhaitee : {lead.get("move_date","")} (reservation a confirmer)\n\n'
           f'Equipe : {r["movers"]} demenageurs et {r["trucks"]} camion(s).\n'
@@ -139,10 +142,10 @@ def quote_document(q, lead):
           f'Le temps reel sera facture selon les modalites acceptees, avec un minimum de {r["minimum_hours"]:g} heures de service. '
           'Les frais distincts de transport, de carburant et les materiaux utilises restent applicables.\n'
           'La disponibilite, les acces et le traitement fiscal doivent etre confirmes avant la reservation.\n\n'
-          'N\'hesitez pas a me faire signe si vous avez des questions.\nAu plaisir,\nJonathan\nCrown Movers\n514-606-4030')
+          'N\'hesitez pas a me faire signe si vous avez des questions.\nAu plaisir,\n'+signature)
     else:
-        subject='Your moving estimate | Crown Movers'
-        body=(f'Hi {name},\n\nJonathan here! I hope all is well. Thanks for the details of your move.\n\n'
+        subject='Your moving estimate | '+c['name']
+        body=(f'Hi {name},\n\n'+('Jonathan here! ' if legacy else '')+'I hope all is well. Thanks for the details of your move.\n\n'
           f'Pickup: {lead.get("pickup","")}\nDestination: {lead.get("dropoff","")}\n'
           f'Requested date: {lead.get("move_date","")} (booking to be confirmed)\n\n'
           f'Team: {r["movers"]} movers and {r["trucks"]} truck(s).\n'
@@ -156,7 +159,7 @@ def quote_document(q, lead):
           f'Final service time is billed under the accepted terms, with a {r["minimum_hours"]:g}-hour service minimum. '
           'The separate transport and fuel charges and materials used still apply.\n'
           'Availability, access and tax treatment need confirmation before booking.\n\n'
-          'Let me know if you have any questions.\nTalk soon,\nJonathan\nCrown Movers\n514-606-4030')
+          'Let me know if you have any questions.\nTalk soon,\n'+signature)
     return subject,body
 
 
@@ -244,7 +247,7 @@ def create_app(database_path=None, *, core_pilot=False):
                 with suppress(asyncio.CancelledError):await task
     app=FastAPI(title='CrownOps Unified Application',version='0.12.7-rc6',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     from .error_pages import register_error_pages
-    register_error_pages(app)
+    register_error_pages(app, None if core_v1_profile else path)
     from .app_release import register_app_release
     register_app_release(app,ROOT)
     app.state.db_path=path
@@ -849,20 +852,22 @@ def create_app(database_path=None, *, core_pilot=False):
     @app.get('/api/quotes/{qid}/email')
     def email_export(qid:str,u=Depends(auth)):
         require(u,QUOTERS)
+        from .company_profile import company_profile
         with closing(connect(path)) as db:
-            q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
+            q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,));company=company_profile(db)
         if not q:raise HTTPException(404,'Quote not found.')
         if q['status'] not in ('Approved','Accepted'):raise HTTPException(422,'Approve the quote before exporting a client email.')
-        lead=json.loads(q['lead_snapshot_json']);subject,body=quote_document(q,lead)
+        lead=json.loads(q['lead_snapshot_json']);subject,body=quote_document(q,lead,company)
         msg=EmailMessage();msg['To']=lead['email'];msg['Subject']=subject;msg['X-Unsent']='1';msg.set_content(body)
         return Response(msg.as_bytes(),media_type='message/rfc822',headers={'Content-Disposition':f'attachment; filename="{qid}.eml"'})
 
     @app.get('/api/quotes/{qid}/draft-text')
     def draft_text(qid:str,u=Depends(auth)):
         require(u,QUOTERS)
-        with closing(connect(path)) as db:q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,))
+        from .company_profile import company_profile
+        with closing(connect(path)) as db:q=one(db,'SELECT * FROM quotes WHERE id=?',(qid,));company=company_profile(db)
         if not q:raise HTTPException(404,'Quote not found.')
-        subject,body=quote_document(q,json.loads(q['lead_snapshot_json']))
+        subject,body=quote_document(q,json.loads(q['lead_snapshot_json']),company)
         if q['status']=='Draft':body='INTERNAL DRAFT - NOT APPROVED FOR CLIENT DELIVERY\n\n'+body
         return {'subject':subject,'body':body,'sent':False}
 
