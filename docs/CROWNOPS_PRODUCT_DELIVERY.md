@@ -90,7 +90,7 @@ The test counts come from test names that match each capability. They show cover
 | REL-4 | CI | `core-v1-isolation.yml:35` hash gate fails after #95 | P1 | `requirements.txt` sha changed `0463b4…` → `92c2aa…` | Re-pin after the D4 decision | D4 | Not started | Workflow passes on its branch |
 | COM-1 | Communications | Client emails, the From header, QuickBooks memo, Square checkout and receipts hardcode Crown Movers' name, phone, email and Montréal time | P0 | 35+ sites | `app/company_profile.py`: stored profile, legacy Crown default, owner/manager API, `manage.py company-profile`, `doctor` flag | — | **Verified** (`tests/test_company_profile.py`, 14 tests) | With a configured profile, no generated message contains Crown identity; the legacy install output is byte-identical |
 | COM-2 | Branding | Crown references in client-facing pages and static UI | P0 | `grep` 2026-11-05 | Server-rendered text from `company_profile`; static pages read `/api/company/public-profile` | COM-1 | **Server side verified** (`03c3130`): portal, invoice access, participation and review links, printed estimate, quote export, error page, invoice footer. **Static HTML/JS (about 20 files, manifest, icon) not started (COM-2c).** | Brand guard extended to `app/static` passes |
-| COM-3 | Scheduling | Business timezone hardcoded to America/Toronto (about 50 sites in 36 files, Python and JS) | P0 for companies outside Eastern time | `grep` | One `business_zone()` resolved from the profile at startup and on profile change; JS gets the zone from the server; all sites switch in one change | COM-1 | **Not started.** Interim guard verified (`d438980`): the profile accepts only America/Toronto, so no partial switch can shift booked times. | Schedule, availability, payroll and browser suites pass with a non-Eastern profile |
+| COM-3 | Scheduling | Business timezone hardcoded to America/Toronto (37 `ZoneInfo` calls and 2 constants in 24 Python modules; 16 browser formatters in 11 scripts) | P0 | `grep` 2026-11-05 | `app/business_zone.py` (a `tzinfo` delegating to the company's `ZoneInfo`, including `fold`); loaded at startup and on profile save; `/business-zone.js` for pages | COM-1 | **Verified** (`423c50b`, `tests/test_business_zone.py`) | Toronto identical to `ZoneInfo` for every UTC hour across both 2026 transitions; Vancouver, Halifax and Regina booking holds, business days and presentation follow the company zone |
 | SEC-3 | Security | Every installation shared one hardcoded owner-setup hash in a public repository; anyone with Crown's setup code could claim Owner on a new company's installation | P0 | `app/main.py:44` (before `502715e`) | Per-installation `CROWNOPS_SETUP_CODE_HASH`; `manage.py setup-code`; web setup closed without it | — | **Verified** (`502715e`, `tests/test_installation_security.py`) | Another installation's code is refused; no hash in source |
 | COM-6a | Identity | New installations with no profile fell back to Crown's identity | P0 | — | Identity mode recorded once per database (`legacy-crown` if it already had users or leads, else `unconfigured`). Unconfigured installs refuse client messages, email, invoices and provider documents. Lead capture is never blocked. | COM-1 | **Verified** (`5503a28`, 6 tests) | Unconfigured install can save leads but sends nothing as anyone |
 | COM-4 | Pricing | Truck minimums, service minimums and rate import are Crown policy in code | P1 | `sales_crm_v6.py:60-82`, `seed.py`, `config/workbook_pricing_snapshot.json` | Move rules into owner-approved pricing settings; new installs start unapproved | — | Not started | A new company sets its own rules; Crown's results are unchanged |
@@ -149,6 +149,28 @@ The test counts come from test names that match each capability. They show cover
 
 **Preservation:** a verified git bundle and patch series of every commit since `db59167` are delivered to the owner as a download. The repository remains public by Jonathan's decision, so nothing has been pushed.
 
+### 2026-11-05 — Session 3 (local commits only; repository still public)
+
+| Commit | Item | Summary |
+|---|---|---|
+| `423c50b` | COM-3 + identity hardening | Company time zone everywhere (server, browser, imports); test-created databases are never recorded as Crown's legacy install; explicit `manage.py installation-identity` |
+
+**COM-3 audit findings (2026-11-05):**
+- **Storage:** timestamps (`created_at`, job `start_at`/`end_at`, audit) are stored in UTC ISO-8601. Service dates (`move_date`) are local calendar dates. No stored data is rewritten by COM-3.
+- **Conversions:** every local interpretation now goes through `BUSINESS_ZONE`. `fold` is preserved, so the repeated November hour resolves exactly as `ZoneInfo` does: the first occurrence unless the code selects otherwise. Nonexistent March times get `ZoneInfo`'s offset.
+- **Customer-facing dates:** reminders, booking confirmations, `booking_details`, invoices and the portal format in the company zone. Toronto keeps the "ET" label and "Montréal time" wording.
+- **Known limits:**
+  1. The zone is held per process. A change made with `manage.py company-profile` while the server is running takes effect on restart; the API applies it immediately.
+  2. Changing the zone after bookings exist keeps the stored UTC instants and re-displays them in the new zone. Set the zone before the first booking. The onboarding runbook must say so.
+  3. The browser suites ran in Toronto only; non-Toronto browser rendering is covered by the zone-script and page-wiring tests, not by a full browser run.
+  4. Zone rules come from the system tz database (for example, British Columbia's current rules), so containers need an up-to-date `tzdata`.
+
+**Installation identity review (requested item 4):**
+- **Current detection:** a database with users or leads at first start of this release is recorded as `legacy-crown`.
+- **Gap found and fixed:** a trial database created under `CROWNOPS_ENV=test` and later promoted to production would have been recorded as Crown. Such databases are now marked at creation and recorded as `unconfigured`.
+- **Recommendation (D15, needs owner authorization because it touches production):** on Crown's production and staging installations, run `manage.py installation-identity --mode legacy-crown --reason "<who confirmed>"` once, so the identity is an explicit audited decision rather than an inference. Then plan the move from legacy mode to an explicit Crown company profile (`manage.py company-profile ...`).
+- **For every new company:** the provisioning runbook sets `company-profile` before first start, which supersedes detection entirely.
+
 ## 7. Test results
 
 | Run | Command | Result |
@@ -160,6 +182,9 @@ The test counts come from test names that match each capability. They show cover
 | Session 2, isolated (after `03c3130`) | `python tests/run_isolated.py --min-tests 658 --jobs 4` | **57 modules, 658 tests, 0 failures** |
 | Session 2, browser | All 11 CI suites after `5503a28`; 6 client-facing suites after `03c3130` | **All pass** |
 | Session 2, legacy byte-identity | 404/410 page from `db59167` vs this branch, EN and FR | **Identical SHA-256** |
+| Session 3, isolated (after `423c50b`) | `python tests/run_isolated.py --min-tests 670 --jobs 4` | **58 modules, 670 tests, 0 failures** (one clean run after fixing a missed `__import__('zoneinfo')` call site that the first run caught) |
+| Session 3, browser | All 11 CI suites | **11 out of 11 pass** |
+| Session 3, JS | `node --check app/static/*.js`; `node --test tests/*.test.cjs` | All pass; 20 out of 20 |
 | JavaScript syntax | `node --check app/static/*.js` | All pass |
 | Node tests | `node --test tests/*.test.cjs` | 20 out of 20 pass |
 | Browser suites (Playwright, pre-installed Chromium) | `python tests/browser/run_mobile.py <suite>`, all 11 CI suites with CI environment variables | **11 out of 11 pass** after COM-1 (wix_sync, inbox, payroll_periods, hours_costs, staff_portal, client_participation, browser_recovery, estimate_delivery, mobile_schedule, today_workspace, team_chat) |
@@ -242,7 +267,11 @@ D1–D11 are listed in the 2026-11-05 takeover assessment. They cover:
 
 ## 10. Next executable task
 
-**COM-3 (all sites in one change):** add `business_zone()` resolved from the company profile; replace every `America/Toronto` / `MONTREAL` use in `app/*.py`; serve the zone to the browser and replace the JS literals. Lift the `SUPPORTED_TIMEZONES` guard only when the schedule, availability, payroll and all browser suites pass with a non-Eastern profile. Then COM-4 (pricing policy settings) and COM-2c (static pages).
+**COM-4 — company pricing and operational policies.**
+1. Inventory Crown-specific policy in code: `sales_crm_v6.py` truck minimums by crew size and the afternoon small-job exception (lines 60–82), service minimum hours, `seed.py` pricing and the rate workbook snapshot (`config/workbook_pricing_snapshot.json`), the $50 testimonial disclosure (`client_participation.DISCLOSURE`), and deposit defaults (`deposit_required` 300).
+2. Move each into validated, owner-approved company settings with versioning and an audit trail. Legacy installations default to today's values; new installations start unapproved and cannot quote until pricing is approved.
+3. Protect calculations by golden-value tests: record today's `calculate()` outputs for a fixed set of Crown inputs and assert they are unchanged.
+4. Then COM-2c (static pages and manifest branding) and COM-8 (owner settings screen).
 
 _Previous next-task note (completed server side in `03c3130`):_ COM-2b: brand the client-facing pages from `/api/company/public-profile`:
 - `portal.html` / `client*.js`
