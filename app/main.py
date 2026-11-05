@@ -1572,5 +1572,7 @@ def create_app(database_path=None, *, core_pilot=False):
     register_staff_portal(app,path,auth)
     from .team_chat import register_team_chat
     register_team_chat(app,path,auth)
+    from .company_profile import register_company_profile
+    register_company_profile(app,path,auth)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app

@@ -157,7 +157,9 @@ def qbo_customer(path,l):
         db.execute('INSERT OR IGNORE INTO external_records(provider,kind,object_id,external_id,updated_at) VALUES(?,?,?,?,?)',('quickbooks','Customer',l['id'],r['Id'],now()))
     return r['Id']
 
-def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
+def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account,company=None):
+    from .company_profile import profile_or_legacy
+    c=profile_or_legacy(company)
     if not item_id or not tax_id:raise ValueError('Configure the reviewed QuickBooks service item and Canadian tax code IDs.')
     t=doc['terms'];r=doc['calculation']
     if t.get('testimonial_credit_mode')=='after_tax' and t.get('testimonial_credit_cents',0):raise ValueError('After-tax credits require a separate reviewed QuickBooks credit memo. No invoice was exported.')
@@ -171,8 +173,8 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
         if not discount_account:raise ValueError('Configure the reviewed QuickBooks discount account ID.')
         lines.append({'DetailType':'DiscountLineDetail','Amount':discount/100,'DiscountLineDetail':{'PercentBased':False,'DiscountAccountRef':{'value':discount_account}}})
     fr=str(doc.get('language','')).lower().startswith('fr')
-    memo=(f"Bonjour {t['customer'].get('name','')}, merci d’avoir choisi Crown Movers! Voici votre facture pour le service du {doc['service_date']}. Si vous avez déjà payé, ne payez pas une deuxième fois. Une question? 514-606-4030." if fr else
-          f"Hi {t['customer'].get('name','')}, thank you for choosing Crown Movers! Here is your invoice for service on {doc['service_date']}. If you have already paid, please do not pay again. Questions? 514-606-4030.")
+    memo=(f"Bonjour {t['customer'].get('name','')}, merci d’avoir choisi {c['name']}! Voici votre facture pour le service du {doc['service_date']}. Si vous avez déjà payé, ne payez pas une deuxième fois. Une question? {c['phone']}." if fr else
+          f"Hi {t['customer'].get('name','')}, thank you for choosing {c['name']}! Here is your invoice for service on {doc['service_date']}. If you have already paid, please do not pay again. Questions? {c['phone']}.")
     if t.get('payment_terms'):memo+='\n'+t['payment_terms']
     if len(memo)>1000:raise ValueError('Shorten the invoice payment terms before exporting to QuickBooks; no terms were truncated.')
     payload={'CustomerRef':{'value':customer_id},'CurrencyRef':{'value':'CAD'},'GlobalTaxCalculation':'TaxExcluded','Line':lines,
@@ -188,16 +190,17 @@ def send_gmail(path,message):
     profile=requests.get('https://gmail.googleapis.com/gmail/v1/users/me/profile',headers={'Authorization':'Bearer '+t['access_token']},timeout=15)
     profile.raise_for_status();sender=profile.json().get('emailAddress','')
     if not isinstance(sender,str) or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',sender):raise ValueError('Gmail sender identity could not be confirmed.')
-    with closing(connect(path)) as db:identity=settings(db,'company_communications',{}) or {}
+    from .company_profile import company_profile
+    with closing(connect(path)) as db:identity=settings(db,'company_communications',{}) or {};company=company_profile(db)
     reply_to=sender
     if identity.get('approved') is True:
         if str(identity.get('connected_mailbox','')).lower()!=sender.lower():raise ValueError('The connected mailbox changed. Management must review company email rules before sending.')
         alias=identity.get('send_as','');reply=identity.get('reply_to','')
         if any(not isinstance(value,str) or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',value) for value in (alias,reply)):raise ValueError('Review the company sender and reply email addresses before sending.')
         sender=alias;reply_to=reply
-    m=EmailMessage();m['From']=formataddr(('Crown Movers',sender));m['Reply-To']=reply_to;m['To']=message['recipient'];m['Subject']=message['subject'];m['Message-ID']='<'+message['id'].lower()+'@crownops.local>';m.set_content(message['body'])
+    m=EmailMessage();m['From']=formataddr((company['name'],sender));m['Reply-To']=reply_to;m['To']=message['recipient'];m['Subject']=message['subject'];m['Message-ID']='<'+message['id'].lower()+'@crownops.local>';m.set_content(message['body'])
     from .client_communications import email_html
-    m.add_alternative(email_html(message['subject'],message['body']),subtype='html')
+    m.add_alternative(email_html(message['subject'],message['body'],company),subtype='html')
     if message['category']=='Invoice':
         marker=message['event_key'].split(':')
         if marker[0] in ('invoice-delivery','invoice-mail') and len(marker)==3:
@@ -596,7 +599,9 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             if op and op['status'] in ('Running','Unknown','Mismatch'):raise HTTPException(409,'This export needs reconciliation before retrying. No second invoice was created.')
             db.execute('DELETE FROM provider_operations WHERE id=?',(key,));insert(db,'provider_operations',dict(id=key,provider='quickbooks',object_id=iid,kind='Invoice',status='Running',created_at=now(),updated_at=now()))
         try:
-            cust=qbo_customer(path,l);payload=qbo_invoice_payload(doc,cust,qbo_mapping(path,'service_item_id'),qbo_mapping(path,'tax_code_id'),qbo_mapping(path,'discount_account_id'))
+            from .company_profile import company_profile
+            with closing(connect(path)) as cdb:company=company_profile(cdb)
+            cust=qbo_customer(path,l);payload=qbo_invoice_payload(doc,cust,qbo_mapping(path,'service_item_id'),qbo_mapping(path,'tax_code_id'),qbo_mapping(path,'discount_account_id'),company)
             if not old and j.get('quote_id'):
                 with closing(connect(path)) as db:
                     estimate=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(j['quote_id'],))
@@ -632,6 +637,8 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         if not token or not loc:raise HTTPException(503,'Square is not configured.')
         with transaction(path) as db:
             inv,calc=invoice_current(db,iid);invoice_job(db,inv['job_id'],u)
+            from .company_profile import company_profile
+            checkout_company=company_profile(db)['name']
             if inv['status']!='Issued':raise HTTPException(409,'Finalize the invoice before requesting payment.')
             issued_doc=json.loads(one(db,'SELECT document_json FROM invoice_revisions WHERE invoice_id=? AND revision=?',(iid,inv['revision']))['document_json'])
             if os.getenv('SQUARE_ENV','sandbox')!='sandbox' and issued_doc.get('test_mode',True):raise HTTPException(409,'A test invoice cannot create a production card charge.')
@@ -644,7 +651,7 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             key=uid('CHECKOUT');insert(db,'payment_links',dict(id=key,invoice_id=iid,revision=inv['revision'],amount_cents=calc['balance_cents'],provider='square',created_at=now()))
         host='https://connect.squareupsandbox.com' if os.getenv('SQUARE_ENV','sandbox')=='sandbox' else 'https://connect.squareup.com'
         try:
-            r=requests.post(host+'/v2/online-checkout/payment-links',headers={'Authorization':'Bearer '+token,'Square-Version':os.getenv('SQUARE_API_VERSION','2026-09-16')},json={'idempotency_key':key,'quick_pay':{'name':'Crown Movers invoice '+inv['number'],'price_money':{'amount':calc['balance_cents'],'currency':'CAD'},'location_id':loc},'checkout_options':{'allow_tipping':False}},timeout=30)
+            r=requests.post(host+'/v2/online-checkout/payment-links',headers={'Authorization':'Bearer '+token,'Square-Version':os.getenv('SQUARE_API_VERSION','2026-09-16')},json={'idempotency_key':key,'quick_pay':{'name':checkout_company+' invoice '+inv['number'],'price_money':{'amount':calc['balance_cents'],'currency':'CAD'},'location_id':loc},'checkout_options':{'allow_tipping':False}},timeout=30)
             r.raise_for_status();link=r.json()['payment_link']
             with transaction(path) as db:
                 db.execute("UPDATE payment_links SET status='Active',url=?,order_id=?,link_id=? WHERE id=?",(link['url'],link['order_id'],link['id'],key));audit(db,u['id'],'Square checkout created; not payment confirmation','payment_links',key)

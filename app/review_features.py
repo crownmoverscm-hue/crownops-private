@@ -91,7 +91,7 @@ def seed_review_defaults(path):
         if not one(db,'SELECT id FROM document_templates LIMIT 1'):
             samples=[
                 ('Scope / information difference acknowledgement','Additional work',
-                 'TEST TEMPLATE - LEGAL REVIEW REQUIRED BEFORE LIVE USE.\n\nThe information available when the estimate was prepared differs from the conditions found for this service. The job-specific details below describe the difference. Additional work may increase the time and final charges under the rates and terms already accepted for the move. By approving, the client confirms the described difference and authorizes Crown Movers to continue with the additional work described below.'),
+                 'TEST TEMPLATE - LEGAL REVIEW REQUIRED BEFORE LIVE USE.\n\nThe information available when the estimate was prepared differs from the conditions found for this service. The job-specific details below describe the difference. Additional work may increase the time and final charges under the rates and terms already accepted for the move. By approving, the client confirms the described difference and authorizes the moving company to continue with the additional work described below.'),
                 ('Special handling / liability acknowledgement','Liability',
                  'TEST TEMPLATE - LEGAL REVIEW REQUIRED BEFORE LIVE USE.\n\nThe client has requested work or handling that requires a separate acknowledgement. The job-specific details below describe the item, condition, access issue, or requested method. By approving, the client confirms that the described condition was reviewed before the team proceeds. Replace this test wording with lawyer-approved language before production.'),
                 ('Existing condition acknowledgement','Condition',
@@ -432,10 +432,12 @@ def register_review_features(app,path,auth,public_url):
             raw=secrets.token_urlsafe(36);aid=uid('APPROVAL');exp=(datetime.now(timezone.utc)+timedelta(days=7)).isoformat(timespec='seconds')
             insert(db,'document_approvals',dict(id=aid,template_id=tmpl['id'],template_version=tmpl['version'],lead_id=lid,job_id=jid,rendered_body=rendered,recipient=recipient,delivery_method=method,status='Prepared',token_hash=_token_hash(raw),expires_at=exp,created_by=u['id'],created_at=now()))
             link=public_url.rstrip('/')+'/approval#token='+raw
+            from .company_profile import company_profile
+            company_name=company_profile(db)['name']
             if method=='Email':
-                queue_message(db,lid,'Approval requested | Crown Movers',f'Please review and approve the attached service acknowledgement using this private link:\n\n{link}\n\nNothing is approved until you submit the acknowledgement.', 'Document approval',u['id'],'document-approval:'+aid,jid)
+                queue_message(db,lid,'Approval requested | '+company_name,f'Please review and approve the attached service acknowledgement using this private link:\n\n{link}\n\nNothing is approved until you submit the acknowledgement.', 'Document approval',u['id'],'document-approval:'+aid,jid)
             audit(db,u['id'],'Client approval request prepared','document_approvals',aid,{'template_id':tid,'method':method,'job_id':jid})
-        sms=f'Crown Movers: please review and approve this service acknowledgement before we continue: {link}'
+        sms=f'{company_name}: please review and approve this service acknowledgement before we continue: {link}'
         return {'id':aid,'url':link,'email_draft_created':method=='Email','text_message':sms,'sent':False,'expires_at':exp}
 
     @app.post('/api/document-approvals/{aid}/cancel')
@@ -480,7 +482,7 @@ def register_review_features(app,path,auth,public_url):
             if not r:raise HTTPException(404,'This approval link is invalid.')
             if r['status']!='Prepared':raise HTTPException(409,'This approval request is already closed.')
             if r['expires_at']<now():
-                db.execute("UPDATE document_approvals SET status='Expired' WHERE id=?",(r['id'],));raise HTTPException(410,'This approval link has expired. Ask Crown Movers for a new one.')
+                db.execute("UPDATE document_approvals SET status='Expired' WHERE id=?",(r['id'],));raise HTTPException(410,'This approval link has expired. Ask the moving company for a new one.')
             if decision=='Approved':db.execute("UPDATE document_approvals SET status='Approved',approved_at=?,signed_name=?,response_note=? WHERE id=?",(now(),signed,note,r['id']))
             else:db.execute("UPDATE document_approvals SET status='Declined',declined_at=?,signed_name=?,response_note=? WHERE id=?",(now(),signed,note,r['id']))
             audit(db,'client:'+r['lead_id'],'Client document '+decision.lower(),'document_approvals',r['id'],{'signed_name':signed})

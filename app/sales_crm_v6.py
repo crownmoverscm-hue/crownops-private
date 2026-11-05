@@ -1,4 +1,4 @@
-"""Launch-ready sales CRM and quote workflow for Crown Movers."""
+"""Launch-ready sales CRM and quote workflow for moving companies."""
 from contextlib import closing
 from datetime import datetime, timezone, timedelta, date
 from decimal import Decimal, ROUND_HALF_UP
@@ -14,6 +14,7 @@ from .platform_common import SALES, OFFICE, MANAGERS, require_role, settings, pu
 from .pricing import seasonal_rate, number as pricing_number
 from .inquiry_intake import intake_values, photo_link
 from .client_communications import pending_scope_changes, quote_scope_current, booking_details, booking_confirmation_key
+from .company_profile import company_profile, profile_or_legacy, time_note, team_signoff
 
 MONTREAL=ZoneInfo("America/Toronto")
 LOCAL_FUEL=Decimal("35.00")
@@ -57,7 +58,7 @@ def money(v):
     return int((Decimal(str(v))*100).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
 
 def minimum_trucks_for_movers(movers):
-    """Crown Movers launch rule for minimum truck count by crew size."""
+    """Launch rule for minimum truck count by crew size (Crown Movers policy; see delivery plan COM-4)."""
     movers=int(movers)
     if movers>=6:return 3
     if movers>=4:return 2
@@ -459,7 +460,7 @@ def calculate(db,data):
     if Decimal(str(data.get('movers',2)))!=movers or Decimal(str(data.get('trucks',1)))!=trucks:raise HTTPException(422,'Movers and trucks must be whole numbers.')
     minimum_trucks=minimum_trucks_for_movers(movers)
     if trucks<minimum_trucks:
-        raise HTTPException(422,f"Crown Movers requires at least {minimum_trucks} truck(s) for a crew of {movers} movers.")
+        raise HTTPException(422,f"This service requires at least {minimum_trucks} truck(s) for a crew of {movers} movers.")
     suggested,source=rate_for(db,day,movers)
     override=data.get("hourly_rate");rate=number(override,"Hourly rate",1,5000) if override not in (None,"") else suggested
     low=number(data.get("hours_low",3),"Estimated low hours",.25,100);high=number(data.get("hours_high",low),"Estimated high hours",.25,120)
@@ -554,15 +555,16 @@ def template_service(db,data,u):
     db.execute("UPDATE client_accounts SET updated_at=? WHERE id=?",(now(),cid));audit(db,u["id"],"New service added to client","leads",lid,{"client_id":cid})
     return rec
 
-def confirmation(lead,q,job=None):
+def confirmation(lead,q,job=None,company=None):
+    c=profile_or_legacy(company)
     inp=json.loads(q["inputs_json"]);fr=str(inp.get("language") or lead.get("language","")).lower().startswith("fr")
     _,window=quote_start_window(inp)
     day=inp.get('move_date') or lead.get('move_date')
     if job:
         detail=booking_details(job,q);day=detail['date'];window=detail['arrival_window']
     if fr:
-        return f"Bonjour {lead['client_name']},\n\nVotre service avec Crown Movers est maintenant réservé et confirmé. Date : {day}. Fenêtre d'arrivée : {window} (heure de Montréal).\n\nPour une annulation ou un report, consultez les conditions de réservation convenues pour votre service et contactez-nous à info@crownmovers.ca ou au 514-606-4030. Une nouvelle date dépend des disponibilités. Tout changement de prix doit être accepté avant de confirmer la nouvelle réservation.\n\nMerci,\nCrown Movers"
-    return f"Hi {lead['client_name']},\n\nYour Crown Movers service is booked and confirmed. Service date: {day}. Arrival window: {window} (Montréal time).\n\nFor cancellation or rescheduling, refer to the booking terms agreed for your service and contact us at info@crownmovers.ca or 514-606-4030. A replacement date is subject to availability. Any price change requires your approval before confirming the replacement booking.\n\nThank you,\nCrown Movers"
+        return f"Bonjour {lead['client_name']},\n\nVotre service avec {c['name']} est maintenant réservé et confirmé. Date : {day}. Fenêtre d'arrivée : {window}{time_note(c,True)}.\n\nPour une annulation ou un report, consultez les conditions de réservation convenues pour votre service et contactez-nous à {c['email']} ou au {c['phone']}. Une nouvelle date dépend des disponibilités. Tout changement de prix doit être accepté avant de confirmer la nouvelle réservation.\n\nMerci,\n{c['name']}"
+    return f"Hi {lead['client_name']},\n\nYour {c['name']} service is booked and confirmed. Service date: {day}. Arrival window: {window}{time_note(c,False)}.\n\nFor cancellation or rescheduling, refer to the booking terms agreed for your service and contact us at {c['email']} or {c['phone']}. A replacement date is subject to availability. Any price change requires your approval before confirming the replacement booking.\n\nThank you,\n{c['name']}"
 
 
 def prepare_booking_confirmation(db,job,quote,lead,actor,base=None):
@@ -590,8 +592,9 @@ def prepare_booking_confirmation(db,job,quote,lead,actor,base=None):
         if token and one(db,'SELECT token_hash FROM portal_invites WHERE token_hash=? AND used_at IS NULL AND revoked=0 AND expires_at>? AND email=?',(stamp_hash(token),now(),lead['email'])):return prior
     from .client_communications import portal_link
     fr=str(json.loads(quote['inputs_json']).get('language') or lead.get('language','')).lower().startswith('fr')
-    body=confirmation(lead,quote,job)+('\n\nVotre dossier privé (photos, renseignements et demandes de rappel) :\n' if fr else '\n\nYour private moving file (photos, details and callback requests):\n')+portal_link(db,lead,actor,base,tab='estimates')
-    subject='Réservation confirmée | Crown Movers' if fr else 'Booking confirmed | Crown Movers'
+    company=company_profile(db)
+    body=confirmation(lead,quote,job,company)+('\n\nVotre dossier privé (photos, renseignements et demandes de rappel) :\n' if fr else '\n\nYour private moving file (photos, details and callback requests):\n')+portal_link(db,lead,actor,base,tab='estimates')
+    subject=('Réservation confirmée | ' if fr else 'Booking confirmed | ')+company['name']
     if prior:
         db.execute("UPDATE outbound_messages SET subject=?,body=?,recipient=?,status='Draft',approved_by=NULL,error='',source_version=NULL WHERE id=?",(subject,body,lead['email'],prior['id']))
         message=one(db,'SELECT * FROM outbound_messages WHERE id=?',(prior['id'],))
@@ -880,10 +883,11 @@ def register_sales_crm_v6(app,path,auth,public_url):
                 r=json.loads(q['result_json']);fr=str(inp.get('language','English')).lower().startswith('fr')
                 template=inp.get('template_snapshot') or {};_,arrival=quote_start_window(inp)
                 service_title=template.get('title') or inp.get('service_type') or 'Moving'
-                subject=('Votre devis Crown Movers - ' if fr else 'Your Crown Movers estimate - ')+service_title
+                c=company_profile(db)
+                subject=('Votre devis '+c['name']+' - ' if fr else 'Your '+c['name']+' estimate - ')+service_title
                 date=inp.get('move_date') or l.get('move_date')
-                body=(f"Bonjour {l['client_name']},\n\nMerci de considérer Crown Movers! Votre devis pour le {date} est prêt.\nArrivée souhaitée : {arrival}.\nEstimation avant taxes : {r['low_cents']/100:.2f} $ à {r['high_cents']/100:.2f} $ CA.\n\nConsultez votre devis et les conditions, puis acceptez-le ici :\n{invite_url}\n\nVous pourrez ensuite consulter les options de dépôt. Votre date sera confirmée après les vérifications de disponibilité et de paiement.\n\nDans votre dossier, vous pouvez aussi ajouter des photos, préciser les accès ou demander un rappel.\n\nUne question? Appelez le 514-606-4030. Nous serons heureux de vous aider.\n\nMerci,\nL’équipe Crown Movers" if fr else
-                    f"Hi {l['client_name']},\n\nThank you for considering Crown Movers! Your estimate for {date} is ready.\nRequested arrival window: {arrival}.\nEstimated range before tax: CAD {r['low_cents']/100:.2f} to CAD {r['high_cents']/100:.2f}.\n\nReview your estimate and booking terms, then accept here:\n{invite_url}\n\nYour deposit options will appear after acceptance. We will confirm your date after checking availability and the required payment or approved arrangement.\n\nYou can also add photos, share access details, or request a callback in your moving file.\n\nQuestions? Call 514-606-4030. We are happy to help.\n\nThank you,\nThe Crown Movers team")
+                body=(f"Bonjour {l['client_name']},\n\nMerci de considérer {c['name']}! Votre devis pour le {date} est prêt.\nArrivée souhaitée : {arrival}.\nEstimation avant taxes : {r['low_cents']/100:.2f} $ à {r['high_cents']/100:.2f} $ CA.\n\nConsultez votre devis et les conditions, puis acceptez-le ici :\n{invite_url}\n\nVous pourrez ensuite consulter les options de dépôt. Votre date sera confirmée après les vérifications de disponibilité et de paiement.\n\nDans votre dossier, vous pouvez aussi ajouter des photos, préciser les accès ou demander un rappel.\n\nUne question? Appelez le {c['phone']}. Nous serons heureux de vous aider."+team_signoff(c,True) if fr else
+                    f"Hi {l['client_name']},\n\nThank you for considering {c['name']}! Your estimate for {date} is ready.\nRequested arrival window: {arrival}.\nEstimated range before tax: CAD {r['low_cents']/100:.2f} to CAD {r['high_cents']/100:.2f}.\n\nReview your estimate and booking terms, then accept here:\n{invite_url}\n\nYour deposit options will appear after acceptance. We will confirm your date after checking availability and the required payment or approved arrangement.\n\nYou can also add photos, share access details, or request a callback in your moving file.\n\nQuestions? Call {c['phone']}. We are happy to help."+team_signoff(c,False))
                 if msg:
                     db.execute('UPDATE outbound_messages SET subject=?,body=?,recipient=? WHERE id=?',(subject,body,l['email'],msg['id']))
                     msg=one(db,'SELECT * FROM outbound_messages WHERE id=?',(msg['id'],))
@@ -910,6 +914,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
                     qnow=one(db,"SELECT * FROM quotes WHERE id=?",(qid,))
                     lnow=one(db,"SELECT * FROM leads WHERE id=?",(qnow["lead_id"],))
                     rr=json.loads(qnow["result_json"])
+                    company_profile_name=company_profile(db)["name"]
                 item=qbo_mapping(path,"service_item_id");tax=qbo_mapping(path,"tax_code_id")
                 if not item or not tax:raise HTTPException(503,"QuickBooks moving-service/tax mapping is incomplete.")
                 amount=rr["low_cents"]
@@ -917,7 +922,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
                     customer=qbo_customer(path,lnow)
                     body={"CustomerRef":{"value":customer},"CurrencyRef":{"value":"CAD"},"GlobalTaxCalculation":"TaxExcluded",
                       "TxnDate":now()[:10],"Line":[{"DetailType":"SalesItemLineDetail","Amount":amount/100,
-                      "Description":f"Crown Movers estimate range CAD {rr['low_cents']/100:.2f} - CAD {rr['high_cents']/100:.2f}. {rr.get('movers',0)} movers / {rr.get('trucks',0)} truck(s).",
+                      "Description":f"{company_profile_name} estimate range CAD {rr['low_cents']/100:.2f} - CAD {rr['high_cents']/100:.2f}. {rr.get('movers',0)} movers / {rr.get('trucks',0)} truck(s).",
                       "SalesItemLineDetail":{"ItemRef":{"value":item},"TaxCodeRef":{"value":tax},"Qty":1,"UnitPrice":amount/100}}],
                       "PrivateNote":"CrownOps "+qid+" client estimate; client delivery controlled by CrownOps."}
                     remote=qbo_call(path,"POST","estimate",body,key)["Estimate"]
@@ -966,19 +971,19 @@ def register_sales_crm_v6(app,path,auth,public_url):
             q=one(db,"SELECT * FROM quotes WHERE id=? AND status='Accepted'",(qid,))
             if not q:raise HTTPException(409,"Only an accepted estimate can receive a deposit reminder.")
             l=one(db,"SELECT * FROM leads WHERE id=?",(q["lead_id"],));qin=json.loads(q["inputs_json"]);amount=float(qin.get("deposit_required",300));fr=str(qin.get("language") or l["language"]).lower().startswith("fr")
-            dep=settings(db,"deposit_policy",{}) or {};interac=""
+            dep=settings(db,"deposit_policy",{}) or {};interac="";c=company_profile(db)
             if dep.get("approved") and dep.get("enabled") and dep.get("recipient_email"):
                 if fr:
-                    interac=f"\n\nVirement Interac : {dep.get('recipient_email')} ({dep.get('recipient_name') or 'Crown Movers'})."
+                    interac=f"\n\nVirement Interac : {dep.get('recipient_email')} ({dep.get('recipient_name') or c['name']})."
                     if dep.get("auto_deposit",True):interac+=" Le depot automatique est active; aucun mot de passe n'est requis."
                     if dep.get("reference_note"):interac+=" "+str(dep.get("reference_note"))
                 else:
-                    interac=f"\n\nInterac e-Transfer: {dep.get('recipient_email')} ({dep.get('recipient_name') or 'Crown Movers'})."
+                    interac=f"\n\nInterac e-Transfer: {dep.get('recipient_email')} ({dep.get('recipient_name') or c['name']})."
                     if dep.get("auto_deposit",True):interac+=" Auto-deposit is enabled; no password is required."
                     if dep.get("reference_note"):interac+=" "+str(dep.get("reference_note"))
-            subject="Rappel amical - dépôt Crown Movers" if fr else "Friendly reminder - Crown Movers deposit"
-            body=(f"Bonjour {l['client_name']},\n\nPetit rappel amical : le dépôt de {amount:.2f} $ CA lié à votre réservation est toujours en attente. Si vous l'avez déjà envoyé, vous pouvez ignorer ce message.{interac}\n\nMerci,\nCrown Movers" if fr else
-              f"Hi {l['client_name']},\n\nA friendly reminder that the CAD {amount:.2f} deposit for your booking is still pending. If you already sent it, please disregard this message.{interac}\n\nThank you,\nCrown Movers")
+            subject="Rappel amical - dépôt "+c["name"] if fr else "Friendly reminder - "+c["name"]+" deposit"
+            body=(f"Bonjour {l['client_name']},\n\nPetit rappel amical : le dépôt de {amount:.2f} $ CA lié à votre réservation est toujours en attente. Si vous l'avez déjà envoyé, vous pouvez ignorer ce message.{interac}\n\nMerci,\n{c['name']}" if fr else
+              f"Hi {l['client_name']},\n\nA friendly reminder that the CAD {amount:.2f} deposit for your booking is still pending. If you already sent it, please disregard this message.{interac}\n\nThank you,\n{c['name']}")
             m=queue_message(db,l["id"],subject,body,"Follow-up",u["id"],"deposit-reminder:"+qid+":"+now()[:10])
         return {"id":m["id"],"status":m["status"]}
 
@@ -1003,8 +1008,8 @@ def register_sales_crm_v6(app,path,auth,public_url):
             if not j or j["status"]!="Completed":raise HTTPException(409,"Complete the service before requesting a public review.")
             l=one(db,"SELECT * FROM leads WHERE id=?",(j["lead_id"],));cfg=settings(db,"automation_policy",{}) or {};url=str(cfg.get("review_url") or "")
             if not url:raise HTTPException(422,"Add the company's public review URL in review settings first.")
-            fr=str(l["language"]).lower().startswith("fr");subject="Merci de nous avoir choisis" if fr else "Thank you for choosing Crown Movers"
-            body=(f"Bonjour {l['client_name']},\n\nMerci d'avoir choisi Crown Movers. Si vous le souhaitez, vous pouvez partager un avis honnête sur votre expérience ici : {url}\n\nVotre avis est entièrement facultatif et aucun rabais ou avantage ne dépend d'un avis public.\n\nMerci,\nCrown Movers" if fr else
-              f"Hi {l['client_name']},\n\nThank you for choosing Crown Movers. If you'd like, you're welcome to share an honest review of your experience here: {url}\n\nLeaving a review is completely optional, and no discount or benefit depends on a public review.\n\nThank you,\nCrown Movers")
+            fr=str(l["language"]).lower().startswith("fr");c=company_profile(db);subject="Merci de nous avoir choisis" if fr else "Thank you for choosing "+c["name"]
+            body=(f"Bonjour {l['client_name']},\n\nMerci d'avoir choisi {c['name']}. Si vous le souhaitez, vous pouvez partager un avis honnête sur votre expérience ici : {url}\n\nVotre avis est entièrement facultatif et aucun rabais ou avantage ne dépend d'un avis public.\n\nMerci,\n{c['name']}" if fr else
+              f"Hi {l['client_name']},\n\nThank you for choosing {c['name']}. If you'd like, you're welcome to share an honest review of your experience here: {url}\n\nLeaving a review is completely optional, and no discount or benefit depends on a public review.\n\nThank you,\n{c['name']}")
             m=queue_message(db,l["id"],subject,body,"Review request",u["id"],"neutral-review:"+jid,jid,j["version"])
         return {"id":m["id"],"status":m["status"]}

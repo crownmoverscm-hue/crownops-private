@@ -56,7 +56,9 @@ def preview(path,iid,user):
         raise HTTPException(409,'QuickBooks invoice identity differs. No email was sent.')
     if _amount(remote.get('TotalAmt'))!=snapshot['calculation']['total_cents'] or _amount(remote.get('Balance'))!=payment['local_balance_cents']:
         raise HTTPException(409,'QuickBooks total or balance changed. Refresh and reconcile first.')
-    expected=providers.qbo_invoice_payload(doc,snapshot['customer'],providers.qbo_mapping(path,'service_item_id'),providers.qbo_mapping(path,'tax_code_id'),providers.qbo_mapping(path,'discount_account_id'))
+    from .company_profile import company_profile
+    with closing(connect(path)) as cdb:company=company_profile(cdb)
+    expected=providers.qbo_invoice_payload(doc,snapshot['customer'],providers.qbo_mapping(path,'service_item_id'),providers.qbo_mapping(path,'tax_code_id'),providers.qbo_mapping(path,'discount_account_id'),company)
     if normalized_lines(remote)!=normalized_lines(expected) or remote.get('DueDate','')!=expected.get('DueDate',''):
         raise HTTPException(409,'QuickBooks line items or due date differ from the issued invoice. Management must review the current invoice revision.')
     remote_hash=digest({k:remote.get(k) for k in ('Id','SyncToken','CustomerRef','CurrencyRef','Line','TotalAmt','Balance','TxnTaxDetail','BillEmail','CustomerMemo','DueDate','EmailStatus')})

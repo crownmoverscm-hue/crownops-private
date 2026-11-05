@@ -97,7 +97,7 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
     @app.post('/api/request')
     def public_request(data:dict,request:Request,background:BackgroundTasks):
         if data.get('website'):return {'ok':True} # honeypot; do not store bot content
-        if data.get('permission_to_contact') is not True:raise HTTPException(422,'Confirm permission for Crown to contact you about this request.')
+        if data.get('permission_to_contact') is not True:raise HTTPException(422,'Confirm permission for us to contact you about this request.')
         l=data.get('lead',{})
         if not isinstance(l,dict) or not l.get('client_name') or not l.get('email') or not l.get('phone'):raise HTTPException(422,'Name, email and phone are required.')
         rid=text(data.get('request_id',''),'Request ID',120)
@@ -110,8 +110,10 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
                 from .client_communications import portal_link
                 lead=one(db,'SELECT * FROM leads WHERE id=?',(r['lead_id'],));fr=lead['language'].lower().startswith('fr')
                 link=portal_link(db,lead,'public-request',public_url,tab='files')
-                body=(f"Bonjour {lead['client_name']},\n\nMerci d’avoir contacté Crown Movers! Nous avons reçu votre demande et notre équipe examinera les détails pour préparer votre devis.\n\nVous pouvez déjà ajouter vos photos et préciser les accès dans votre dossier privé :\n{link}\n\nVotre date souhaitée n’est pas encore réservée. Nous confirmerons les disponibilités et les prochaines étapes avec vous.\n\nUne question? Demandez un rappel dans votre dossier ou appelez le 514-606-4030.\n\nMerci,\nL’équipe Crown Movers" if fr else f"Hi {lead['client_name']},\n\nThank you for contacting Crown Movers! We have received your request. Our team will review your details and prepare your estimate.\n\nYou can already add photos and share access details in your private moving file:\n{link}\n\nYour requested date is not booked yet. We will confirm availability and the next steps with you.\n\nQuestions? Request a callback in your file or call 514-606-4030.\n\nThank you,\nThe Crown Movers team")
-                ack=queue_message(db,lead['id'],'Votre demande Crown Movers est reçue' if fr else 'We have your Crown Movers request',body,'Reply','public-request','request-ack:'+rid)
+                from .company_profile import company_profile,team_signoff
+                c=company_profile(db)
+                body=(f"Bonjour {lead['client_name']},\n\nMerci d’avoir contacté {c['name']}! Nous avons reçu votre demande et notre équipe examinera les détails pour préparer votre devis.\n\nVous pouvez déjà ajouter vos photos et préciser les accès dans votre dossier privé :\n{link}\n\nVotre date souhaitée n’est pas encore réservée. Nous confirmerons les disponibilités et les prochaines étapes avec vous.\n\nUne question? Demandez un rappel dans votre dossier ou appelez le {c['phone']}."+team_signoff(c,True) if fr else f"Hi {lead['client_name']},\n\nThank you for contacting {c['name']}! We have received your request. Our team will review your details and prepare your estimate.\n\nYou can already add photos and share access details in your private moving file:\n{link}\n\nYour requested date is not booked yet. We will confirm availability and the next steps with you.\n\nQuestions? Request a callback in your file or call {c['phone']}."+team_signoff(c,False))
+                ack=queue_message(db,lead['id'],'Votre demande '+c['name']+' est reçue' if fr else 'We have your '+c['name']+' request',body,'Reply','public-request','request-ack:'+rid)
                 if live_enabled():
                     db.execute("UPDATE outbound_messages SET status='Approved',approved_by='public-request-consent' WHERE id=?",(ack['id'],))
                     background.add_task(send_ack,ack['id'])
@@ -280,9 +282,11 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
             r=one(db,'SELECT c.*,p.amount_cents,p.method,p.reference,p.created_at FROM field_collections c JOIN payments p ON p.id=c.payment_id WHERE c.id=?',(cid,))
             if not r:raise HTTPException(404,'Receipt not found.')
             inv,calc=invoice_current(db,r['invoice_id']);invoice_job(db,inv['job_id'],u)
+            from .company_profile import company_profile
+            receipt_company=company_profile(db)['name']
         e=escape
         label='Reconciled receipt' if r['verified_at'] else 'Staff collection acknowledgment - awaiting reconciliation'
-        html='<html><head><meta charset="utf-8"><title>Payment acknowledgment</title></head><body style="font:16px Arial;max-width:700px;margin:40px auto"><h1>Crown Movers</h1><h2>'+label+'</h2><p>Invoice '+e(inv['number'])+'</p><p>Amount received: CA$'+f'{r["amount_cents"]/100:,.2f}'+'</p><p>Method: '+e(r['method'])+'</p><p>Reference: '+e(r['reference'])+'</p><p>'+e(r['created_at'])+'</p><p>This acknowledgment records the collection. It is not proof of bank settlement while marked awaiting reconciliation.</p></body></html>'
+        html='<html><head><meta charset="utf-8"><title>Payment acknowledgment</title></head><body style="font:16px Arial;max-width:700px;margin:40px auto"><h1>'+e(receipt_company)+'</h1><h2>'+label+'</h2><p>Invoice '+e(inv['number'])+'</p><p>Amount received: CA$'+f'{r["amount_cents"]/100:,.2f}'+'</p><p>Method: '+e(r['method'])+'</p><p>Reference: '+e(r['reference'])+'</p><p>'+e(r['created_at'])+'</p><p>This acknowledgment records the collection. It is not proof of bank settlement while marked awaiting reconciliation.</p></body></html>'
         return HTMLResponse(html,headers={'Content-Disposition':f'attachment; filename="{cid}.html"'})
 
     @app.post('/api/invoices/{iid}/prepare-email')
@@ -294,8 +298,10 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
             from .client_communications import portal_link,invoice_body
             existing=one(db,'SELECT * FROM outbound_messages WHERE event_key=?',('invoice-delivery:'+iid+':'+str(inv['revision']),))
             if existing:return {'id':existing['id'],'sent':existing['status']=='Sent','message':'Invoice delivery already prepared.'}
-            body=invoice_body(l,inv,calc,portal_link(db,l,u['id'],public_url,tab='invoices'))
-            m=queue_message(db,l['id'],'Votre facture Crown Movers' if is_fr else 'Your Crown Movers invoice',body,'Invoice',u['id'],'invoice-delivery:'+iid+':'+str(inv['revision']),jid=j['id'])
+            from .company_profile import company_profile
+            company=company_profile(db)
+            body=invoice_body(l,inv,calc,portal_link(db,l,u['id'],public_url,tab='invoices'),company=company)
+            m=queue_message(db,l['id'],('Votre facture '+company['name']) if is_fr else ('Your '+company['name']+' invoice'),body,'Invoice',u['id'],'invoice-delivery:'+iid+':'+str(inv['revision']),jid=j['id'])
         return {'id':m['id'],'sent':False,'message':'Invoice email draft is ready for sales/manager review.'}
 
     @app.post('/api/employees')

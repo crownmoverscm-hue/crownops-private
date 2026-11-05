@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 from .store import insert, now, one, rows, dumps
 from .platform_common import stamp_hash
+from .company_profile import profile_or_legacy, time_note, team_signoff, help_line
 
 CONTACT_FIELDS=frozenset({'client_name','phone'})
 
@@ -76,14 +77,15 @@ def booking_confirmation_current(db,message):
                 not pending_scope_changes(db,lead['id']) and message['event_key']==booking_confirmation_key(job,quote))
 
 
-def preparation_body(lead,job,link,arrival_window=None):
+def preparation_body(lead,job,link,arrival_window=None,company=None):
     """A useful reminder includes the confirmed service and a direct next step."""
+    c=profile_or_legacy(company)
     fr=str(lead.get('language','')).lower().startswith('fr')
-    start=datetime.fromisoformat(job['start_at'].replace('Z','+00:00')).astimezone(ZoneInfo('America/Toronto'))
+    start=datetime.fromisoformat(job['start_at'].replace('Z','+00:00')).astimezone(ZoneInfo(c['timezone']))
     window=arrival_window or start.strftime('%I:%M %p').lstrip('0')
     if fr:
-        return f"Bonjour {lead['client_name']},\n\nVotre service Crown Movers approche! Date confirmée : {start.date().isoformat()}. Arrivée prévue : {window} (heure de Montréal).\n\nPour aider votre équipe à bien se préparer, vérifiez ces renseignements :\n• Inventaire final et articles lourds ou fragiles.\n• Stationnement, accès au chargement et réservation d’ascenseur.\n• Photos ou lien vers votre dossier de photos et vidéos.\n\nVérifier mon dossier privé :\n{link}\n\nLes renseignements déjà fournis sont remplis. Ajoutez seulement ce qui manque ou a changé, puis transmettez vos renseignements pour révision. Une demande de modification de date ou de service reste à confirmer par Crown.\n\nBesoin d’aide? Demandez un rappel dans votre dossier ou appelez le 514-606-4030.\n\nMerci,\nL’équipe Crown Movers"
-    return f"Hi {lead['client_name']},\n\nYour Crown Movers service is coming up! Confirmed date: {start.date().isoformat()}. Expected arrival: {window} (Montréal time).\n\nTo help your crew prepare, please check:\n• Final inventory and any heavy or fragile items.\n• Parking, loading access and any elevator reservation.\n• Photos or a link to your photo and video folder.\n\nCheck my private moving file:\n{link}\n\nThe details you already shared are filled in. Add only what is missing or changed, then submit your details for review. Requested date or service changes still need confirmation from Crown.\n\nNeed a hand? Request a callback in your file or call 514-606-4030.\n\nThank you,\nThe Crown Movers team"
+        return f"Bonjour {lead['client_name']},\n\nVotre service {c['name']} approche! Date confirmée : {start.date().isoformat()}. Arrivée prévue : {window}{time_note(c,True)}.\n\nPour aider votre équipe à bien se préparer, vérifiez ces renseignements :\n• Inventaire final et articles lourds ou fragiles.\n• Stationnement, accès au chargement et réservation d’ascenseur.\n• Photos ou lien vers votre dossier de photos et vidéos.\n\nVérifier mon dossier privé :\n{link}\n\nLes renseignements déjà fournis sont remplis. Ajoutez seulement ce qui manque ou a changé, puis transmettez vos renseignements pour révision. Une demande de modification de date ou de service reste à confirmer par {c['short_name']}."+help_line(c,True)+team_signoff(c,True)
+    return f"Hi {lead['client_name']},\n\nYour {c['name']} service is coming up! Confirmed date: {start.date().isoformat()}. Expected arrival: {window}{time_note(c,False)}.\n\nTo help your crew prepare, please check:\n• Final inventory and any heavy or fragile items.\n• Parking, loading access and any elevator reservation.\n• Photos or a link to your photo and video folder.\n\nCheck my private moving file:\n{link}\n\nThe details you already shared are filled in. Add only what is missing or changed, then submit your details for review. Requested date or service changes still need confirmation from {c['short_name']}."+help_line(c,False)+team_signoff(c,False)
 
 
 def public_base():
@@ -136,23 +138,25 @@ def prepare_deposit_request(db, qid, actor):
     old=one(db,'SELECT * FROM outbound_messages WHERE event_key=?',(key,))
     if old:return old
     policy=settings_for_deposit(db)
+    from .company_profile import company_profile
+    c=company_profile(db)
     fr=str(json.loads(q['inputs_json']).get('language') or lead.get('language','')).lower().startswith('fr')
     details=booking_details(job,q);amount=state['due_cents']/100
     link=portal_link(db,lead,actor,tab='details')
     if fr:
-        subject='Votre soumission est acceptée — prochaine étape | Crown Movers'
-        body=f"Bonjour {lead['client_name']},\n\nMerci d’avoir accepté notre soumission! Date demandée : {details['date']}. Arrivée prévue : {details['arrival_window']} (heure de Montréal). Votre service reste provisoire jusqu’à la vérification du dépôt et des disponibilités par Crown.\n\nDépôt restant à vérifier : {amount:.2f} $ CA. Si vous avez déjà payé, ne payez pas une deuxième fois; contactez-nous pour faire vérifier le paiement."
+        subject='Votre soumission est acceptée — prochaine étape | '+c['name']
+        body=f"Bonjour {lead['client_name']},\n\nMerci d’avoir accepté notre soumission! Date demandée : {details['date']}. Arrivée prévue : {details['arrival_window']}{time_note(c,True)}. Votre service reste provisoire jusqu’à la vérification du dépôt et des disponibilités par {c['short_name']}.\n\nDépôt restant à vérifier : {amount:.2f} $ CA. Si vous avez déjà payé, ne payez pas une deuxième fois; contactez-nous pour faire vérifier le paiement."
     else:
-        subject='Your estimate is accepted — next step | Crown Movers'
-        body=f"Hi {lead['client_name']},\n\nThank you for accepting our estimate! Requested date: {details['date']}. Expected arrival: {details['arrival_window']} (Montréal time). Your service remains tentative until Crown verifies the deposit and availability.\n\nOutstanding deposit to verify: CAD {amount:.2f}. If you have already paid, please do not pay again; contact us so we can verify it."
+        subject='Your estimate is accepted — next step | '+c['name']
+        body=f"Hi {lead['client_name']},\n\nThank you for accepting our estimate! Requested date: {details['date']}. Expected arrival: {details['arrival_window']}{time_note(c,False)}. Your service remains tentative until {c['short_name']} verifies the deposit and availability.\n\nOutstanding deposit to verify: CAD {amount:.2f}. If you have already paid, please do not pay again; contact us so we can verify it."
     if policy.get('approved') and policy.get('enabled') and policy.get('recipient_email'):
-        body+=('\n\nVirement Interac : ' if fr else '\n\nInterac e-Transfer: ')+str(policy['recipient_email'])+' ('+str(policy.get('recipient_name') or 'Crown Movers')+').'
+        body+=('\n\nVirement Interac : ' if fr else '\n\nInterac e-Transfer: ')+str(policy['recipient_email'])+' ('+str(policy.get('recipient_name') or c['name'])+').'
         if policy.get('auto_deposit',True):body+=(' Aucun mot de passe requis : dépôt automatique.' if fr else ' Auto-deposit is enabled; no password is required.')
         if policy.get('reference_note'):body+=' '+str(policy['reference_note'])
     else:
-        body+=('\n\nContactez Crown pour obtenir les instructions de paiement approuvées.' if fr else '\n\nPlease contact Crown for the approved payment instructions.')
+        body+=('\n\nContactez '+c['short_name']+' pour obtenir les instructions de paiement approuvées.' if fr else '\n\nPlease contact '+c['short_name']+' for the approved payment instructions.')
     body+=('\n\nVérifier mon dossier et ajouter mes photos :\n' if fr else '\n\nReview my moving details and add photos:\n')+link
-    body+=('\n\nBesoin d’aide? Demandez un rappel dans votre dossier ou appelez le 514-606-4030.\n\nMerci,\nL’équipe Crown Movers' if fr else '\n\nNeed a hand? Request a callback in your file or call 514-606-4030.\n\nThank you,\nThe Crown Movers team')
+    body+=help_line(c,fr)+team_signoff(c,fr)
     return queue_message(db,lead['id'],subject,body,'Follow-up',actor,key,job['id'],job['version'])
 
 
@@ -172,7 +176,8 @@ def portal_link(db, lead, actor, base=None, tab='details'):
     return (base or public_base()).rstrip('/')+'/portal?tab='+tab+'#access='+raw
 
 
-def invoice_body(lead, inv, calc, link, payment=None):
+def invoice_body(lead, inv, calc, link, payment=None, company=None):
+    c=profile_or_legacy(company)
     fr=str(lead.get('language','')).lower().startswith('fr')
     if fr:
         body=f"Bonjour {lead['client_name']},\n\nMerci de nous avoir confié votre service. Votre facture {inv['number']} est prête.\n\nTotal : {calc['total_cents']/100:.2f} $ CA\nPaiements vérifiés : {calc['deposit_cents']/100:.2f} $ CA\nSolde confirmé : {calc['balance_cents']/100:.2f} $ CA\n\nConsulter ou télécharger votre facture :\n{link}\n\nLes paiements récemment recueillis peuvent être en cours de vérification. Si vous avez déjà payé, ne payez pas une deuxième fois."
@@ -181,11 +186,13 @@ def invoice_body(lead, inv, calc, link, payment=None):
     if payment:
         body+=('\n\nPaiement sécurisé QuickBooks :\n' if fr else '\n\nSecure QuickBooks payment:\n')+payment['url']
         if payment['environment']=='sandbox':body+='\nTEST ONLY / TEST SEULEMENT — QuickBooks sandbox.'
-    return body+('\n\nUne question au sujet de cette facture? Écrivez-nous à info@crownmovers.ca ou appelez le 514-606-4030.\n\nMerci,\nL’équipe Crown Movers' if fr else '\n\nQuestions about this invoice? Email info@crownmovers.ca or call 514-606-4030.\n\nThank you,\nThe Crown Movers team')
+    question=(f"\n\nUne question au sujet de cette facture? Écrivez-nous à {c['email']} ou appelez le {c['phone']}." if fr else f"\n\nQuestions about this invoice? Email {c['email']} or call {c['phone']}.")
+    return body+question+team_signoff(c,fr)
 
 
-def email_html(subject, body):
+def email_html(subject, body, company=None):
     """Render a multipart alternative without trusting any client-supplied HTML."""
+    c=profile_or_legacy(company);name=escape(c['name'])
     blocks=[]
     fr=body.lstrip().startswith('Bonjour')
     for paragraph in body.split('\n\n'):
@@ -204,5 +211,5 @@ def email_html(subject, body):
             else:parts.append(escape(line))
         blocks.append('<p style="margin:0 0 20px;line-height:1.65">'+'<br>'.join(parts)+'</p>')
     invoice_access='/invoice-access' in body
-    footer=('Gardez ce courriel privé. Si le lien expire, communiquez avec Crown Movers pour recevoir un nouvel accès à la facture.' if fr else 'Keep this email private. If your link expires, contact Crown Movers for a fresh invoice link.') if invoice_access else ('Gardez ce courriel privé. Pour un nouveau lien, ouvrez votre dossier et demandez un lien par courriel.' if fr else 'Keep this email private. If your link expires, open your moving file and request a fresh email link.')
-    return '<!doctype html><html><body style="margin:0;background:#f6f5f2;color:#202020;font:18px Arial,sans-serif"><div style="max-width:600px;margin:auto;padding:24px 16px"><div style="padding:20px 24px;background:#161616;color:white;border-radius:12px 12px 0 0;font-size:22px;font-weight:bold">Crown Movers</div><main style="padding:28px 24px;background:white;border:1px solid #deddd9;border-radius:0 0 12px 12px"><h1 style="font-size:23px;margin:0 0 24px">'+escape(subject)+'</h1>'+''.join(blocks)+'</main><p style="font-size:13px;line-height:1.6;color:#626262;padding:0 12px">'+footer+'<br><a href="tel:+15146064030">514-606-4030</a> · Crown Movers</p></div></body></html>'
+    footer=('Gardez ce courriel privé. Si le lien expire, communiquez avec '+name+' pour recevoir un nouvel accès à la facture.' if fr else 'Keep this email private. If your link expires, contact '+name+' for a fresh invoice link.') if invoice_access else ('Gardez ce courriel privé. Pour un nouveau lien, ouvrez votre dossier et demandez un lien par courriel.' if fr else 'Keep this email private. If your link expires, open your moving file and request a fresh email link.')
+    return '<!doctype html><html><body style="margin:0;background:#f6f5f2;color:#202020;font:18px Arial,sans-serif"><div style="max-width:600px;margin:auto;padding:24px 16px"><div style="padding:20px 24px;background:#161616;color:white;border-radius:12px 12px 0 0;font-size:22px;font-weight:bold">'+name+'</div><main style="padding:28px 24px;background:white;border:1px solid #deddd9;border-radius:0 0 12px 12px"><h1 style="font-size:23px;margin:0 0 24px">'+escape(subject)+'</h1>'+''.join(blocks)+'</main><p style="font-size:13px;line-height:1.6;color:#626262;padding:0 12px">'+footer+'<br><a href="tel:'+escape(c['phone_tel'],quote=True)+'">'+escape(c['phone'])+'</a> · '+name+'</p></div></body></html>'

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, HTTPException
 from .store import connect, transaction, one, rows, insert, uid, now, dumps, audit
 from .platform_common import require_role, staff_read_project, queue_message, text
+from .company_profile import company_profile
 
 OFFICE={'owner','manager','sales','dispatch'}
 MANAGERS={'owner','manager'}
@@ -101,9 +102,10 @@ def timeline(db,lid,public=False):
                            visibility=visibility,actor=actor,direction=direction,status=status,lead_id=lid,service_date=lead['move_date']))
     add('inquiry:'+lid,lead['created_at'],'inquiry','Service request received',lead['move_date'] or 'Date to confirm')
     people={r['id']:r['name'] for r in rows(db,'SELECT id,name FROM users')}
+    company_name=company_profile(db)['name']
     for r in rows(db,'SELECT * FROM conversation_entries WHERE lead_id=?',(lid,)):
         add('entry:'+r['id'],r['created_at'],r['kind'],r['subject'],r['body'],r['visibility'],
-            'You' if public and r['direction']=='client' else 'Crown Movers' if public else people.get(r['actor'],r['actor']),r['direction'])
+            'You' if public and r['direction']=='client' else company_name if public else people.get(r['actor'],r['actor']),r['direction'])
     if not public:
         form_messages={r['message_id'] for r in rows(db,"SELECT json_extract(payload_json,'$.message_id') message_id FROM integration_events WHERE event_type='gmail_quote' AND json_valid(payload_json)")}
         for r in rows(db,'SELECT * FROM messages WHERE lead_id=?',(lid,)):
@@ -113,7 +115,7 @@ def timeline(db,lid,public=False):
             d=json.loads(r['payload_json']);add('call:'+r['id'],r['created_at'],'call',d.get('disposition') or 'Phone call',d.get('note') or d.get('summary') or d.get('phone') or '', 'staff')
     for r in rows(db,"SELECT * FROM outbound_messages WHERE lead_id=? AND status='Sent'",(lid,)):
         if public and (r['recipient'].strip().lower()!=lead['email'].strip().lower() or r['event_key'].startswith('client-access:')):continue
-        add('mail:'+r['id'],r['sent_at'] or r['created_at'],'email',r['subject'],r['body'],actor='Crown Movers' if public else people.get(r['approved_by'],'Crown Movers'),direction='staff',status='Sent')
+        add('mail:'+r['id'],r['sent_at'] or r['created_at'],'email',r['subject'],r['body'],actor=company_name if public else people.get(r['approved_by'],company_name),direction='staff',status='Sent')
     for r in rows(db,'SELECT * FROM client_changes WHERE lead_id=?',(lid,)):
         fields=json.loads(r['payload_json']);body='; '.join(str(k).replace('_',' ')+': '+str(v) for k,v in fields.items())
         add('change:'+r['id'],r['created_at'],'details','Moving details submitted',body,status=r['status'])
@@ -312,7 +314,7 @@ def register_conversations(app,path,auth):
             c=conversation(db,lid);can_handle(c,u)
             old=one(db,'SELECT id FROM conversation_entries WHERE lead_id=? AND request_key=?',(lid,key))
             if not old:check_token(c,data)
-            r=entry(db,lid,kind,body,{'note':'Internal note','call':'Phone conversation with Crown Movers','portal':'Message from Crown Movers'}[kind],u['id'],key,visible)
+            r=entry(db,lid,kind,body,{'note':'Internal note','call':'Phone conversation with '+company_profile(db)['name'],'portal':'Message from '+company_profile(db)['name']}[kind],u['id'],key,visible)
         return {'id':r['id'],'visibility':visible,'email_sent':False}
 
     @app.post('/api/inbox/{lid}/email')

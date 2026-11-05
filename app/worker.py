@@ -38,7 +38,8 @@ def tick(path):
                 lead=one(db,'SELECT * FROM leads WHERE id=?',(j['lead_id'],))
                 quote=one(db,'SELECT * FROM quotes WHERE id=?',(j['quote_id'],)) if j.get('quote_id') else None
                 window=booking_details(j,quote)['arrival_window'] if quote else None
-                body=preparation_body(lead,j,portal_link(db,lead,'automation',tab='details'),window)
+                from .company_profile import company_profile
+                body=preparation_body(lead,j,portal_link(db,lead,'automation',tab='details'),window,company_profile(db))
                 queue_message(db,j['lead_id'],'Move preparation | Preparation du demenagement',body,'Preparation','automation',key,j['id'],j['version']);made+=1
         if cfg.get('invoice_followup'):
             invoices=rows(db,"SELECT i.*,j.lead_id,l.client_name,l.email,l.language,l.notifications_suppressed,r.issued_at FROM job_invoices i JOIN jobs j ON j.id=i.job_id JOIN leads l ON l.id=j.lead_id JOIN invoice_revisions r ON r.invoice_id=i.id AND r.revision=i.revision WHERE i.status='Issued'")
@@ -51,8 +52,10 @@ def tick(path):
                 if not check or not check['can_collect'] or check['version']!=inv['version'] or check['revision']!=inv['revision'] or check['local_balance_cents']!=balance:continue
                 key='balance:'+inv['id']+':'+str(inv['revision'])+':'+str(balance)
                 if one(db,'SELECT id FROM outbound_messages WHERE event_key=?',(key,)):continue
-                body=f"Hello {inv['client_name']},\n\nOur records show an outstanding balance of CA${balance/100:.2f} for invoice {inv['number']}. Please let us know about any payment already sent or any questions so we can reconcile the file.\n\nThank you,\nCrown Movers"
-                if inv['language'].lower().startswith('fr'):body=f"Bonjour {inv['client_name']},\n\nSelon notre dossier, le solde de la facture {inv['number']} est de {balance/100:.2f} $ CA. Merci de nous informer de tout paiement deja transmis ou de toute question afin de verifier le dossier.\n\nMerci,\nCrown Movers"
+                from .company_profile import company_profile
+                company=company_profile(db)
+                body=f"Hello {inv['client_name']},\n\nOur records show an outstanding balance of CA${balance/100:.2f} for invoice {inv['number']}. Please let us know about any payment already sent or any questions so we can reconcile the file.\n\nThank you,\n{company['name']}"
+                if inv['language'].lower().startswith('fr'):body=f"Bonjour {inv['client_name']},\n\nSelon notre dossier, le solde de la facture {inv['number']} est de {balance/100:.2f} $ CA. Merci de nous informer de tout paiement deja transmis ou de toute question afin de verifier le dossier.\n\nMerci,\n{company['name']}"
                 queue_message(db,inv['lead_id'],'Invoice follow-up | Suivi de facture',body,'Collection','automation',key,inv['job_id']);made+=1
         if cfg.get('fleet_tasks'):
             for v in rows(db,'SELECT p.*,v.name FROM fleet_profiles p JOIN vehicles v ON v.id=p.vehicle_id'):

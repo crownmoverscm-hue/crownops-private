@@ -84,15 +84,17 @@ def register_sales_journey(app,path,auth,public_url):
                 return {'id':active['id'],'mail_id':active['mail_id'],'status':active['status'],'duplicate':True,'sent':False}
             from .client_communications import portal_link
             rid=uid('DETAIL');link=portal_link(db,l,u['id'],public_url,tab='details');fr=str(l['language']).lower().startswith('fr')
+            from .company_profile import company_profile,help_line,team_signoff
+            c=company_profile(db)
             checklist='\n'.join('• '+DETAIL_LABELS[k][int(fr)] for k in fields)
             if fr:
-                subject='Préparons votre service | Crown Movers'
+                subject='Préparons votre service | '+c['name']
                 body=f"Bonjour {l['client_name']},\n\nPour bien préparer votre devis ou votre service, pourriez-vous vérifier votre dossier privé? Les renseignements que nous avons sont déjà remplis. Ajoutez seulement ce qui manque ou a changé.\n\nÀ vérifier :\n{checklist}\n\n{link}\n\nVotre progression est enregistrée dans votre dossier privé. Cliquez sur « Transmettre mes renseignements » lorsque vous êtes prêt. Vous pouvez ajouter vos photos ou coller un lien Google Drive dans Fichiers."
             else:
-                subject='Let’s prepare your service | Crown Movers'
+                subject='Let’s prepare your service | '+c['name']
                 body=f"Hi {l['client_name']},\n\nTo help us prepare your estimate or service, please check your private moving file. The details we already have are filled in. Just add anything missing or changed.\n\nPlease check:\n{checklist}\n\n{link}\n\nYour progress is saved in your private file. Click ‘Submit my details’ when you’re ready. Add photos or paste a Google Drive link on the Files tab."
             if note:body+='\n\n'+note
-            body+=('\n\nUne date souhaitée reste à confirmer. Besoin d’aide? Demandez un rappel dans votre dossier ou appelez le 514-606-4030.\n\nMerci,\nL’équipe Crown Movers' if fr else '\n\nA requested date still needs confirmation. Need a hand? Request a callback in your file or call 514-606-4030.\n\nThank you,\nThe Crown Movers team')
+            body+=('\n\nUne date souhaitée reste à confirmer. Besoin d’aide? Demandez un rappel dans votre dossier ou appelez le '+c['phone']+'.' if fr else '\n\nA requested date still needs confirmation. Need a hand? Request a callback in your file or call '+c['phone']+'.')+team_signoff(c,fr)
             m=queue_message(db,lid,subject,body,'Preparation',u['id'],'details-request:'+rid)
             insert(db,'detail_requests',dict(id=rid,lead_id=lid,request_key=key,request_json=fingerprint,fields_json=dumps(fields),note=note,mail_id=m['id'],created_by=u['id'],created_at=now()))
             audit(db,u['id'],'Client information request prepared','detail_requests',rid,{'fields':fields})

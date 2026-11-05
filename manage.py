@@ -27,7 +27,14 @@ s=sub.add_parser('verify-backup',help='Verify checksums and restore privately to
 s=sub.add_parser('reset-mfa',help='Emergency local account recovery after verifying identity');s.add_argument('--email',required=True);s.add_argument('--reason',required=True)
 s=sub.add_parser('worker',help='Generate approved-rule tasks and unsent drafts; no automatic external writes');s.add_argument('--once',action='store_true');s.add_argument('--interval',type=int,default=60)
 s=sub.add_parser('doctor',help='Show configuration switches without exposing secrets')
+s=sub.add_parser('company-profile',help='Set the company identity used in client emails and documents (new installations must run this)')
+s.add_argument('--name',required=True);s.add_argument('--phone',required=True);s.add_argument('--email',required=True);s.add_argument('--timezone',required=True)
+s.add_argument('--short-name',default='');s.add_argument('--time-label',default='');s.add_argument('--time-label-fr',default='')
 a=p.parse_args();path=Path(a.db).expanduser().resolve()
+def _company_configured(db_path):
+    if not db_path.exists():return False
+    from app.company_profile import company_profile
+    with closing(connect(db_path)) as db:return company_profile(db)['configured']
 try:
     if a.command=='verify-backup':
         from app.backups import verify_backup
@@ -44,6 +51,18 @@ try:
         if password!=getpass.getpass('Confirm password: '):raise ValueError('Passwords do not match.')
         create_user(path,a.email,a.name,password);seed_pricing(path)
         print('Owner created. Sign in and review pricing and operating rules. No messages or bookings were sent.')
+        with closing(connect(path)) as db:
+            from app.company_profile import company_profile
+            if not company_profile(db)['configured']:print('Next: set your company identity with `manage.py company-profile` before sending any client email.')
+    elif a.command=='company-profile':
+        from fastapi import HTTPException
+        from app.company_profile import company_profile,store_profile
+        data={'name':a.name,'short_name':a.short_name,'phone':a.phone,'email':a.email,'timezone':a.timezone,'local_time_label':a.time_label,'local_time_label_fr':a.time_label_fr}
+        try:
+            with transaction(path) as db:
+                data['version']=company_profile(db)['version'];saved=store_profile(db,data,'owner-cli')
+        except HTTPException as ex:raise ValueError(ex.detail)
+        print(json.dumps({k:saved[k] for k in ('name','short_name','phone','email','timezone','version','configured')},indent=2))
     elif a.command=='serve':
         import uvicorn
         from app.main import create_app
@@ -74,7 +93,7 @@ try:
             if a.once:break
             time.sleep(a.interval)
     elif a.command=='doctor':
-        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','quickbooks_environment':os.getenv('QBO_ENV','sandbox'),'quickbooks_sandbox_writes':os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES')=='1','quickbooks_production_writes':os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
+        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','quickbooks_environment':os.getenv('QBO_ENV','sandbox'),'quickbooks_sandbox_writes':os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES')=='1','quickbooks_production_writes':os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','company_profile_configured':_company_configured(path),'notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
 except (ValueError,sqlite3.Error,OSError,zipfile.BadZipFile) as ex:
     print('Error: '+str(ex),file=sys.stderr);sys.exit(1)
 except KeyboardInterrupt:print('\nStopped.')

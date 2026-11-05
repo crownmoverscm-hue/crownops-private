@@ -166,11 +166,13 @@ def register_extensions(app,path,auth,public_url):
             if payment and (payment['version']!=inv['version'] or payment['revision']!=inv['revision'] or payment['amount_cents']!=calc['balance_cents']):
                 raise HTTPException(409,'Invoice changed after checking its payment link. Reload before sending.')
             is_fr=l['language'].lower().startswith('fr')
-            subject='Votre facture Crown Movers' if is_fr else 'Your Crown Movers invoice'
+            from .company_profile import company_profile
+            company=company_profile(db)
+            subject=('Votre facture ' if is_fr else 'Your ')+company['name']+('' if is_fr else ' invoice')
             from .client_communications import invoice_body
             from .invoice_access import invoice_access_link
             link=invoice_access_link(db,inv,recipient,u['id'],public_url)
-            body=invoice_body(l,inv,calc,link,payment)
+            body=invoice_body(l,inv,calc,link,payment,company)
             m=existing or queue_message(db,l['id'],subject,body,'Invoice',u['id'],'invoice-delivery:'+iid+':'+str(inv['revision']),jid=j['id'])
             old=one(db,'SELECT * FROM outbound_messages WHERE id=?',(m['id'],))
             if old['status']=='Sent':return {'sent':True,'duplicate':True}
