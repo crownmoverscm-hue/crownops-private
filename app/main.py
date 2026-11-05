@@ -152,11 +152,25 @@ def quote_document(q, lead):
     return subject,body
 
 
-def create_app(database_path=None):
+def create_app(database_path=None, *, core_pilot=False):
+    if not core_pilot and os.environ.get("CROWNOPS_ENV") == "pilot":
+        raise RuntimeError("Core pilot startup requires the dedicated app.core_pilot factory.")
     path=Path(database_path or os.environ.get('CROWNOPS_DB',str(ROOT/'instance'/'crownops.sqlite3')))
-    from .production import validate_runtime_storage
-    validate_runtime_storage(path)
-    initialize(path)
+    if core_pilot:
+        from .core_pilot import validate_pilot_config
+        path=validate_pilot_config(path)
+    from .core_v1 import enabled as core_v1_enabled
+    core_v1_profile=core_v1_enabled()
+    if core_pilot and not core_v1_profile:
+        raise RuntimeError('Core pilot startup refused: locked profile is required.')
+    if core_v1_profile:
+        if not core_pilot:
+            from .store import initialize_core_v1
+            initialize_core_v1(path)
+    else:
+        from .production import validate_runtime_storage
+        validate_runtime_storage(path)
+        initialize(path)
     import asyncio
     from contextlib import asynccontextmanager,suppress
     @asynccontextmanager
@@ -190,7 +204,7 @@ def create_app(database_path=None):
                     import logging
                     logging.getLogger('crownops').error('Estimate status check could not finish. No automatic email was attempted.')
                 await asyncio.sleep(120)
-        estimate_task=asyncio.create_task(estimate_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
+        estimate_task=asyncio.create_task(estimate_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
         async def receipt_worker():
             from .invoice_payments import poll_quickbooks_receipts
             while True:
@@ -199,10 +213,10 @@ def create_app(database_path=None):
                     import logging
                     logging.getLogger('crownops').error('Receipt synchronization could not finish. No payment or accounting write was attempted.')
                 await asyncio.sleep(300)
-        receipt_task=asyncio.create_task(receipt_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
-        connection_task=asyncio.create_task(connection_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
-        intake_task=asyncio.create_task(inquiry_worker()) if os.getenv('CROWNOPS_ENV')=='production' else None
-        task=asyncio.create_task(review_worker()) if os.getenv('CROWNOPS_RUN_WORKER')=='1' else None
+        receipt_task=asyncio.create_task(receipt_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
+        connection_task=asyncio.create_task(connection_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
+        intake_task=asyncio.create_task(inquiry_worker()) if not core_v1_profile and os.getenv('CROWNOPS_ENV')=='production' else None
+        task=asyncio.create_task(review_worker()) if not core_v1_profile and os.getenv('CROWNOPS_RUN_WORKER')=='1' else None
         try:yield
         finally:
             if receipt_task:
@@ -232,6 +246,19 @@ def create_app(database_path=None):
 
     @app.middleware('http')
     async def safety(request,call_next):
+        # Core v1 is deny-by-default: match the registered route template and allow
+        # only the dedicated manual CRM API, auth endpoints and isolated shell.
+        if core_v1_profile:
+            from starlette.routing import Match
+            route_key=None
+            for route in app.router.routes:
+                match,_child=route.matches(request.scope)
+                if match is Match.FULL and request.method in (getattr(route,'methods',None) or set()):
+                    route_key=request.method+' '+getattr(route,'path','')
+                    break
+            from .core_v1 import ALLOWED_ROUTE_KEYS
+            if route_key not in ALLOWED_ROUTE_KEYS:
+                return JSONResponse({'detail':'This operation is disabled in the locked Core v1 profile.'},403)
         # API mutations must originate from this app. Non-browser signed webhooks
         # are authenticated independently and cannot use cookie access.
         if request.method not in ('GET','HEAD','OPTIONS') and request.url.path.startswith('/api/'):
@@ -1436,13 +1463,29 @@ def create_app(database_path=None):
         require(u,{'owner','manager'});return app.openapi()
 
     @app.get('/')
-    def index():return HTMLResponse(app.state.ui_index)
+    def index():
+        if core_v1_profile:
+            return FileResponse(ROOT/'app'/'static'/'core_v1.html',media_type='text/html',headers={'Cache-Control':'no-cache'})
+        return HTMLResponse(app.state.ui_index)
 
     @app.get('/manifest.webmanifest')
     def manifest():return FileResponse(ROOT/'app'/'static'/'manifest.webmanifest',media_type='application/manifest+json',headers={'Cache-Control':'no-cache'})
 
     @app.get('/sw.js')
     def sw():return FileResponse(ROOT/'app'/'static'/'sw.js',media_type='application/javascript',headers={'Service-Worker-Allowed':'/','Cache-Control':'no-cache'})
+
+    if core_v1_profile:
+        from .core_v1 import create_app_routes, install_transport_guards
+        from .store import protect_core_v1_path
+        create_app_routes(app,path,auth,ROOT,initialize_schema=not core_pilot)
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+        host=urlparse(public_url).hostname or 'localhost'
+        app.add_middleware(TrustedHostMiddleware,allowed_hosts=[host,'127.0.0.1','localhost','healthcheck.railway.app']+(['testserver','crownops.test'] if os.getenv('CROWNOPS_ENV','test')!='production' else []))
+        app.state.core_v1_profile=True
+        app.state.core_v1_workers_disabled=True
+        protect_core_v1_path(path)
+        install_transport_guards()
+        return app
 
     from .invoices import register_invoices
     register_invoices(app,path,auth,visible_job,require)

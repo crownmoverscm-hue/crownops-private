@@ -31,9 +31,11 @@ def totp(secret,step):
 def verify_user_mfa(path,user_id,code):
     with transaction(path) as db:
         f=one(db,'SELECT * FROM auth_factors WHERE user_id=? AND enabled=1',(user_id,))
-        if not f:return True
+        if not f:return os.getenv('CROWNOPS_REQUIRE_MFA','0')!='1'
         if not isinstance(code,str) or not code.isdigit() or len(code)!=6:return False
-        secret=decrypt(f['secret_ciphertext'])['secret'];step=int(time.time()//30)
+        try:secret=decrypt(f['secret_ciphertext'])['secret']
+        except Exception:return False
+        step=int(time.time()//30)
         for n in (step-1,step,step+1):
             if n>f['last_step'] and hmac.compare_digest(totp(secret,n),code):
                 db.execute('UPDATE auth_factors SET last_step=? WHERE user_id=?',(n,user_id));return True

@@ -32,6 +32,8 @@ No emails will be sent. Your output is a staff-reviewed suggestion only.'''
 
 
 def invoke(text, language, lead_context, approved_quote=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("invoke")
     key=os.environ.get('OPENAI_API_KEY','').strip()
     model=os.environ.get('OPENAI_MODEL','').strip()
     if not key or not model:

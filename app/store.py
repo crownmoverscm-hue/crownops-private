@@ -8,6 +8,29 @@ import sqlite3
 import uuid
 import re
 
+_CORE_V1_PATHS = set()
+_CORE_V1_TABLES = {'sessions','login_attempts','client_accounts','client_account_leads','leads','manual_source_submissions','core_v1_client_requests','manual_action_requests','messages','tasks','audit','sqlite_sequence'}
+
+
+def protect_core_v1_path(path):
+    _CORE_V1_PATHS.add(str(Path(path).resolve()))
+
+
+def _core_v1_authorizer(action, arg1, arg2, db_name, trigger_name):
+    write_actions = {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE}
+    if action in write_actions:
+        table = str(arg1 or '').lower()
+        if table == 'auth_factors':
+            return sqlite3.SQLITE_OK if action == sqlite3.SQLITE_UPDATE and arg2 == 'last_step' else sqlite3.SQLITE_DENY
+        if table not in _CORE_V1_TABLES:
+            return sqlite3.SQLITE_DENY
+        if table in {'manual_source_submissions', 'manual_action_requests', 'audit'} and action != sqlite3.SQLITE_INSERT:
+            return sqlite3.SQLITE_DENY
+    denied = {getattr(sqlite3, name) for name in ('SQLITE_ATTACH','SQLITE_DETACH','SQLITE_ALTER_TABLE','SQLITE_DROP_TABLE','SQLITE_CREATE_TABLE','SQLITE_CREATE_TRIGGER','SQLITE_DROP_TRIGGER') if hasattr(sqlite3, name)}
+    if action in denied:
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -26,7 +49,30 @@ def connect(path):
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     db.execute('PRAGMA busy_timeout=20000')
+    if str(Path(path).resolve()) in _CORE_V1_PATHS:
+        db.execute("PRAGMA recursive_triggers=ON")
+        db.set_authorizer(_core_v1_authorizer)
     return db
+
+
+
+def initialize_core_v1(path):
+    """Initialize schemas only for disposable qualification; never migrate a business DB."""
+    if os.getenv('CROWNOPS_ENV') != 'test':
+        raise RuntimeError('Core v1 qualification profile is restricted to disposable test storage.')
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    db = connect(path)
+    try:
+        db.execute('PRAGMA journal_mode=WAL')
+        db.executescript(Path(__file__).with_name('schema.sql').read_text())
+        db.executescript(Path(__file__).with_name('platform_schema.sql').read_text())
+    finally:
+        db.close()
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def migrate_manager_role(db):

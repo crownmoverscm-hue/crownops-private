@@ -88,6 +88,8 @@ def recovery_rate_limit(db, request, email='', purpose='request'):
 
 
 def send_account_email(path, person, public_url, body, subject, message_id):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("send account email")
     """This adapter cannot send client drafts or accept an arbitrary recipient."""
     with closing(connect(path)) as db:
         person = one(db, 'SELECT id,email FROM users WHERE id=? AND active=1', (person['id'],))
@@ -97,6 +99,8 @@ def send_account_email(path, person, public_url, body, subject, message_id):
 
 
 def _send_account_message(path, recipient, public_url, body, subject, message_id, html=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled(" send account message")
     # Called only after the staff account or pending invitation is resolved from the database.
     if not recovery_email_allowed(path, public_url, recipient):
         raise RuntimeError('Account emails are not enabled for this staff account.')
@@ -179,6 +183,8 @@ def reserve_invitation_email(db, invitation, request_id, actor):
 
 
 def send_invitation_email(path, invitation_id, raw_token, public_url, message_id):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("send invitation email")
     from .staff_onboarding import invitation_content
     if stamp_hash(raw_token) != invitation_id:
         raise HTTPException(401, 'The private invitation link does not match.')
@@ -191,6 +197,8 @@ def send_invitation_email(path, invitation_id, raw_token, public_url, message_id
 
 
 def deliver_invitation_email(path, invitation_id, raw_token, public_url, request_id, actor):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("deliver invitation email")
     invitation_request_id(request_id)
     require_role(actor, {'owner','manager'})
     with transaction(path) as db:
@@ -228,6 +236,8 @@ def deliver_invitation_email(path, invitation_id, raw_token, public_url, request
 
 
 def deliver_recovery(path, email, public_url):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("deliver recovery")
     # Runs after the public response; account existence does not affect its body.
     with closing(connect(path)) as db:
         person = one(db, 'SELECT id,name,email,role,active FROM users WHERE email=? AND active=1', (email,))
@@ -261,6 +271,8 @@ def deliver_recovery(path, email, public_url):
 
 
 def notify_password_reset(path, user_id, public_url):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("notify password reset")
     with closing(connect(path)) as db:
         person = one(db, 'SELECT id,name,email,role,active FROM users WHERE id=? AND active=1', (user_id,))
     if not person or not recovery_email_allowed(path, public_url, person['email']):

@@ -1,0 +1,104 @@
+PROPOSAL ONLY — NO PROJECT, SERVICE, VOLUME OR ACCOUNT HAS BEEN CREATED
+November 2, 2026 America/Toronto. Target November 9 limited manual-inquiry pilot.
+
+Resource names (new isolated project, not copied from an existing project):
+Project crownops-core-v1-pilot
+Environment pilot
+Service core-v1-manual-inquiry
+Volume core-v1-private (mount /data; start with 1 GB subject to actual headroom)
+DB /data/private/core-v1.sqlite3, immediate directory 0700, DB and all SQLite
+sidecars 0600, owned by non-root runtime UID 10001, no symlinks, umask 0077.
+One running instance, one Uvicorn worker; no horizontal replicas on this volume.
+No PostgreSQL conversion, external DB port, copied volume/shared OAuth variables.
+Auto-deploy/PR deploys off; manually pin final reviewed release commit/image.
+Never replace production, AI-staging or quote-acceptance services or their keys.
+
+Exact proposed runtime command after approved storage/account preparation:
+/bin/sh -c 'umask 0077; exec python -m uvicorn app.core_pilot:create_pilot_app --factory --host 0.0.0.0 --port "${PORT:-8080}" --workers 1'
+Factory module/function are exact; --factory is Uvicorn's option. No manage.py
+serve, general startup, migration/bootstrap/demo/price seeding, reload or worker.
+
+Configuration variable NAMES (all values containing secrets are owner-entered
+privately; none supplied here):
+Ten fail-closed D3 settings:
+CROWNOPS_PROFILE=core-v1
+CROWNOPS_ENV=pilot
+CROWNOPS_ALLOW_EXTERNAL=0
+CROWNOPS_RUN_WORKER=0
+CROWNOPS_PILOT_ACK=manual-inquiry-only
+CROWNOPS_SECURE_COOKIES=1
+CROWNOPS_REQUIRE_MFA=1
+CROWNOPS_DB=/data/private/core-v1.sqlite3
+CROWNOPS_PUBLIC_URL=<exact new HTTPS origin; assign only after setup approval>
+CROWNOPS_SECRET_KEY=<new private pilot app key, not backup key>
+Additional scope/hygiene settings: CROWNOPS_UPLOADS_ENABLED=0;
+CROWNOPS_UPLOADS=/data/uploads (must be dedicated, private and empty);
+CROWNOPS_TEAM_CHAT_MODE=off; PYTHONDONTWRITEBYTECODE=1; PYTHONUNBUFFERED=1.
+PORT is provided by Railway. No backup key or provider/OAuth/AI key in web vars.
+Do not claim the extra settings are D3-validated: the exact ten settings are;
+backend allowlist/profile provides denied paths. Actual deployment must verify
+absence of upload routes, forbidden workers and all out-of-DB private files.
+
+Platform blockers to resolve before setup authorization:
+1. Railway volumes are root-mounted and absent during build/pre-deploy. Existing
+   build-time chown cannot establish actual volume ownership. Qualify a bounded
+   maintenance/bootstrap route that sets UID 10001/private modes BEFORE web
+   startup, or obtain a supported equivalent. Do not run the web permanently
+   as root, use RAILWAY_RUN_UID=0 as an unreviewed workaround, or chmod 0777.
+   No privileged bootstrap helper is implemented or executed in this package.
+2. Web-stop/maintenance access: stopping the service may remove SSH access too.
+   Review a maintenance-only context (same pinned image and volume, no app
+   import/process) for capture/restore. Do not assume two services may mount the
+   writable SQLite volume concurrently. Any maintenance deployment is a future
+   separately approved infrastructure action.
+3. Immutable container build is NOT EXECUTED. No local Docker executable or
+   approved preloaded base digest is available. Source/build-input provenance
+   and locked wheels are supplied; actual build needs an approved runner/base.
+4. TLS/proxy trusted-forwarding, secure cookie behavior, actual file ownership,
+   restart/durability/memory/headroom and egress isolation need actual evidence.
+   Local transport guards do not prove a platform firewall. No account queried.
+
+Proposed monitoring: /api/health; check guard success, startup/crash count, 5xx,
+disk/memory and backup age. Review daily and before business entry. Disk 70%
+warning/85% stop entry pending review are proposed thresholds, not configured
+alerts. No email/notification provider introduced. Actual platform alerting and
+secret-free logs require acceptance; do not expose environment dumps.
+
+Emergency shutdown: stop staff entry; verify exact PILOT IDs; stop web process
+and prevent automatic redeploy/restart; verify pilot no longer accepts requests.
+Preserve volume and evidence. Do not delete/reset service or DB; domain removal
+alone is not process-stop proof. Existing services untouched. Exact platform
+stop/readback steps will be qualified after permitted setup; no CLI executed now.
+
+Rollback: first pilot safe state is STOPPED, not the unrestricted application.
+Later pin previous approved image plus compatible schema; application rollback
+does not roll back data. Before updates take verified backup. Restore damaged
+data only into a new isolated path, revoke auth capabilities, verify originals,
+audit and MFA, then seek approved cutover. Never overwrite live DB or silently
+run an older incompatible image against newer data. Retain old copy privately.
+
+Offsite proposal: new Restricted Google Drive folder CrownOps-Core-v1-Pilot-
+Backups in an EXISTING Jonathan-controlled MFA-protected account, subject to
+quota/data-handling approval. Manual encrypted upload/download only; no app
+Google integration. Keep backup key/app key outside that folder, separately
+secured. Retain trusted capture receipt in a separate owner recovery record.
+Retain 7 daily / 4 weekly / 3 monthly points, end of working day and pre-update.
+No purchase, connection or deletion now. Jonathan is sole custodian: two recovery
+copies in separate secured places do not mitigate incapacity as a second person
+would. Daily loss target one workday/recovery target four hours are unproven
+proposals until actual measurement. No private uploads in this pilot.
+
+Estimated USD incremental resources, NOT measured charges or a spending cap:
+Average 0.25–0.5 GB RAM at $10/GB-month, 0.02–0.1 vCPU at $20/vCPU-month,
+1 GB volume at $0.15/GB-month, 1 GB egress at $0.05/GB: $3.10–$7.20/month.
+Proposed incremental operating allowance $5–$15/month; owner approval required.
+Workspace plan minimum ($5 Hobby / $20 Pro), existing usage/included credit,
+tax/FX, snapshots, build/monitoring costs and offsite quota are not inventoried.
+No upgrade is selected; actual additional bill may differ. Offsite incremental
+cost $0 only if existing approved capacity suffices. Do not alter workspace-wide
+spend limits blindly: they could affect existing services.
+
+Official public sources checked during preparation:
+https://docs.railway.com/pricing
+https://docs.railway.com/volumes
+https://docs.railway.com/volumes/reference

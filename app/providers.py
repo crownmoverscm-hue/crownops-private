@@ -24,10 +24,14 @@ PROVIDERS={
    'scope':'com.intuit.quickbooks.accounting','prefix':'QBO'}}
 
 def token_save(db,provider,body):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("token save")
     body=dict(body);body['expires_at']=time.time()+int(body.get('expires_in',3600))-60
     db.execute('INSERT INTO oauth_credentials(provider,ciphertext,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at',(provider,encrypt(body),now()))
 
 def provider_token(path,provider,require_external=True):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("provider token")
     if require_external: external_gate()
     cfg=PROVIDERS[provider]
     with transaction(path) as db:
@@ -55,6 +59,8 @@ def provider_token(path,provider,require_external=True):
         return new
 
 def maintain_connections(path):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("maintain connections")
     """Renew existing grants without sending email or changing accounting records."""
     for provider in PROVIDERS:
         with closing(connect(path)) as db:
@@ -80,6 +86,8 @@ def _qbo_connection(path):
     return t,str(realm),host
 
 def qbo_call(path,method,resource,payload=None,key=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("qbo call")
     quickbooks_gate()
     t,realm,host=_qbo_connection(path)
     params={'minorversion':os.getenv('QBO_MINOR_VERSION','75')}
@@ -89,6 +97,8 @@ def qbo_call(path,method,resource,payload=None,key=None):
     return r.json()
 
 def qbo_read(path,resource,params=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("qbo read")
     t,realm,host=_qbo_connection(path)
     q={'minorversion':os.getenv('QBO_MINOR_VERSION','75')}
     if params:q.update(params)
@@ -97,9 +107,13 @@ def qbo_read(path,resource,params=None):
     return r.json()
 
 def qbo_query(path,statement):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("qbo query")
     return qbo_read(path,'query',{'query':statement}).get('QueryResponse',{})
 
 def qbo_send_estimate(path,estimate_id,recipient):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("qbo send estimate")
     """Intuit's explicit email endpoint; never automatically retry this operation."""
     quickbooks_gate()
     if not str(estimate_id).isdigit():raise ValueError('Invalid QuickBooks estimate ID.')
@@ -111,6 +125,8 @@ def qbo_send_estimate(path,estimate_id,recipient):
     return response.json()
 
 def qbo_send_invoice(path,invoice_id,recipient):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("qbo send invoice")
     """Send through Intuit once; delivery uncertainty is handled by the caller."""
     quickbooks_gate()
     if not str(invoice_id).isdigit():raise ValueError('Invalid QuickBooks invoice ID.')
@@ -128,6 +144,8 @@ def qbo_mapping(path,key):
     return str(saved.get(key) or os.getenv(env_key,'')).strip()
 
 def qbo_customer(path,l):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("qbo customer")
     with closing(connect(path)) as db:old=one(db,"SELECT external_id FROM external_records WHERE provider='quickbooks' AND kind='Customer' AND object_id=? AND revision=0",(l['id'],))
     if old:return old['external_id']
     name=(l['client_name'][:65]+' | '+l['id'][-12:])
@@ -164,6 +182,8 @@ def qbo_invoice_payload(doc,customer_id,item_id,tax_id,discount_account):
     return payload
 
 def send_gmail(path,message):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("send gmail")
     t=provider_token(path,'gmail')
     profile=requests.get('https://gmail.googleapis.com/gmail/v1/users/me/profile',headers={'Authorization':'Bearer '+t['access_token']},timeout=15)
     profile.raise_for_status();sender=profile.json().get('emailAddress','')
@@ -193,6 +213,8 @@ def send_gmail(path,message):
     return r.json()['id']
 
 def process_mail(path,mid):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("process mail")
     external_gate()
     # Network reads and optional local receipt reconciliation happen before the
     # write lock. The final transaction rechecks the exact invoice version.

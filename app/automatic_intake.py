@@ -11,6 +11,8 @@ from .platform_common import settings, put_setting, require_role, SALES, MANAGER
 SYNC_LOCK=threading.Lock()
 
 def repair_imported_forms(path,actor):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("repair imported forms")
     """Fill parsing gaps only on untouched Gmail forms without estimates or bookings."""
     from .gmail_sync import _quote_fields
     from .inquiry_intake import intake_values,photo_link
@@ -52,6 +54,8 @@ def labour_suggestion(lead):
         return engine.call('window.CrownLocalEstimator.suggest',lead,timeout_sec=1,max_memory=64*1024*1024)
 
 def prepare_draft(db,lead,actor):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("prepare draft")
     prior=one(db,'SELECT * FROM intake_drafts WHERE lead_id=?',(lead['id'],))
     if prior and prior['quote_id']:return prior
     existing=one(db,'SELECT id FROM quotes WHERE lead_id=? ORDER BY revision DESC LIMIT 1',(lead['id'],))
@@ -100,6 +104,8 @@ def prepare_draft(db,lead,actor):
     return {'lead_id':lead['id'],'quote_id':qid,'status':status,'missing':missing,'inputs':inputs}
 
 def run_intake(path,new_lead,force=False):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("run intake")
     if not SYNC_LOCK.acquire(blocking=False):return {'running':True}
     try:
         with transaction(path) as db:

@@ -1,0 +1,78 @@
+# INERT REVIEW DRAFT. Not in .github/workflows. No image build is authorized by
+# adding this file. Owner approval of networked packaging + one CI build required.
+# After approval, place this exact reviewed workflow in .github/workflows on
+# fix/g5-no-cli-packaging-hardening; only the approved push should trigger one build.
+name: G5 browser-source image qualification PROPOSED
+on:
+  push:
+    branches: [fix/g5-no-cli-packaging-hardening]
+permissions:
+  contents: read
+jobs:
+  fictional-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm unchanged approved payload
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/g5-browser
+          git diff --exit-code 55b431a3085acac42846179566b8d2e7daf07a8f HEAD -- app config tools/pilot g5/Dockerfile.g5 g5/prepare_empty_volume.py g5/container_fixture.py
+          python3 g5/test_fictional_web_start.py
+          python3 g5/test_browser_packaging.py
+      - name: Explicit official digest acquisition on fresh runner
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 docker.io/library/python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9 2>&1 | tee evidence/g5-browser/base-pull.txt
+          docker image inspect docker.io/library/python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9 > evidence/g5-browser/base-inspect.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('evidence/g5-browser/base-inspect.json'))[0]
+          assert d['Architecture']=='amd64' and d['Os']=='linux'
+          assert d['Id']=='sha256:b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79'
+          assert any(s.endswith('@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9') for s in d['RepoDigests'])
+          PY
+      - name: Build reviewed networked acquisition stage then offline runtime
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --pull=false --file g5/Dockerfile.g5-browser-source --tag crownops-g5-browser-review:test . 2>&1 | tee evidence/g5-browser/build.txt
+          docker image inspect --format '{{.Id}}' crownops-g5-browser-review:test > evidence/g5-browser/image-config-id.txt
+      - name: Nonroot tests in actual image, external network disabled
+        run: |
+          set -euo pipefail
+          docker run --rm --network=none --read-only --tmpfs /tmp:rw,nosuid,nodev --security-opt no-new-privileges --cap-drop ALL crownops-g5-browser-review:test python /opt/g5/test_fictional_web_start.py 2>&1 | tee evidence/g5-browser/key-tests-in-image.txt
+          docker run --rm --network=none --read-only --tmpfs /tmp:rw,nosuid,nodev --security-opt no-new-privileges --cap-drop ALL crownops-g5-browser-review:test python -c 'import os,sys; assert os.getuid()==os.getgid()==10001; assert sys.version_info[:3]==(3,13,18); print("UID10001_PYTHON31318_OK")' | tee evidence/g5-browser/runtime.txt
+          set +e
+          docker run --rm --network=none --read-only --tmpfs /tmp:rw,nosuid,nodev --security-opt no-new-privileges --cap-drop ALL crownops-g5-browser-review:test > evidence/g5-browser/missing-config.txt 2>&1
+          rc=$?
+          set -e
+          test "$rc" -eq 1
+          grep -Fx 'REFUSED: fictional G5 web startup did not complete.' evidence/g5-browser/missing-config.txt
+      - name: Offline dependency and wheel evidence from actual image
+        run: |
+          set -euo pipefail
+          docker run --rm --network=none crownops-g5-browser-review:test python -m pip freeze --all > evidence/g5-browser/freeze.txt
+          docker run --rm --network=none crownops-g5-browser-review:test python -m pip check > evidence/g5-browser/pip-check.txt
+          docker run --rm --network=none crownops-g5-browser-review:test python -c 'from pathlib import Path; import hashlib,json; print(json.dumps({p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(Path("/wheels").glob("*.whl"))},sort_keys=True))' > evidence/g5-browser/wheel-hashes.json
+          python3 - <<'PY'
+          import json
+          expected=json.load(open('g5/CONTEXT-PINS.json'))['wheel_sha256']
+          assert json.load(open('evidence/g5-browser/wheel-hashes.json'))==expected
+          PY
+      - name: Source provenance and explicit limitations
+        if: always()
+        run: |
+          mkdir -p evidence/g5-browser
+          git rev-parse HEAD > evidence/g5-browser/git-sha.txt
+          sha256sum g5/Dockerfile.g5-browser-source g5/start_fictional_web.py .dockerignore tools/pilot/requirements-python313.lock tools/pilot/requirements-offline.lock > evidence/g5-browser/input-hashes.txt
+          printf '%s\n' 'Image remains local-only, never published. No Railway proof. Full web/maintenance lifecycle NOT TESTED by this workflow.' > evidence/g5-browser/limits.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g5-browser-source-review-${{ github.sha }}
+          path: evidence/g5-browser/
+          retention-days: 14

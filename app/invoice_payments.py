@@ -143,6 +143,8 @@ def _import_receipts(db,snapshot,evidence,actor,apply=True):
 
 
 def quickbooks_payment_state(path,iid,*,actor='quickbooks-reconciliation',reconcile=False,user=None,expected_version=None,expected_revision=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("quickbooks payment state")
     """Fresh authoritative state; optional local receipt import makes no QBO writes.
 
     `verified` proves the remote invoice identity, not bank settlement. `can_collect`
@@ -198,6 +200,8 @@ def quickbooks_payment_state(path,iid,*,actor='quickbooks-reconciliation',reconc
 
 
 def collection_payment_check(path,iid,expected_balance_cents=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("collection payment check")
     state=quickbooks_payment_state(path,iid,reconcile=True,actor='quickbooks-collection-check')
     if expected_balance_cents is not None and state['local_balance_cents']!=expected_balance_cents:
         state.update(can_collect=False,reason='The balance changed. Prepare and review a new reminder.')
@@ -205,6 +209,8 @@ def collection_payment_check(path,iid,expected_balance_cents=None):
 
 
 def match_quickbooks_receipt(path,iid,local_payment_id,remote_payment_id,*,user,note,version,revision):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("match quickbooks receipt")
     """Management binds one already-verified receipt to an actual QBO Payment.
 
     The accounting total, invoice allocation, project, customer, currency and
@@ -259,6 +265,8 @@ def match_quickbooks_receipt(path,iid,local_payment_id,remote_payment_id,*,user,
 
 
 def poll_quickbooks_receipts(path):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("poll quickbooks receipts")
     """Import proven invoice receipts only; never charge, refund or write to QBO."""
     import os
     if os.getenv('CROWNOPS_ALLOW_QBO_RECEIPT_SYNC')!='1':return {'enabled':False}
@@ -310,6 +318,8 @@ def register_invoice_reconciliation(app,path,auth):
 
 
 def checked_quickbooks_link(path, iid, user, *, invoice_scope=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("checked quickbooks link")
     from .providers import qbo_read
     # A public caller must first authenticate its signed invoice-only session.
     # The explicit exact scope avoids manufacturing a privileged staff identity.

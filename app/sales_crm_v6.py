@@ -566,6 +566,8 @@ def confirmation(lead,q,job=None):
 
 
 def prepare_booking_confirmation(db,job,quote,lead,actor,base=None):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("prepare booking confirmation")
     """Prepare exactly one current confirmation; never send or retry uncertain mail."""
     if job['status'] not in ('Confirmed','In progress'):raise HTTPException(409,'Confirm the service before preparing its booking email.')
     if not quote or quote['status']!='Accepted' or job['quote_id']!=quote['id'] or job['lead_id']!=lead['id']:
@@ -598,6 +600,8 @@ def prepare_booking_confirmation(db,job,quote,lead,actor,base=None):
     return message
 
 def confirm_job(db,q,lead,actor,reason):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("confirm job")
     if not quote_scope_current(db,q,lead) or pending_scope_changes(db,lead['id']):
         raise HTTPException(409,'Review the current client details before confirming this booking.')
     j=ensure_tentative_job(db,q,lead,actor)

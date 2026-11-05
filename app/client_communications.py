@@ -125,6 +125,8 @@ def settings_for_deposit(db):
 
 
 def prepare_deposit_request(db, qid, actor):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("prepare deposit request")
     """Prepare one reviewable EN/FR request. Never create a checkout or send mail."""
     from .platform_common import queue_message
     context=deposit_request_context(db,qid)

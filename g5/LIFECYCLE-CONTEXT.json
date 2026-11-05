@@ -1,0 +1,21 @@
+{
+  "base_image": "python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9",
+  "base_source_commit": "91cea018abf6cf1622532f841a5ae813517dba33",
+  "canonical_dockerfile": "g5/Dockerfile.g5-browser-source",
+  "format": 1,
+  "legacy_context_pins_sha256": "074afe97bd4319aa2c81f16d50caf3ac1d0ac6cfdee0c8fc8ea9bb0614808644",
+  "lifecycle_sha256": {
+    "g5/lifecycle_ctl.py": "f5084b93752bceafd04e3399fa049a8167234619dc99570f86ec09f2ce788997",
+    "g5/lifecycle_entry.py": "ccac4f600693edd689b34251a9415c7ce502f27677c5caa4c1f7ac9e1d409280",
+    "g5/lifecycle_supervisor.py": "8e8768b027ba5f04ed1290148a379e283c76c5bf4425512c6ded2573ba561d78",
+    "g5/railway.lifecycle.toml": "aad6fcda70dca2bdea64f7adc60ce0b08989f6f765621accc4f312e93ec72b6d",
+    "g5/test_lifecycle.py": "35fa07aea5c763b60371e3ba846ca0bea50dc6b1a11b53e321ee0a1fb6cbdae3"
+  },
+  "lifecycle_source_commit": "ab8c6093cbaa76dd9e2eea94637da51483bce1bf",
+  "parent_runtime_sha256": {
+    ".dockerignore": "d9f796eda31e4fd9ecf410221e485c5afbfec770c2075422d1abc42a8629e66e",
+    "g5/Dockerfile.g5-browser-source": "dc30e55f872145403f33e7ac762ba0563f968aa086d2672f396ef21639965522",
+    "g5/start_fictional_web.py": "981fdb4cfbbeb3a7a25c79c0ee6fca8deea48d225d11dd015c9cf52daf3c5a04"
+  },
+  "wheel_count": 35
+}

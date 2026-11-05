@@ -17,6 +17,8 @@ def deposit_state(db,lid,q):
 
 
 def create_deposit_checkout(path,qid,lid,actor):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("create deposit checkout")
     token=os.getenv('SQUARE_ACCESS_TOKEN');loc=os.getenv('SQUARE_LOCATION_ID')
     if not token or not loc:raise HTTPException(503,'Card deposits are not configured. Ask Crown for its approved payment instructions.')
     with transaction(path) as db:
@@ -51,6 +53,8 @@ def create_deposit_checkout(path,qid,lid,actor):
 
 
 def record_deposit_callback(db,p,event_id):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("record deposit callback")
     link=one(db,'SELECT * FROM deposit_links WHERE order_id=?',(p.get('order_id'),))
     if not link:return None
     if p.get('status')!='COMPLETED':return {'applied':False}

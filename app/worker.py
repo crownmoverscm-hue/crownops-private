@@ -9,6 +9,8 @@ from .platform_common import settings,queue_message,add_task,invoice_current,pen
 
 
 def tick(path):
+    from .core_v1 import deny_if_enabled
+    deny_if_enabled("tick")
     made=0;t=datetime.now(timezone.utc)
     payment_checks={}
     # Never hold the SQLite writer lock during provider requests. Every result
