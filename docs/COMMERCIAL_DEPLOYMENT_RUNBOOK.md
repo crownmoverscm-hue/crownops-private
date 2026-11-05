@@ -93,6 +93,9 @@ Remove `CROWNOPS_SETUP_CODE_HASH` after the owner account exists. Without it, we
 | `CROWNOPS_SECURE_COOKIES` | `1` |
 | `CROWNOPS_REQUIRE_MFA` | `1` (recommended) |
 | `CROWNOPS_ALLOW_EXTERNAL` | `0` until section 14 is complete |
+| `CROWNOPS_BACKUP_KEY` | output of `manage.py backup-key`; never the same as `CROWNOPS_SECRET_KEY`, and never stored with the backups |
+| `CROWNOPS_BACKUP_HOUR` | local hour (0–23) for the in-process daily backup, when the host cannot run a scheduled job against the same volume |
+| `CROWNOPS_BACKUP_OFFSITE_COMMAND` | the operator's copy command; the archive path is appended (section 15) |
 
 ## 5. Explicit installation identity
 
@@ -190,6 +193,12 @@ Run the backup command on a schedule, at least daily:
 python manage.py --db "$CROWNOPS_DB" backup-run --keep 14
 ```
 
+If the host cannot run a scheduled job that mounts the database volume, set `CROWNOPS_BACKUP_HOUR` instead. The application process then runs the same backup once a day, after that local hour. It retries no sooner than an hour after a failure.
+
+**Encryption.** Set `CROWNOPS_BACKUP_KEY` (from `manage.py backup-key`) and archives are written as `crownops-backup-*.zip.enc`, using streamed AES-256-GCM. `verify-backup` and `restore` detect encryption automatically and need the same key. Keep an offline copy of the key with the owner: **without it, encrypted backups cannot be restored.** In production, `ops-check` warns while backups are unencrypted.
+
+**Offsite copy.** Set `CROWNOPS_BACKUP_OFFSITE_COMMAND` to a command that copies one file to approved storage, for example `rclone copyto --config /run/secrets/rclone.conf remote:bucket/`. The archive path is appended as the last argument, and the command runs without a shell. Only its exit status is recorded. A failure makes `backup-run` exit `1`, and `ops-check` reports `offsite_copy_failed` as critical. CrownOps never selects or contacts a storage provider itself.
+
 Each run:
 - takes a consistent SQLite online-backup snapshot and includes uploads
 - writes a checksummed manifest
@@ -199,8 +208,8 @@ Each run:
 
 It exits `1` on failure.
 
-**Backup archives are not encrypted by CrownOps.** Before using them:
-- Copy each archive to encrypted offsite storage that only the company's operators can reach.
+**Without `CROWNOPS_BACKUP_KEY`, archives are not encrypted by CrownOps.** In every case:
+- Copy each archive to offsite storage that only the company's operators can reach.
 - Keep `CROWNOPS_SECRET_KEY` in a **separate** secret store. Never keep it alongside the backups.
 - Set retention to match the agreed policy.
 - Never send archives to a provider the customer has not approved.
@@ -246,6 +255,8 @@ Real installations scale with database and upload size.
 - client messages needing reconciliation
 - accounting or payment operations needing reconciliation
 - background jobs failing repeatedly (`CROWNOPS_JOB_FAILURE_ALERT`, default 3)
+- stored MFA secrets or provider tokens that the configured `CROWNOPS_SECRET_KEY` cannot read (`secret_key_mismatch`, usually a restore under the wrong key)
+- the offsite copy outcome, and in production, unencrypted backups or a missing offsite command
 - free disk space (`CROWNOPS_DISK_WARN_PERCENT` 15, `CROWNOPS_DISK_CRITICAL_PERCENT` 5)
 
 It reports counts only, never customer data. See `docs/OPERATIONS_SUPPORT_RUNBOOK.md`.

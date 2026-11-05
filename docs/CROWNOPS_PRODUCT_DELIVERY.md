@@ -306,6 +306,29 @@ The Montréal-based long-distance city presets are legacy-only. **Hourly crew ra
 - **No asset damage:** with a hostile profile, all 86 rewritten assets stay valid. HTML gains no tags or scripts, CSS gains no comment terminators, and the "CrownOps" product references are unchanged.
 - **Never stale:** branding is re-read on every request (about 21 ms in total to rewrite all assets).
 
+### 2026-11-05 — Session 7: release validation and pilot preparation (local commits only; repository still public)
+
+**Baseline verified:** clean branch at `5c0cd67`, 21 commits since `db59167`, `APP_VERSION 0.13.0-dev`, schema 2, v6 archive SHA-256 `e81f87d8…add6a` (2,193,802 bytes); 723 Python, 20 Node, 12 browser suites.
+
+**Security and reliability review:** `docs/SECURITY_RELIABILITY_REVIEW_2026-11-05.md` (internal; **not** a penetration test).
+- **SR-1 fixed (`b9e8776`):** `pip-audit` found 70 advisories in starlette, python-multipart, requests, cryptography and Pillow. Upgraded; the set now audits clean and every suite passes.
+- **SR-2 open:** the G5-pinned Core v1 lockfiles still pin the vulnerable set. A re-pin needs Jonathan's approval.
+- **SR-3/4/5 fixed (`86035dd`):**
+  - optional AES-256-GCM backup encryption (`CROWNOPS_BACKUP_KEY`)
+  - in-process daily backup (`CROWNOPS_BACKUP_HOUR`)
+  - operator offsite command (`CROWNOPS_BACKUP_OFFSITE_COMMAND`)
+  - `secret_key_mismatch` detection; the restore drill proves password and MFA sign-in after restore
+- **SR-7/8 (`b01e861`):** 6 signed-event Square webhook tests; Crown names removed from API errors, guarded by an AST scan.
+- **SR-11/12 open:** no in-app resolution for some Unknown provider outcomes; CAD and Quebec tax hard-coded.
+
+**New documents:**
+- `HOSTED_PILOT_PREFLIGHT.md` (with a production-mode local rehearsal)
+- `INTEGRATION_TEST_PLANS.md` (35 sandbox tests, all blocked)
+- `LICENSING_AND_LEGAL_READINESS.md`
+- `CROWNOPS_PILOT_ACCEPTANCE.md`
+
+**Classification:** NOT PILOT-READY (see the acceptance matrix).
+
 ## 12. Commercial pilot release gates (2026-11-05)
 
 | Area | Requirement | Status | Evidence or gap |
@@ -313,19 +336,19 @@ The Montréal-based long-distance city presets are legacy-only. **Hourly crew ra
 | Core CRM | Complete moving workflow passes | **Met (synthetic)** | `test_documented_provisioning.py`: inquiry → verified payment, two companies |
 | Company onboarding | Repeatable without source changes | **Met (local)** | Deployment runbook plus documented-process test; operator steps use `manage.py` |
 | Isolation | Separate installations verified | **Met (local)** | Separate processes, databases, secrets and sessions; cross-session access gets 401 |
-| Security | No unresolved critical vulnerabilities | **Partially met** | No known critical defect in the code. The **repository is public** (D1). No external penetration test. MFA not yet tested on a real device. |
+| Security | No unresolved critical vulnerabilities | **Partially met** | Application dependencies audit clean (session 7). **Core v1 lockfiles still vulnerable (SR-2).** The **repository is public** (D1). No external penetration test. MFA not yet tested on a real device. |
 | Pricing | Approved company-specific policies | **Met** | COM-4; Crown golden outputs unchanged |
 | Branding | No Crown leaks | **Met** | Byte-identical for Crown; no Crown identity in any asset or page for other companies |
 | Legal templates | Company-approved terms required | **Met (mechanism)** | Templates and booking terms must be written and approved by the company. **Wording needs legal review (D14).** |
 | Database | Versioned migrations tested | **Met** | `test_migrations.py` |
-| Backups | Successful restore drill | **Met (local)** | `test_backup_drill.py`. Encrypted offsite storage is not set up (operator task). |
+| Backups | Successful restore drill | **Met (local)** | `test_backup_drill.py`, `test_backup_encryption.py`, `test_backup_schedule.py`. Encryption and the offsite hook exist; **no offsite storage account** yet. |
 | Monitoring | Critical failures observable | **Met (local)** | `ops-check`; external alerting not connected (needs account authorization) |
 | Operations | Deployment and recovery runbooks | **Met** | Both runbooks written |
-| Tests | Required suites pass | **Met locally** | 723 Python, 20 Node, 12 browser suites. **GitHub CI not run** (repository public). |
+| Tests | Required suites pass | **Met locally** | 746 Python, 20 Node, 12 browser suites (session 7). **GitHub CI not run** (repository public). |
 | External integrations | Verified or listed as pilot limitations | **Pilot limitation** | Gmail, QuickBooks and Square have **not** been verified live for commercial installations |
 | Business approvals | Licensing, privacy, IP, contracts | **Not met** | D13 licensing model, D14 legal/privacy/IP, the customer agreement and hosting region remain open |
 
-**Readiness:** **PILOT CANDIDATE.** All technical gates pass locally on synthetic data. It is **not PILOT READY**: business approvals (D13, D14) are open, the repository is public (D1), there is no hosted deployment or GitHub CI run, and live provider sandboxes and real-device MFA are unverified.
+**Readiness (session 6):** **PILOT CANDIDATE.** All technical gates pass locally on synthetic data. It is **not PILOT READY**: business approvals (D13, D14) are open, the repository is public (D1), there is no hosted deployment or GitHub CI run, and live provider sandboxes and real-device MFA are unverified.
 
 ## 7. Test results
 
@@ -348,6 +371,9 @@ The Montréal-based long-distance city presets are legacy-only. **Hourly crew ra
 | Session 5, JS | `node --check app/static/*.js`; 20 Node tests | All pass |
 | Session 6, isolated (after `e1c28e6`) | `python tests/run_isolated.py --min-tests 720 --jobs 4` | **66 modules, 723 tests, 0 failures** |
 | Session 6, browser and JS | 12 browser suites, `node --check`, 20 Node tests | **All pass** |
+| Session 7, isolated, upgraded dependencies | `python tests/run_isolated.py --min-tests 746 --jobs 4` | **70 modules, 746 tests, 0 failures** |
+| Session 7, browser and JS | 12 browser suites, `node --check`, 20 Node tests, on the upgraded dependency set | **All pass** |
+| Session 7, dependency audit | `pip-audit -r requirements.txt` | 70 advisories → **0** |
 | JavaScript syntax | `node --check app/static/*.js` | All pass |
 | Node tests | `node --test tests/*.test.cjs` | 20 out of 20 pass |
 | Browser suites (Playwright, pre-installed Chromium) | `python tests/browser/run_mobile.py <suite>`, all 11 CI suites with CI environment variables | **11 out of 11 pass** after COM-1 (wix_sync, inbox, payroll_periods, hours_costs, staff_portal, client_participation, browser_recovery, estimate_delivery, mobile_schedule, today_workspace, team_chat) |
@@ -441,7 +467,14 @@ _Previous note:_ Crown internal use **PILOT CANDIDATE** (unchanged). Commercial 
 
 ## 10. Next executable task
 
-**Next priority: a hosted pilot rehearsal (needs authorization for any paid resource).**
+**Next development task (no approval needed): SR-11.** Build owner-only reconcile actions with evidence for:
+- Unknown Square checkouts
+- Unknown or Mismatch QuickBooks invoice exports
+- Unknown non-invoice client emails
+
+Also build a CSV export for offboarding.
+
+**Next priority needing approval: a hosted pilot rehearsal** (`HOSTED_PILOT_PREFLIGHT.md` P1–P12) and the Core v1 lockfile re-pin (SR-2).
 1. With Jonathan's approval, provision one disposable hosted installation following the deployment runbook (TLS, secrets store, scheduled `backup-run`, `ops-check` alerting). Measure real backup and restore times.
 2. Run provider **sandbox** verification (Gmail test mailbox, QuickBooks sandbox, Square sandbox) on that installation only.
 3. Make the repository private (D1), then push, open a draft PR and run GitHub CI.
