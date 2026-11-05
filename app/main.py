@@ -58,6 +58,7 @@ from .staff_records import can_view_pay, resolve_invited_employee
 from .job_routes import job_route, validate_route
 from .platform_common import settings as platform_settings,business_day
 from .business_zone import BUSINESS_ZONE, zone_name
+from .version import APP_VERSION
 from .account_access import (master_owner_id, remember_master_owner, protect_owner_account,
     check_invitation_email, invitation_request_id, previous_invitation_email,
     reserve_invitation_email, invitation_email_result, deliver_invitation_email)
@@ -255,7 +256,7 @@ def create_app(database_path=None, *, core_pilot=False):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
-    app=FastAPI(title='CrownOps Unified Application',version='0.12.7-rc6',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
+    app=FastAPI(title='CrownOps Unified Application',version=APP_VERSION,docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     from .error_pages import register_error_pages
     register_error_pages(app, None if core_v1_profile else path)
     from .app_release import register_app_release

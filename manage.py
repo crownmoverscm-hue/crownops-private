@@ -29,6 +29,7 @@ s=sub.add_parser('worker',help='Generate approved-rule tasks and unsent drafts; 
 s=sub.add_parser('doctor',help='Show configuration switches without exposing secrets')
 s=sub.add_parser('installation-identity',help='Explicitly record whether this database is the original Crown Movers installation (legacy-crown) or a new company (unconfigured)')
 s.add_argument('--mode',required=True,choices=['legacy-crown','unconfigured']);s.add_argument('--reason',required=True)
+s=sub.add_parser('db-status',help='Read-only schema version, pending migrations and schema problems (exit 1 if action is needed)')
 s=sub.add_parser('setup-code',help='Generate a private one-installation web setup code and the hash to store as CROWNOPS_SETUP_CODE_HASH')
 s=sub.add_parser('company-profile',help='Set the company identity used in client emails and documents (new installations must run this)')
 s.add_argument('--name',required=True);s.add_argument('--phone',required=True);s.add_argument('--email',required=True);s.add_argument('--timezone',required=True)
@@ -51,7 +52,7 @@ try:
         if path.exists():raise ValueError('Restoration never overwrites a database. Stop the server and choose a NEW empty instance path.')
         from app.backups import restore_archive
         print(restore_archive(Path(a.archive),path));sys.exit(0)
-    if a.command not in ('serve','backup','doctor','setup-code'):
+    if a.command not in ('serve','backup','doctor','setup-code','db-status'):
         initialize(path)
     if a.command=='init':
         from app.main import create_user
@@ -107,6 +108,13 @@ try:
             with transaction(path) as db:set_identity_mode(db,a.mode,'owner-cli',a.reason);profile=company_profile(db)
         except HTTPException as ex:raise ValueError(ex.detail)
         print(json.dumps({'identity_mode':a.mode,'effective_identity':profile['mode'],'company':profile['name']},indent=2))
+    elif a.command=='db-status':
+        if not path.exists():raise ValueError('No database at this path.')
+        from app.migrations import status
+        uri='file:'+str(path)+'?mode=ro'
+        with closing(sqlite3.connect(uri,uri=True)) as db:report=status(db)
+        print(json.dumps(report,indent=2))
+        if report['pending'] or report['problems'] or report['newer_than_app']:sys.exit(1)
     elif a.command=='setup-code':
         import secrets,hashlib
         code=secrets.token_urlsafe(24)

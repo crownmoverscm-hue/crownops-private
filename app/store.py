@@ -115,6 +115,12 @@ def initialize(path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     db = connect(path)
+    from .migrations import check_compatible, pending, BACKUP_REQUIRED
+    try:
+        check_compatible(db)  # never touch a database newer than this application
+    except Exception:
+        db.close()
+        raise
     legacy = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
     pending_manager=bool(legacy and not re.search(r"['\"]manager['\"]",legacy[0]))
     pending_journey=bool(legacy and any(not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(name,)).fetchone() for name in ('expense_sources','schedule_days','saved_media_links','detail_requests','portal_detail_drafts','quote_views','invoice_deposit_reviews','job_handoffs','invoice_access_invites','invoice_access_sessions','invoice_change_orders','wix_events','service_conversations','conversation_entries','staff_availability','service_participation','qbo_estimate_deliveries')))
@@ -155,7 +161,19 @@ def initialize(path):
     from .company_profile import record_identity_mode
     record_identity_mode(db)
     db.commit()
-    db.close()
+    from .migrations import apply_migrations
+    from .version import APP_VERSION
+    if os.getenv('CROWNOPS_ENV') == 'production' and {v for v, _, _ in pending(db)} & BACKUP_REQUIRED:
+        from .release_recovery import before_manager_migration
+        try:
+            before_manager_migration(path, migration='schema')
+        except Exception:
+            db.close()
+            raise
+    try:
+        apply_migrations(db, APP_VERSION)
+    finally:
+        db.close()
     try:
         os.chmod(path, 0o600)
     except OSError:
