@@ -73,8 +73,8 @@ def validate_policy(data):
     missing = [k for k in LEGACY_POLICY if k not in ('testimonial_credit',) and data.get(k) in (None, '')]
     if missing:
         raise HTTPException(422, 'Set every pricing value before saving. Missing: ' + ', '.join(missing) + '.')
-    if data.get('approved') is not True:
-        raise HTTPException(422, 'Review the pricing policy and confirm approval before it can be used for estimates.')
+    if not isinstance(data.get('approved', False), bool):
+        raise HTTPException(422, 'Approval must be true or false.')
     out = {}
     for k in MONEY_FIELDS:
         out[k] = _decimal(data[k], k.replace('_', ' ').capitalize(), 0, 100000)
@@ -107,7 +107,7 @@ def validate_policy(data):
     out['limited_liability_text'] = text.strip()
     credit = data.get('testimonial_credit')
     out['testimonial_credit'] = _decimal(credit, 'Testimonial credit', 0, 10000) if credit not in (None, '') else None
-    out['approved'] = True
+    out['approved'] = data.get('approved') is True  # a draft is saved but never used for pricing
     return out
 
 
@@ -125,10 +125,13 @@ def pricing_policy(db):
 def policy_status(db):
     try:
         policy = pricing_policy(db)
-        return {'configured': True, 'source': policy['source'], 'version': policy.get('version', 0), 'policy': policy}
+        stored = settings(db, SETTING_KEY) or {}
+        draft = stored if stored and not stored.get('approved') else None
+        return {'configured': True, 'source': policy['source'], 'version': stored.get('version', policy.get('version', 0)), 'policy': policy, 'draft': draft}
     except HTTPException as ex:
-        return {'configured': False, 'source': None, 'version': (settings(db, SETTING_KEY) or {}).get('version', 0),
-                'policy': None, 'message': ex.detail}
+        stored = settings(db, SETTING_KEY) or {}
+        return {'configured': False, 'source': None, 'version': stored.get('version', 0), 'policy': None,
+                'draft': stored if stored and not stored.get('approved') else None, 'message': ex.detail}
 
 
 def D(policy, key):
@@ -171,7 +174,12 @@ def register_pricing_policy(app, path, auth):
                 raise HTTPException(409, 'The pricing policy changed since you opened it. Refresh and review it before saving.')
             policy = validate_policy(data)
             policy['version'] = int(current.get('version', 0)) + 1
-            policy['approved_by'] = u['id']; policy['approved_at'] = now()
+            if policy['approved']:
+                policy['approved_by'] = u['id']; policy['approved_at'] = now()
+            elif current.get('approved'):
+                # Keep pricing with the approved policy while a new draft is reviewed.
+                raise HTTPException(409, 'An approved pricing policy is in use. Save changes with approval, or keep the current policy.')
             put_setting(db, SETTING_KEY, policy)
-            audit(db, u['id'], 'Pricing policy approved', 'settings', SETTING_KEY, {'version': policy['version']})
+            audit(db, u['id'], 'Pricing policy approved' if policy['approved'] else 'Pricing policy draft saved', 'settings', SETTING_KEY,
+                  {'version': policy['version']})
             return policy_status(db)

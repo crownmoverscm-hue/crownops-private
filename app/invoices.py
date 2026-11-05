@@ -227,6 +227,8 @@ def register_invoices(app,path,auth,visible_job,require):
             doc=decorate(db,inv,j)
             from .company_profile import ready_profile
             company=ready_profile(db,'issuing invoices')
+            from .pricing_policy import pricing_policy
+            pricing_policy(db)  # no invoice is issued without an approved pricing policy
             # Stamp the issuer's contact into the preserved revision; legacy Crown invoices keep their wording.
             if company['mode']!='legacy-crown':doc['company']={'name':company['name'],'phone':company['phone']}
             if doc['pending_extras']:raise HTTPException(409,'Management must approve or decline the requested extra items before this invoice can be finalized.')

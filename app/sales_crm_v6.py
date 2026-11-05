@@ -44,6 +44,17 @@ def number(*args,**kwargs):
     try:return pricing_number(*args,**kwargs)
     except ValueError as ex:raise HTTPException(422,str(ex))
 
+def reconcile_lines(lines,total_cents,fr=False):
+    """Estimate totals are rounded once from exact amounts; lines are rounded individually.
+    When they differ, add an explicit rounding line so the document always reconciles to the cent.
+    The total itself never changes. A gap larger than one cent per line indicates a defect."""
+    diff=total_cents-sum(int(l["total_cents"]) for l in lines)
+    if not diff:return lines
+    if abs(diff)>len(lines):raise HTTPException(500,"Estimate lines do not reconcile with the total. No estimate was saved.")
+    lines.append({"name":"Ajustement d'arrondi" if fr else "Rounding adjustment","qty":1,"unit_cents":diff,"total_cents":diff,
+                  "note":"Ecart d'arrondi au cent entre les lignes et le total." if fr else "Cent-level rounding between line items and the total."})
+    return lines
+
 def money(v):
     return int((Decimal(str(v))*100).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
 
@@ -443,6 +454,7 @@ def _calculate(db,data,policy):
         total+=Decimal(mat_total)/100+other-discount;lines.extend(mats)
         if other:lines.append({'name':'Other agreed charges','qty':1,'unit_cents':money(other),'total_cents':money(other)})
         if discount:lines.append({'name':'Approved discount','qty':1,'unit_cents':-money(discount),'total_cents':-money(discount)})
+        reconcile_lines(lines,money(total),language=="French")
         return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":0,
           "service_low":0,"service_high":0,"minimum_hours":0,"transport_hours":0,"transport_cents":0,
           "fuel_cents":0,"materials_cents":mat_total,"other_cents":money(other),"discount_cents":money(discount),"service_low_cents":money(base),
@@ -507,6 +519,7 @@ def _calculate(db,data,policy):
     if custom_note:lines[0]['note']=custom_note
     if other:lines.append({"name":"Autres frais convenus" if fr else "Other agreed charges","qty":1,"unit_cents":money(other),"total_cents":money(other)})
     if discount:lines.append({"name":"Rabais approuve" if fr else "Approved discount","qty":1,"unit_cents":-money(discount),"total_cents":-money(discount)})
+    reconcile_lines(lines,money(tlo),fr)
     return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":money(rate),
       "suggested_hourly_rate_cents":money(suggested),"rate_source":source,"service_low":float(low),"service_high":float(high),
       "minimum_hours":float(minimum),"transport_hours":float(show_transport_hours),"billable_transport_hours":float(billable_transport_hours),"transport_cents":money(transport),

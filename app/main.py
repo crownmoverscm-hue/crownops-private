@@ -51,6 +51,7 @@ def setup_code_hash():
     value=(SETUP_TOKEN_HASH or os.getenv('CROWNOPS_SETUP_CODE_HASH','')).strip().lower()
     return value if re.fullmatch(r'[0-9a-f]{64}',value) else ''
 from .pricing import calculate_with_overrides
+from .pricing_policy import pricing_policy as require_pricing_policy
 from .operations import check_fleet_dispatch, require_hos_dispatch_verification
 from .job_planning import can_plan_jobs, require_planner, planning_resources
 from .staff_records import can_view_pay, resolve_invited_employee
@@ -735,7 +736,7 @@ def create_app(database_path=None, *, core_pilot=False):
             p=one(db,'SELECT * FROM pricing_versions WHERE id=?',(data.get('pricing_id',''),))
         if not p:raise HTTPException(422,'Select a pricing snapshot.')
         try:
-            with closing(connect(path)) as db:return calculate_with_overrides(data,p,db)
+            with closing(connect(path)) as db:return (require_pricing_policy(db) and calculate_with_overrides(data,p,db))
         except (ValueError,TypeError,KeyError) as e:raise HTTPException(422,str(e))
 
     @app.get('/api/quotes')
@@ -754,7 +755,7 @@ def create_app(database_path=None, *, core_pilot=False):
             p=one(db,'SELECT * FROM pricing_versions WHERE id=?',(data.get('pricing_id',''),))
             if not p:raise HTTPException(422,'Select a pricing snapshot.')
             try:
-                result=calculate_with_overrides(data,p,db)
+                result=(require_pricing_policy(db) and calculate_with_overrides(data,p,db))
                 number(data.get('deposit_required',300),'Required deposit',0,100000)
             except (ValueError,TypeError,KeyError) as e:raise HTTPException(422,str(e))
             rev=db.execute('SELECT coalesce(max(revision),0)+1 FROM quotes WHERE lead_id=?',(lead['id'],)).fetchone()[0]
@@ -804,7 +805,7 @@ def create_app(database_path=None, *, core_pilot=False):
                 if inputs.get('template_key'):
                     from .sales_crm_v6 import calculate as calculate_template_quote
                     result=calculate_template_quote(db,inputs)
-                else:result=calculate_with_overrides(inputs,p,db)
+                else:result=(require_pricing_policy(db) and calculate_with_overrides(inputs,p,db))
             except (ValueError,TypeError,KeyError) as e:raise HTTPException(422,str(e))
             rev=db.execute('SELECT coalesce(max(revision),0)+1 FROM quotes WHERE lead_id=?',(lead['id'],)).fetchone()[0]
             snapshot={k:lead.get(k,'') for k in LEAD_FIELDS}
@@ -1603,5 +1604,7 @@ def create_app(database_path=None, *, core_pilot=False):
     register_company_profile(app,path,auth)
     from .pricing_policy import register_pricing_policy
     register_pricing_policy(app,path,auth)
+    from .branding import register_branding
+    register_branding(app,path)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app

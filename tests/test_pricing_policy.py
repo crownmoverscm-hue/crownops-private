@@ -99,7 +99,7 @@ class CompanyPricingTests(unittest.TestCase):
 
     def test_policy_requires_manager_complete_values_and_explicit_approval(self):
         self.assertEqual(self.save('sales').status_code, 403)
-        bad = [{'approved': False}, {'local_fuel_per_truck': ''}, {'truck_minimums': [[9, 1]]}, {'long_distance_km_buffer': '0.5'},
+        bad = [{'approved': 'yes'}, {'local_fuel_per_truck': ''}, {'truck_minimums': [[9, 1]]}, {'long_distance_km_buffer': '0.5'},
                {'junk_tiers': {'single': ['x', '1']}}, {'limited_liability_text': '<b>x</b>'}, {'surprise': 1}]
         for change in bad:
             with self.subTest(change=change):

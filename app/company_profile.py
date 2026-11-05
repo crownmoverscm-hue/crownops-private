@@ -34,6 +34,7 @@ LEGACY_PROFILE = {
     'timezone': 'America/Toronto',
     'local_time_label': 'Montréal time',
     'local_time_label_fr': 'heure de Montréal',
+    'brand_color': '',
 }
 
 # Legacy-only defaults for the original Crown Movers installation. They are used ONLY
@@ -67,7 +68,9 @@ LEGACY_COMMUNICATIONS = {
 
 EMAIL = re.compile(r'[^\s@]+@[^\s@]+\.[^\s@]+')
 PHONE_CHARS = re.compile(r'[0-9+()\-. ]+')
-EDITABLE = ('name', 'short_name', 'phone', 'email', 'timezone', 'local_time_label', 'local_time_label_fr')
+EDITABLE = ('name', 'short_name', 'phone', 'email', 'timezone', 'local_time_label', 'local_time_label_fr', 'brand_color')
+LOGO_KEY = 'company_logo'
+COLOR = re.compile(r'#[0-9a-fA-F]{6}')
 
 
 def _clean(value, label, limit, required=False):
@@ -95,6 +98,64 @@ def phone_tel(phone):
     return digits
 
 
+def _brand_color(value):
+    value = _clean(value, 'Brand colour', 7)
+    if value and not COLOR.fullmatch(value):
+        raise HTTPException(422, 'Enter the brand colour as #RRGGBB, for example #1f6feb.')
+    return value.lower()
+
+
+def store_logo(db, raw, actor):
+    """Re-encode an uploaded PNG/JPEG/WebP as a small PNG; SVG and other formats are refused."""
+    from io import BytesIO
+    from PIL import Image, UnidentifiedImageError
+    if not raw or len(raw) > 2_000_000:
+        raise HTTPException(422, 'Upload a PNG, JPEG or WebP logo smaller than 2 MB.')
+    try:
+        with Image.open(BytesIO(raw)) as img:
+            if img.format not in ('PNG', 'JPEG', 'WEBP'):
+                raise HTTPException(422, 'Upload a PNG, JPEG or WebP logo. Other formats, including SVG, are not accepted.')
+            if img.width * img.height > 16_000_000 or max(img.size) > 6000:
+                raise HTTPException(422, 'The logo image is too large. Use an image under 6000 pixels per side.')
+            img.load()
+            logo = img.convert('RGBA')
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
+        raise HTTPException(422, 'The logo could not be read as an image.')
+    logo.thumbnail((512, 512))
+    out = BytesIO(); logo.save(out, 'PNG', optimize=True)  # re-encoding drops metadata and any trailing data
+    import base64, hashlib
+    data = out.getvalue()
+    put_setting(db, LOGO_KEY, {'png_b64': base64.b64encode(data).decode(), 'width': logo.width, 'height': logo.height,
+                               'sha256': hashlib.sha256(data).hexdigest(), 'updated_at': now()})
+    audit(db, actor, 'Company logo updated', 'settings', LOGO_KEY, {'bytes': len(data), 'width': logo.width, 'height': logo.height})
+    return {'width': logo.width, 'height': logo.height, 'bytes': len(data)}
+
+
+def setup_status(db):
+    """One owner-facing checklist: incomplete, pending approval or approved for each area."""
+    from .pricing_policy import policy_status
+    from .business_zone import current_zone
+    from datetime import datetime
+    profile = company_profile(db)
+    items = []
+    legacy = profile['mode'] == LEGACY_MODE
+    items.append({'key': 'identity', 'label': 'Company identity and contact',
+                  'state': 'approved' if profile['configured'] else ('legacy' if legacy else 'incomplete')})
+    items.append({'key': 'logo', 'label': 'Logo (optional)', 'state': 'approved' if settings(db, LOGO_KEY) else 'optional'})
+    pricing = policy_status(db)
+    items.append({'key': 'pricing', 'label': 'Pricing policy', 'state': ('legacy' if pricing['source'] == LEGACY_MODE else 'approved') if pricing['configured']
+                  else ('pending approval' if pricing.get('draft') else 'incomplete')})
+    today = datetime.now(current_zone()).date().isoformat()
+    rates = db.execute('SELECT count(*) FROM annual_rate_periods WHERE active=1 AND end_date>=?', (today,)).fetchone()[0]
+    items.append({'key': 'rates', 'label': 'Hourly crew rates', 'state': 'approved' if rates else 'incomplete', 'count': rates})
+    billing = settings(db, 'billing_policy', {}) or {}
+    terms = billing.get('terms') or {}
+    items.append({'key': 'billing', 'label': 'Tax and invoice settings',
+                  'state': 'approved' if billing.get('approved') and (terms.get('issuer') or {}).get('name') else ('pending approval' if billing else 'incomplete')})
+    required = [i for i in items if i['key'] != 'logo']
+    return {'items': items, 'ready': all(i['state'] in ('approved', 'legacy') for i in required), 'mode': profile['mode']}
+
+
 def validate_profile(data):
     if not isinstance(data, dict):
         raise HTTPException(422, 'Send the company profile as an object.')
@@ -102,6 +163,9 @@ def validate_profile(data):
     if unknown:
         raise HTTPException(422, 'Unknown company profile field: ' + sorted(unknown)[0] + '.')
     name = _clean(data.get('name'), 'Company name', 120, True)
+    for label, value in (('Company name', data.get('name')), ('Short name', data.get('short_name'))):
+        if isinstance(value, str) and any(c in value for c in '`${}\\'):
+            raise HTTPException(422, f'{label} cannot contain ` $ {{ }} or backslash characters.')
     short_name = _clean(data.get('short_name'), 'Short name', 60) or name
     phone = _clean(data.get('phone'), 'Company phone', 40, True)
     if not PHONE_CHARS.fullmatch(phone) or not 7 <= len(re.sub(r'\D', '', phone)) <= 15:
@@ -123,6 +187,7 @@ def validate_profile(data):
         'timezone': zone,
         'local_time_label': _clean(data.get('local_time_label'), 'Local time label', 60),
         'local_time_label_fr': _clean(data.get('local_time_label_fr'), 'French local time label', 60),
+        'brand_color': _brand_color(data.get('brand_color')),
     }
 
 
@@ -181,7 +246,7 @@ def company_profile(db):
     if identity_mode(db) == LEGACY_MODE:
         return {**LEGACY_PROFILE, 'configured': False, 'ready': True, 'mode': LEGACY_MODE, 'version': 0, 'updated_at': ''}
     return {'name': 'Moving company', 'short_name': 'the moving company', 'phone': '', 'phone_tel': '', 'email': '',
-            'timezone': 'America/Toronto', 'local_time_label': '', 'local_time_label_fr': '',
+            'timezone': 'America/Toronto', 'local_time_label': '', 'local_time_label_fr': '', 'brand_color': '',
             'configured': False, 'ready': False, 'mode': UNCONFIGURED_MODE, 'version': 0, 'updated_at': ''}
 
 
@@ -276,6 +341,40 @@ def store_profile(db, data, actor):
 
 
 def register_company_profile(app, path, auth):
+    from fastapi import File, UploadFile
+    from fastapi.responses import Response
+
+    @app.get('/api/company/setup-status')
+    def read_setup_status(u=Depends(auth)):
+        require_role(u, OFFICE)
+        with closing(connect(path)) as db:
+            return setup_status(db)
+
+    @app.post('/api/company/logo')
+    async def upload_logo(file: UploadFile = File(...), u=Depends(auth)):
+        require_role(u, MANAGERS)
+        raw = await file.read(2_000_001)
+        with transaction(path) as db:
+            return store_logo(db, raw, u['id'])
+
+    @app.delete('/api/company/logo')
+    def remove_logo(u=Depends(auth)):
+        require_role(u, MANAGERS)
+        with transaction(path) as db:
+            db.execute('DELETE FROM settings WHERE key=?', (LOGO_KEY,))
+            audit(db, u['id'], 'Company logo removed', 'settings', LOGO_KEY)
+        return {'removed': True}
+
+    @app.get('/api/company/logo')
+    def read_logo():
+        import base64
+        with closing(connect(path)) as db:
+            logo = settings(db, LOGO_KEY)
+        if not logo:
+            raise HTTPException(404, 'No company logo is set.')
+        return Response(base64.b64decode(logo['png_b64']), media_type='image/png',
+                        headers={'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'ETag': '"' + logo['sha256'][:32] + '"'})
+
     @app.get('/api/company/profile')
     def read_profile(u=Depends(auth)):
         require_role(u, OFFICE)
