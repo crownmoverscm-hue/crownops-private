@@ -262,6 +262,71 @@ The Montréal-based long-distance city presets are legacy-only. **Hourly crew ra
 - **COM-4b:** seeded quote templates (`sales_crm_v6.py:375-380`) carry Crown's liability wording ("$0.60/lb per article") and fragile-item policies on every installation. They are owner-editable, but new companies should start with templates that require review.
 - **Brand changes and caching:** browsers re-download branded assets (no-cache), but a page that is already open keeps the previous text until it is reloaded.
 
+### 2026-11-05 — Session 6 (local commits only; repository still public)
+
+| Commit | Item | Summary |
+|---|---|---|
+| `d263559` | Migrations, REL-3 | Versioned schema (`user_version` plus `schema_migrations`), atomic steps, newer-schema refusal, production backup gate, `db-status`; release identity `0.13.0-dev` |
+| `ec0b289` | Backups and recovery | `backup-run` (restore test, retention, status), manifest versions, newer-schema restore refused, full recovery drill; retention ordering bug fixed |
+| `c0f50b9` | White-label security | Context-specific encoding replaces the character blocklist; adversarial tests |
+| `42c6b60` | COM-4b | Each company writes and approves its own quote templates and liability wording; Crown's templates and $35 material stay legacy-only; testimonial credit comes from the policy |
+| `cf0db1a` | Monitoring | `ops-check` / `/api/ops/status`; all background jobs guarded (intake previously stopped on its first error) |
+| `e1c28e6` | Provisioning and pilot validation | Two companies via documented commands and API only, lead to verified payment, backup and monitoring; two product defects fixed; deployment and operations runbooks |
+
+**Defects found and fixed this session:**
+- Backup retention could keep the wrong archives when several ran within the same second.
+- The inquiry intake loop died silently on its first error.
+- New companies could not create any estimate, because no pricing snapshot existed for them.
+- Saving a job plan without `quote_id` unlinked the accepted estimate, which then blocked invoicing.
+- The media program hardcoded a $50 testimonial credit.
+
+**Backup drill (synthetic company, measured):**
+
+| Step | Time |
+|---|---|
+| Backup | 0.025 s |
+| Backup plus restore test | 0.047 s |
+| Restore | 0.016 s |
+| Archive size | 38 KB |
+
+- **Restored:** 14 business tables plus company, pricing, logo, billing and terms settings, an uploaded document (byte-identical), and the invoice state.
+- **After restore:** old sessions are rejected, and the restored app serves the issued invoice in the company's time zone.
+- **Refused:** corrupt, truncated, tampered, newer-schema and missing archives, and any restore over an existing installation.
+- **Recovery point:** the last successful backup.
+- **Recovery time:** restore time plus redeploy. Real installations scale with data size.
+
+**Migration evidence:**
+- A clean install and a simulated existing (unversioned) Crown database with data and a missing column both reach version 2 with no data loss.
+- Repeating initialization is a no-op.
+- A failed step rolls back completely.
+- A version gap is refused, and a newer database is refused before anything is written.
+
+**White-label security:**
+- **Inert hostile names:** names containing quotes, backticks, `${…}`, backslashes, emoji, `*/` or `'+alert(1)+'` evaluate to the exact original string in Node in single-quoted, double-quoted and template literals and in a regular expression, with no side effects.
+- **No asset damage:** with a hostile profile, all 86 rewritten assets stay valid. HTML gains no tags or scripts, CSS gains no comment terminators, and the "CrownOps" product references are unchanged.
+- **Never stale:** branding is re-read on every request (about 21 ms in total to rewrite all assets).
+
+## 12. Commercial pilot release gates (2026-11-05)
+
+| Area | Requirement | Status | Evidence or gap |
+|---|---|---|---|
+| Core CRM | Complete moving workflow passes | **Met (synthetic)** | `test_documented_provisioning.py`: inquiry → verified payment, two companies |
+| Company onboarding | Repeatable without source changes | **Met (local)** | Deployment runbook plus documented-process test; operator steps use `manage.py` |
+| Isolation | Separate installations verified | **Met (local)** | Separate processes, databases, secrets and sessions; cross-session access gets 401 |
+| Security | No unresolved critical vulnerabilities | **Partially met** | No known critical defect in the code. The **repository is public** (D1). No external penetration test. MFA not yet tested on a real device. |
+| Pricing | Approved company-specific policies | **Met** | COM-4; Crown golden outputs unchanged |
+| Branding | No Crown leaks | **Met** | Byte-identical for Crown; no Crown identity in any asset or page for other companies |
+| Legal templates | Company-approved terms required | **Met (mechanism)** | Templates and booking terms must be written and approved by the company. **Wording needs legal review (D14).** |
+| Database | Versioned migrations tested | **Met** | `test_migrations.py` |
+| Backups | Successful restore drill | **Met (local)** | `test_backup_drill.py`. Encrypted offsite storage is not set up (operator task). |
+| Monitoring | Critical failures observable | **Met (local)** | `ops-check`; external alerting not connected (needs account authorization) |
+| Operations | Deployment and recovery runbooks | **Met** | Both runbooks written |
+| Tests | Required suites pass | **Met locally** | 723 Python, 20 Node, 12 browser suites. **GitHub CI not run** (repository public). |
+| External integrations | Verified or listed as pilot limitations | **Pilot limitation** | Gmail, QuickBooks and Square have **not** been verified live for commercial installations |
+| Business approvals | Licensing, privacy, IP, contracts | **Not met** | D13 licensing model, D14 legal/privacy/IP, the customer agreement and hosting region remain open |
+
+**Readiness:** **PILOT CANDIDATE.** All technical gates pass locally on synthetic data. It is **not PILOT READY**: business approvals (D13, D14) are open, the repository is public (D1), there is no hosted deployment or GitHub CI run, and live provider sandboxes and real-device MFA are unverified.
+
 ## 7. Test results
 
 | Run | Command | Result |
@@ -281,6 +346,8 @@ The Montréal-based long-distance city presets are legacy-only. **Hourly crew ra
 | Session 5, isolated (after `5c312ec`) | `python tests/run_isolated.py --min-tests 694 --jobs 4` | **61 modules, 694 tests, 0 failures** |
 | Session 5, browser | 11 CI suites plus the new `company_settings` | **12 out of 12 pass** |
 | Session 5, JS | `node --check app/static/*.js`; 20 Node tests | All pass |
+| Session 6, isolated (after `e1c28e6`) | `python tests/run_isolated.py --min-tests 720 --jobs 4` | **66 modules, 723 tests, 0 failures** |
+| Session 6, browser and JS | 12 browser suites, `node --check`, 20 Node tests | **All pass** |
 | JavaScript syntax | `node --check app/static/*.js` | All pass |
 | Node tests | `node --test tests/*.test.cjs` | 20 out of 20 pass |
 | Browser suites (Playwright, pre-installed Chromium) | `python tests/browser/run_mobile.py <suite>`, all 11 CI suites with CI environment variables | **11 out of 11 pass** after COM-1 (wix_sync, inbox, payroll_periods, hours_costs, staff_portal, client_participation, browser_recovery, estimate_delivery, mobile_schedule, today_workspace, team_chat) |
@@ -374,19 +441,11 @@ _Previous note:_ Crown internal use **PILOT CANDIDATE** (unchanged). Commercial 
 
 ## 10. Next executable task
 
-**Next priority: operational readiness for a paid pilot.**
-1. **OPS-1:** an offsite backup and restore drill on a disposable installation, with timings recorded and identity and pricing preserved after restore.
-2. **OPS-2:** a provisioning runbook. Steps per installation:
-   - create a new service, volume and secret keys
-   - `manage.py company-profile`
-   - `setup-code`, then web owner setup
-   - set pricing and rates, plus tax and invoice settings
-   - `doctor` reports ready
-
-   Automate it as a script that reproduces the two-installation test against real deployments.
-3. **Migration versioning:** add a `schema_version` table and numbered migrations around the existing idempotent `initialize()` steps.
-4. **COM-4b:** neutral, review-required quote templates for new installations.
-5. **REL:** when the repository is private, push, open a draft PR and run GitHub CI (blocked by D1).
+**Next priority: a hosted pilot rehearsal (needs authorization for any paid resource).**
+1. With Jonathan's approval, provision one disposable hosted installation following the deployment runbook (TLS, secrets store, scheduled `backup-run`, `ops-check` alerting). Measure real backup and restore times.
+2. Run provider **sandbox** verification (Gmail test mailbox, QuickBooks sandbox, Square sandbox) on that installation only.
+3. Make the repository private (D1), then push, open a draft PR and run GitHub CI.
+4. In parallel, the business track: licensing model (D13), legal review of the template and terms process and privacy (D14), customer agreement.
 
 _Previous next-task note (completed server side in `03c3130`):_ COM-2b: brand the client-facing pages from `/api/company/public-profile`:
 - `portal.html` / `client*.js`
