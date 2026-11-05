@@ -645,9 +645,11 @@ def register_operations(app,path,auth):
             if offer:
                 from .client_participation import video_window
                 if not video_window(db,j):raise HTTPException(409,'Apply the credit before issuing or collecting the final invoice.')
-            terms=json.loads(inv['terms_json']);terms['testimonial_credit_cents']=5000;terms['testimonial_credit_mode']=json.loads(one(db,'SELECT snapshot_json FROM media_release_terms WHERE release_id=?',(rid,))['snapshot_json'])['credit_mode']
+            from .pricing_policy import pricing_policy,testimonial_credit_cents
+            credit_cents=testimonial_credit_cents(pricing_policy(db))
+            terms=json.loads(inv['terms_json']);terms['testimonial_credit_cents']=credit_cents;terms['testimonial_credit_mode']=json.loads(one(db,'SELECT snapshot_json FROM media_release_terms WHERE release_id=?',(rid,))['snapshot_json'])['credit_mode']
             if calculate_invoice(terms,json.loads(inv['actual_json']),verified_allocated(db,inv['id']))['balance_cents']<0:raise HTTPException(409,'This credit would require a refund. Ask management to reconcile it first.')
-            rec=dict(id=uid('CREDIT'),lead_id=r['lead_id'],program='testimonial',release_id=rid,invoice_id=inv['id'],amount_cents=5000,state='Applied',author=u['id'],created_at=now());insert(db,'project_credits',rec)
+            rec=dict(id=uid('CREDIT'),lead_id=r['lead_id'],program='testimonial',release_id=rid,invoice_id=inv['id'],amount_cents=credit_cents,state='Applied',author=u['id'],created_at=now());insert(db,'project_credits',rec)
             db.execute('UPDATE job_invoices SET terms_json=?,version=version+1,updated_at=? WHERE id=?',(dumps(terms),now(),inv['id']))
             audit(db,u['id'],'Optional testimonial participation credit applied','job_invoices',inv['id'],{'amount_cents':5000,'mode':cfg['credit_mode'],'release_id':rid,'not_a_public_review_incentive':True})
         return {'ok':True,'credit_cents':5000,'published':False}

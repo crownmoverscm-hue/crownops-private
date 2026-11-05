@@ -15,14 +15,10 @@ from .pricing import seasonal_rate, number as pricing_number
 from .inquiry_intake import intake_values, photo_link
 from .client_communications import pending_scope_changes, quote_scope_current, booking_details, booking_confirmation_key
 from .company_profile import company_profile, profile_or_legacy, time_note, team_signoff
+from .pricing_policy import LEGACY_POLICY, pricing_policy, minimum_trucks, D as policy_decimal
 from .business_zone import BUSINESS_ZONE, zone_name
 
 MONTREAL=BUSINESS_ZONE
-LOCAL_FUEL=Decimal("35.00")
-EXTRA_TRUCK=Decimal("25.00")
-LONG_KM=Decimal("0.94")
-LONG_DISTANCE_KM_BUFFER=Decimal("1.05")
-LONG_TRANSPORT_MULTIPLIER=Decimal("1.15")
 HOS_MAX_DRIVING_HOURS=Decimal("13")
 HOS_MAX_ON_DUTY_HOURS=Decimal("14")
 HOS_MAX_ELAPSED_HOURS=Decimal("16")
@@ -42,14 +38,7 @@ LONG_DISTANCE_CITY_PRESETS=[
  ("Saskatoon","SK",3050),("Calgary","AB",3600),("Edmonton","AB",3800),("Lethbridge","AB",3500),
  ("Kelowna","BC",4300),("Vancouver","BC",4550),("Prince George","BC",4400),
 ]
-JUNK={
- "single":("Single Item Disposal",Decimal("175.00")),
- "quarter":("1/4 Truck - approx. 5 ft",Decimal("400.00")),
- "half":("1/2 Truck - approx. 10 ft",Decimal("800.00")),
- "three_quarter":("3/4 Truck - approx. 15 ft",Decimal("1200.00")),
- "full":("Full Truck - 20 ft container",Decimal("1600.00")),
-}
-JUNK_LABOUR=Decimal("80.00")
+# Pricing values (fuel, truck fee, distance, junk tiers, minimums) live in app/pricing_policy.py.
 
 def number(*args,**kwargs):
     try:return pricing_number(*args,**kwargs)
@@ -58,12 +47,9 @@ def number(*args,**kwargs):
 def money(v):
     return int((Decimal(str(v))*100).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
 
-def minimum_trucks_for_movers(movers):
-    """Launch rule for minimum truck count by crew size (Crown Movers policy; see delivery plan COM-4)."""
-    movers=int(movers)
-    if movers>=6:return 3
-    if movers>=4:return 2
-    return 1
+def minimum_trucks_for_movers(movers,policy=None):
+    """Minimum trucks for a crew size from the company pricing policy (COM-4)."""
+    return minimum_trucks(policy or LEGACY_POLICY,int(movers))
 
 def long_distance_hos_plan(true_drive_hours,service_high_hours):
     """Preliminary Quebec heavy-vehicle HOS planning screen; final dispatch requires driver-specific log/cycle verification."""
@@ -80,9 +66,10 @@ def long_distance_hos_plan(true_drive_hours,service_high_hours):
       "dispatch_verification_required":True
     }
 
-def service_minimum_hours(data,service):
-    """Apply Crown's standard minimum, with the reduced minimum reserved for small afternoon local jobs."""
-    requested=number(data.get("minimum_hours",3),"Minimum service hours",0,24)
+def service_minimum_hours(data,service,policy=None):
+    """Apply the company minimum, with the reduced minimum reserved for small afternoon local jobs."""
+    policy=policy or LEGACY_POLICY
+    requested=number(data.get("minimum_hours",policy["default_minimum_hours"]),"Minimum service hours",0,24)
     small=bool(data.get("small_afternoon_job",False))
     start_window=str(data.get("start_window") or "morning").strip().lower()
     if small:
@@ -90,9 +77,9 @@ def service_minimum_hours(data,service):
             raise HTTPException(422,"The small-afternoon minimum is available only for local moving or packing services.")
         if start_window!="afternoon":
             raise HTTPException(422,"Small afternoon jobs must use the Afternoon arrival window.")
-        return Decimal("1.5"),True
+        return policy_decimal(policy,"small_afternoon_minimum_hours"),True
     if service in ("Moving","Packing"):
-        return max(requested,Decimal("3")),False
+        return max(requested,policy_decimal(policy,"moving_packing_minimum_hours")),False
     return requested,False
 
 def norm_email(v): return str(v or "").strip().lower()
@@ -404,7 +391,7 @@ def rate_for(db,day,movers):
     if len(a)>1:raise HTTPException(409,"This date matches more than one active rate period. Fix Pricing & rates first.")
     if a:return Decimal(a[0][f"rate_{movers}_cents"])/100,a[0]["label"]
     p=one(db,"SELECT * FROM pricing_versions ORDER BY approved DESC,created_at DESC LIMIT 1")
-    if not p:raise HTTPException(422,"No pricing calendar is available.")
+    if not p:raise HTTPException(422,"No hourly rates are set for this date. Add your crew rates in Pricing & rates before preparing estimates.")
     try:
         r,label=seasonal_rate(json.loads(p["rates_json"]),day,movers);return Decimal(r),label
     except Exception as e:raise HTTPException(422,str(e))
@@ -432,16 +419,24 @@ def materials(db,requested):
     return out,total
 
 def calculate(db,data):
+    """Price an estimate with this company's approved policy; refuse when none is configured."""
+    policy=pricing_policy(db)
+    result=_calculate(db,data,policy)
+    if policy["source"]!="legacy-crown":result["pricing_policy_version"]=policy["version"]
+    return result
+
+def _calculate(db,data,policy):
     service=str(data.get("service_type") or "Moving")
     language="French" if str(data.get("language","English")).lower().startswith("fr") else "English"
     if service=="Junk Removal":
         tier=str(data.get("junk_tier") or "quarter")
-        if tier not in JUNK:raise HTTPException(422,"Choose a valid junk-removal tier.")
-        name,base=JUNK[tier];units=int(number(data.get("junk_extra_half_hours",0),"Extra labour units",0,50))
-        extra=JUNK_LABOUR*units;total=base+extra
+        tiers=policy["junk_tiers"]
+        if tier not in tiers:raise HTTPException(422,"Choose a valid junk-removal tier.")
+        name,base=tiers[tier][0],Decimal(tiers[tier][1]);units=int(number(data.get("junk_extra_half_hours",0),"Extra labour units",0,50))
+        extra=policy_decimal(policy,"junk_extra_labour")*units;total=base+extra
         junk_names={"single":"Disposition d'un article","quarter":"1/4 camion - env. 5 pi","half":"1/2 camion - env. 10 pi","three_quarter":"3/4 camion - env. 15 pi","full":"Camion complet - conteneur 20 pi"} if language=="French" else {}
         lines=[{"name":junk_names.get(tier,name),"qty":1,"unit_cents":money(base),"total_cents":money(base)}]
-        if units:lines.append({"name":"Main-d'oeuvre supplementaire - 30 minutes / 2 demenageurs" if language=="French" else "Additional on-site labour - 30 minutes / 2 crew","qty":units,"unit_cents":money(JUNK_LABOUR),"total_cents":money(extra)})
+        if units:lines.append({"name":"Main-d'oeuvre supplementaire - 30 minutes / 2 demenageurs" if language=="French" else "Additional on-site labour - 30 minutes / 2 crew","qty":units,"unit_cents":money(policy_decimal(policy,"junk_extra_labour")),"total_cents":money(extra)})
         mats,mat_total=materials(db,data.get('materials') or [])
         other=number(data.get('other_amount',0),'Other agreed charges',0,100000);discount=number(data.get('discount_amount',0),'Discount',0,100000)
         if discount>total+Decimal(mat_total)/100+other:raise HTTPException(422,'Discount exceeds the estimate.')
@@ -459,14 +454,14 @@ def calculate(db,data):
     except Exception:raise HTTPException(422,"Choose the service date.")
     movers=int(number(data.get("movers",2),"Movers",2,6));trucks=int(number(data.get("trucks",1),"Trucks",1,8))
     if Decimal(str(data.get('movers',2)))!=movers or Decimal(str(data.get('trucks',1)))!=trucks:raise HTTPException(422,'Movers and trucks must be whole numbers.')
-    minimum_trucks=minimum_trucks_for_movers(movers)
+    minimum_trucks=minimum_trucks_for_movers(movers,policy)
     if trucks<minimum_trucks:
         raise HTTPException(422,f"This service requires at least {minimum_trucks} truck(s) for a crew of {movers} movers.")
     suggested,source=rate_for(db,day,movers)
     override=data.get("hourly_rate");rate=number(override,"Hourly rate",1,5000) if override not in (None,"") else suggested
     low=number(data.get("hours_low",3),"Estimated low hours",.25,100);high=number(data.get("hours_high",low),"Estimated high hours",.25,120)
     if high<low:raise HTTPException(422,"Estimated high hours cannot be lower than low hours.")
-    minimum,small_afternoon=service_minimum_hours(data,service);low=max(low,minimum);high=max(high,minimum)
+    minimum,small_afternoon=service_minimum_hours(data,service,policy);low=max(low,minimum);high=max(high,minimum)
     transport_hours=number(data.get("transport_hours",1),"True driving / transportation hours",0,100)
     fixed=data.get("fixed_transport")
     if data.get('transport_mode') not in (None,'','local_amount','hourly_base','long_distance'):raise HTTPException(422,'Choose local or long-distance transportation pricing.')
@@ -476,16 +471,16 @@ def calculate(db,data):
         billable_transport_hours=Decimal("0")
         show_transport_hours=Decimal("0")
     elif service=="Long Distance":
-        billable_transport_hours=transport_hours*LONG_TRANSPORT_MULTIPLIER if transport_hours>=1 else transport_hours
+        billable_transport_hours=transport_hours*policy_decimal(policy,"long_distance_transport_multiplier") if transport_hours>=1 else transport_hours
         transport=rate*billable_transport_hours
         show_transport_hours=transport_hours
     else:
         billable_transport_hours=transport_hours
-        transport=rate*transport_hours+EXTRA_TRUCK*max(0,trucks-1)
+        transport=rate*transport_hours+policy_decimal(policy,"extra_truck_fee")*max(0,trucks-1)
         show_transport_hours=transport_hours
-    km=number(data.get("distance_km",0),"Actual round-trip distance km",0,10000);km_rate=number(data.get("distance_rate",LONG_KM),"Distance rate",0,20)
-    adjusted_km=km*LONG_DISTANCE_KM_BUFFER if service=="Long Distance" else km
-    local_fuel=number(data.get('local_fuel_rate',LOCAL_FUEL),'Local fuel rate per truck',0,10000)
+    km=number(data.get("distance_km",0),"Actual round-trip distance km",0,10000);km_rate=number(data.get("distance_rate",policy_decimal(policy,"long_distance_km_rate")),"Distance rate",0,20)
+    adjusted_km=km*policy_decimal(policy,"long_distance_km_buffer") if service=="Long Distance" else km
+    local_fuel=number(data.get('local_fuel_rate',policy_decimal(policy,'local_fuel_per_truck')),'Local fuel rate per truck',0,10000)
     fuel=adjusted_km*km_rate*trucks if service=="Long Distance" else local_fuel*trucks
     mats,mat_total=materials(db,data.get("materials") or [])
     hos_plan=long_distance_hos_plan(transport_hours,high) if service=="Long Distance" else None
@@ -515,9 +510,9 @@ def calculate(db,data):
     return {"currency":"CAD","before_tax":True,"service_type":service,"language":language,"hourly_rate_cents":money(rate),
       "suggested_hourly_rate_cents":money(suggested),"rate_source":source,"service_low":float(low),"service_high":float(high),
       "minimum_hours":float(minimum),"transport_hours":float(show_transport_hours),"billable_transport_hours":float(billable_transport_hours),"transport_cents":money(transport),
-      "transport_multiplier":float(LONG_TRANSPORT_MULTIPLIER) if service=="Long Distance" and fixed in (None,"") and transport_hours>=1 else 1.0,
-      "fuel_cents":money(fuel),"truck_fee_cents":money(EXTRA_TRUCK*max(0,trucks-1)),"distance_km":float(km),
-      "adjusted_distance_km":float(adjusted_km),"distance_buffer_percent":5.0 if service=="Long Distance" else 0.0,
+      "transport_multiplier":float(policy_decimal(policy,"long_distance_transport_multiplier")) if service=="Long Distance" and fixed in (None,"") and transport_hours>=1 else 1.0,
+      "fuel_cents":money(fuel),"truck_fee_cents":money(policy_decimal(policy,"extra_truck_fee")*max(0,trucks-1)),"distance_km":float(km),
+      "adjusted_distance_km":float(adjusted_km),"distance_buffer_percent":float((policy_decimal(policy,"long_distance_km_buffer")-1)*100) if service=="Long Distance" else 0.0,
       "distance_rate_cents":money(km_rate),"materials_cents":mat_total,"other_cents":money(other),"discount_cents":money(discount),
       "service_low_cents":money(slo),"service_high_cents":money(shi),"low_cents":money(tlo),"high_cents":money(thi),
       "movers":movers,"trucks":trucks,"season":source,"line_items":lines,"small_afternoon_job":small_afternoon,
@@ -762,17 +757,24 @@ def register_sales_crm_v6(app,path,auth,public_url):
             mats=rows(db,"SELECT code,name,category,sell_cents FROM material_catalog WHERE active=1 ORDER BY category,name")
             a=account_for_lead(db,lead_id) if lead_id else None
             policy=settings(db,'billing_policy',{}) or {}
+        from .pricing_policy import policy_status
+        with closing(connect(path)) as db:pricing=policy_status(db)
+        policy=pricing['policy'] or {}
         presets=[]
-        for city,province,one_way in LONG_DISTANCE_CITY_PRESETS:
-            round_trip=Decimal(str(one_way))*2;adjusted=round_trip*LONG_DISTANCE_KM_BUFFER
+        # Distances are Crown's road distances from its Montréal base; other companies get none.
+        for city,province,one_way in (LONG_DISTANCE_CITY_PRESETS if pricing['source']=='legacy-crown' else []):
+            round_trip=Decimal(str(one_way))*2;adjusted=round_trip*policy_decimal(policy,"long_distance_km_buffer")
             presets.append({"key":(city+"-"+province).lower().replace(" ","-").replace(".",""),"city":city,"province":province,
               "one_way_km":float(one_way),"round_trip_km":float(round_trip),"adjusted_km":float(adjusted),
-              "gas_one_truck_cents":money(adjusted*LONG_KM)})
+              "gas_one_truck_cents":money(adjusted*policy_decimal(policy,"long_distance_km_rate"))})
         return {"client":a,"lead":l,"suggested_hourly_rate":float(rate) if rate is not None else None,"rate_source":source or "",
           "materials":mats,"long_distance_presets":presets,"can_manage_materials":u['role'] in ('owner','manager'),
           "billing_taxes":(policy.get('terms') or {}).get('taxes',[]) if policy.get('approved') else [],
-          "defaults":{"local_fuel_per_truck":35.0,"extra_truck_transport":25.0,"long_distance_per_km":0.94,
-            "long_distance_km_buffer_percent":5.0,"deposit":300.0,"limited_liability":"$0.60/lb per article"}}
+          "pricing_configured":pricing['configured'],"pricing_message":pricing.get('message',''),
+          "defaults":({"local_fuel_per_truck":float(policy_decimal(policy,"local_fuel_per_truck")),"extra_truck_transport":float(policy_decimal(policy,"extra_truck_fee")),
+            "long_distance_per_km":float(policy_decimal(policy,"long_distance_km_rate")),
+            "long_distance_km_buffer_percent":float((policy_decimal(policy,"long_distance_km_buffer")-1)*100),
+            "deposit":float(policy_decimal(policy,"default_deposit")),"limited_liability":policy["limited_liability_text"]} if pricing['configured'] else {})}
 
     @app.post("/api/crm/quotes/calculate")
     def calc(data:dict,u=Depends(auth)):
@@ -816,7 +818,7 @@ def register_sales_crm_v6(app,path,auth,public_url):
             if data.get('media_link'):
                 from .media_links import save_link
                 save_link(db,lid,{'url':data['media_link'],'label':'Quote photo / video folder'},u['id'])
-            inp["deposit_required"]=float(number(data.get("deposit_required",300) or 0,"Deposit",0,100000));inp["limited_liability"]="$0.60/lb per article"
+            quote_policy=pricing_policy(db);inp["deposit_required"]=float(number(data.get("deposit_required",quote_policy["default_deposit"]) or 0,"Deposit",0,100000));inp["limited_liability"]=quote_policy["limited_liability_text"]
             service=result["service_type"];language=result["language"];template_key=str(inp.get("template_key") or "").strip()
             tmpl=one(db,"SELECT * FROM crm_quote_templates WHERE template_key=? AND active=1",(template_key,))
             if not tmpl or tmpl["service_type"]!=service or tmpl["language"]!=language:

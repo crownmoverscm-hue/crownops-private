@@ -70,7 +70,8 @@ def seed_review_defaults(path):
                     code=f'{base}_{n}';n+=1
                 insert(db,'material_catalog',dict(id=uid('MAT'),code=code,name=item['name'],category=item['category'],sell_cents=item['sell_cents'],cost_cents=item['cost_cents'],quantity=item['quantity'],minimum=item['minimum'],location=item['location'],taxable=1,active=1,updated_by='migration',updated_at=now()))
         # Build an editable current/next-year rate calendar from the approved source snapshot once.
-        if not one(db,'SELECT id FROM annual_rate_periods LIMIT 1'):
+        from .company_profile import company_profile
+        if company_profile(db)['mode']=='legacy-crown' and not one(db,'SELECT id FROM annual_rate_periods LIMIT 1'):
             pv=one(db,'SELECT * FROM pricing_versions WHERE approved=1 ORDER BY created_at DESC LIMIT 1') or one(db,'SELECT * FROM pricing_versions ORDER BY created_at DESC LIMIT 1')
             if pv:
                 source=json.loads(pv['rates_json'])

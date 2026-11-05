@@ -12,6 +12,9 @@ def seed_pricing(path):
     src=json.loads((ROOT/'config/workbook_pricing_snapshot.json').read_text())
     with transaction(path) as db:
         if db.execute('SELECT count(*) FROM pricing_versions').fetchone()[0]:return
+        from .company_profile import company_profile
+        # Crown's workbook rates belong only to the original installation (COM-4).
+        if company_profile(db)['mode']!='legacy-crown':return
         insert(db,'pricing_versions',dict(id='PRICE-WORKBOOK-SNAPSHOT',label='Workbook seasonal rates - owner review required',
             rates_json=dumps(src['rates']),settings_json=dumps(src['settings']),created_at=now()))
 

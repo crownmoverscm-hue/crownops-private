@@ -1601,5 +1601,7 @@ def create_app(database_path=None, *, core_pilot=False):
     register_team_chat(app,path,auth)
     from .company_profile import register_company_profile
     register_company_profile(app,path,auth)
+    from .pricing_policy import register_pricing_policy
+    register_pricing_policy(app,path,auth)
     app.mount('/static',StaticFiles(directory=ROOT/'app'/'static'),name='static')
     return app

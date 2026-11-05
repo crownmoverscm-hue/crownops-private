@@ -15,12 +15,12 @@ from .store import connect, transaction, one, rows, insert, audit, uid, now, dum
 from .platform_common import (settings, put_setting, require_role, invoice_job, text, stamp_hash,
     business_day, queue_message, add_task)
 from .photo_safety import READY_STATUSES
+from .pricing_policy import pricing_policy, testimonial_credit_cents, disclosure_text
 
 COOKIE='crownops_participation'
 STAFF={'owner','manager','sales','crew'}
 from .company_profile import LEGACY_REVIEW_PROFILES as PROFILES
 from .business_zone import BUSINESS_ZONE, zone_name
-DISCLOSURE='The customer received a $50 moving discount for participating in this testimonial.'
 
 def policy(db):
     # Only the original installation defaults to Crown's Google profiles; new companies add their own.
@@ -137,7 +137,7 @@ def register_client_participation(app,path,auth,public_url,secure):
             l=one(db,'SELECT * FROM leads WHERE id=?',(j['lead_id'],));rid=uid('CONSENT')
             release_text=cfg.get('release_text_fr') if str(data.get('language',l['language'])).lower().startswith('fr') and cfg.get('release_text_fr') else cfg['release_text']
             insert(db,'media_releases',dict(id=rid,lead_id=j['lead_id'],attachment_id=a['id'],customer_name=name,email=l['email'],release_version=cfg['version'],release_text=release_text,channels_json=dumps(channels),signed_at=now()))
-            insert(db,'media_release_terms',{'release_id':rid,'snapshot_json':dumps({'credit_mode':cfg['credit_mode'],'amount_cents':5000,'version':cfg['version'],'channels':channels,'job_id':j['id'],'disclosure':DISCLOSURE})})
+            insert(db,'media_release_terms',{'release_id':rid,'snapshot_json':dumps({'credit_mode':cfg['credit_mode'],'amount_cents':testimonial_credit_cents(pricing_policy(db)),'version':cfg['version'],'channels':channels,'job_id':j['id'],'disclosure':disclosure_text(pricing_policy(db))})})
             db.execute('UPDATE service_participation SET release_id=? WHERE job_id=?',(rid,j['id']))
             audit(db,'client-participation','Client signed optional video permission','media_releases',rid,{'job_id':j['id']})
             add_task(db,j['lead_id'],'Apply signed in-service video credit before issuing invoice',key='participation:'+rid)

@@ -245,12 +245,26 @@ def help_line(company, fr):
     return f"\n\nNeed a hand? Request a callback in your file or call {company['phone']}."
 
 
+def scheduling_data_exists(db):
+    for table in ('jobs', 'schedule_days', 'imported_schedule_events'):
+        try:
+            if db.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone():
+                return True
+        except Exception:  # table absent in minimal databases
+            continue
+    return False
+
+
 def store_profile(db, data, actor):
     current = company_profile(db)
     expected = data.get('version') if isinstance(data, dict) else None
     if type(expected) is not int or expected != current['version']:
         raise HTTPException(409, 'The company profile changed since you opened it. Refresh and review it before saving.')
     profile = validate_profile({k: v for k, v in data.items() if k != 'version'})
+    if profile['timezone'] != current['timezone'] and scheduling_data_exists(db):
+        # Stored instants are UTC; a new zone would silently re-label every booked arrival time.
+        raise HTTPException(409, 'The time zone cannot change after jobs, availability or imported schedules exist. '
+                                 'Booked arrival times would shift for clients and crews. Contact support to plan a reviewed migration.')
     profile['version'] = current['version'] + 1
     profile['updated_at'] = now()
     put_setting(db, SETTING_KEY, profile)
