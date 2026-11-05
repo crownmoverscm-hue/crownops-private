@@ -93,7 +93,7 @@ The test counts come from test names that match each capability. They show cover
 | COM-3 | Scheduling | Business timezone hardcoded to America/Toronto (37 `ZoneInfo` calls and 2 constants in 24 Python modules; 16 browser formatters in 11 scripts) | P0 | `grep` 2026-11-05 | `app/business_zone.py` (a `tzinfo` delegating to the company's `ZoneInfo`, including `fold`); loaded at startup and on profile save; `/business-zone.js` for pages | COM-1 | **Verified** (`423c50b`, `tests/test_business_zone.py`) | Toronto identical to `ZoneInfo` for every UTC hour across both 2026 transitions; Vancouver, Halifax and Regina booking holds, business days and presentation follow the company zone |
 | SEC-3 | Security | Every installation shared one hardcoded owner-setup hash in a public repository; anyone with Crown's setup code could claim Owner on a new company's installation | P0 | `app/main.py:44` (before `502715e`) | Per-installation `CROWNOPS_SETUP_CODE_HASH`; `manage.py setup-code`; web setup closed without it | — | **Verified** (`502715e`, `tests/test_installation_security.py`) | Another installation's code is refused; no hash in source |
 | COM-6a | Identity | New installations with no profile fell back to Crown's identity | P0 | — | Identity mode recorded once per database (`legacy-crown` if it already had users or leads, else `unconfigured`). Unconfigured installs refuse client messages, email, invoices and provider documents. Lead capture is never blocked. | COM-1 | **Verified** (`5503a28`, 6 tests) | Unconfigured install can save leads but sends nothing as anyone |
-| COM-4 | Pricing | Truck minimums, service minimums and rate import are Crown policy in code | P1 | `sales_crm_v6.py:60-82`, `seed.py`, `config/workbook_pricing_snapshot.json` | Move rules into owner-approved pricing settings; new installs start unapproved | — | Not started | A new company sets its own rules; Crown's results are unchanged |
+| COM-4 | Pricing | Crown's pricing rules were constants, and new installs were seeded with Crown's workbook rates as active, approved hourly rates | P0 | `sales_crm_v6.py` constants; `seed.py` and `review_features.seed_review_defaults` | `app/pricing_policy.py`: validated, owner-approved, versioned and audited policy. Crown keeps `LEGACY_POLICY`. New installs get no Crown rates, presets or defaults and must approve their own. | — | **Verified** (`f5f9805`, `tests/test_pricing_policy.py`, golden fixture) | 18 out of 18 Crown golden scenarios identical; company policy prices with its own values; estimates keep their snapshot |
 | COM-5 | Onboarding | Fresh installs seed Crown's mailboxes into `company_communications`. **The billing settings form pre-filled Crown's legal name, address and GST/QST registration numbers for any company** | P0 | `app/ux_features.py:55-64`, `app/operations.py:263-274` | Configured companies get empty, unapproved mailboxes, their own issuer details, and **no** tax registrations. Legacy constants are centralized in `company_profile.py`. | COM-1 | **Verified** (`ConfiguredCompanyDefaultsTests`) | A new install shows no Crown address or tax number. Legacy install unchanged. |
 | COM-6 | Finance | Hardcoded CAD, Canadian and Québec tax assumptions | P1 (Canada-only first market) | `providers.py`, `invoices.py` | Document as a market limit; make tax codes configurable | D13 | Not started | Documented |
 | COM-8 | Admin UI | No owner screen for the company profile (API only) | P1 | — | Add a Settings → Company profile form | COM-1 | Not started | Owner edits the profile in the browser; a browser test covers it |
@@ -171,6 +171,36 @@ The test counts come from test names that match each capability. They show cover
 - **Recommendation (D15, needs owner authorization because it touches production):** on Crown's production and staging installations, run `manage.py installation-identity --mode legacy-crown --reason "<who confirmed>"` once, so the identity is an explicit audited decision rather than an inference. Then plan the move from legacy mode to an explicit Crown company profile (`manage.py company-profile ...`).
 - **For every new company:** the provisioning runbook sets `company-profile` before first start, which supersedes detection entirely.
 
+### 2026-11-05 — Session 4 (local commits only; repository still public)
+
+| Commit | Item | Summary |
+|---|---|---|
+| `f5f9805` | COM-4 + COM-3 safeguard | Company pricing policy; Crown golden outputs preserved; no Crown rates on new installs; the time zone is locked once scheduling data exists |
+
+**Pricing rules moved into configuration:**
+- truck minimums by crew size
+- default, moving/packing and small-afternoon minimum hours
+- local fuel per truck
+- extra truck fee
+- long-distance km rate, distance buffer and transport multiplier
+- junk-removal tiers and extra labour
+- default deposit
+- limited-liability wording
+- testimonial credit and its disclosure
+
+The Montréal-based long-distance city presets are legacy-only. **Hourly crew rates** stay in the existing owner-managed rate calendar (`annual_rate_periods` / `daily_rates`), which new companies now fill themselves; Crown's workbook is no longer seeded for them.
+
+**Evidence that Crown is unchanged:** `tests/fixtures/crown_pricing_golden.json` was generated from `b62757c` *before* the refactor. It holds 15 priced scenarios (local 2/3/4/6 movers, minimum floors, fixed transport and fuel override, other charges and discount, rate override with fractional hours, small afternoon, packing, French, long distance including a short drive, junk with extra labour and discount) and 3 refusals (truck minimums, small-afternoon window). All 18 match exactly after the change, and Crown results gain no new keys. Testimonial disclosure text and the $50 credit are unchanged.
+
+**Pricing audit (2026-11-05):**
+- **Rounding:** components and totals use `ROUND_HALF_UP` to the cent. In all 15 golden scenarios the line items sum exactly to the low total. Residual low risk: because lines and totals are rounded separately, they could differ by 1 cent when several fractional components combine; no case was observed.
+- **Discounts:** a discount larger than the low estimate is refused (existing rule, unchanged).
+- **Taxes:** estimates are before tax; invoices compute each tax line with half-up rounding from the invoice's own saved terms (`invoices.py:89-109`). Tax registrations for new companies come only from their own billing settings (COM-5).
+- **Revisions and invoices:** quotes store `inputs_json` and `result_json`, and invoices store `terms_json`, so changing the policy or rates never alters a saved estimate or invoice (tested). Company-policy estimates record `pricing_policy_version`.
+- **Not converted:** the Québec heavy-vehicle HOS planning limits (regulatory, not pricing) and the `deposit_required` 300 fallback used only when reading pre-existing Crown quotes that lack the field.
+
+**COM-3 review:** daylight-saving transitions, customer-facing dates, restarts and reminders are covered by `tests/test_business_zone.py`. Separate installations each load their own zone per process. **New safeguard:** the time zone cannot change once jobs, availability or imported schedules exist (409).
+
 ## 7. Test results
 
 | Run | Command | Result |
@@ -185,6 +215,8 @@ The test counts come from test names that match each capability. They show cover
 | Session 3, isolated (after `423c50b`) | `python tests/run_isolated.py --min-tests 670 --jobs 4` | **58 modules, 670 tests, 0 failures** (one clean run after fixing a missed `__import__('zoneinfo')` call site that the first run caught) |
 | Session 3, browser | All 11 CI suites | **11 out of 11 pass** |
 | Session 3, JS | `node --check app/static/*.js`; `node --test tests/*.test.cjs` | All pass; 20 out of 20 |
+| Session 4, isolated (after `f5f9805`) | `python tests/run_isolated.py --min-tests 679 --jobs 4` | **59 modules, 679 tests, 0 failures** |
+| Session 4, browser and JS | All 11 CI suites; `node --check`; 20 Node tests | **All pass** |
 | JavaScript syntax | `node --check app/static/*.js` | All pass |
 | Node tests | `node --test tests/*.test.cjs` | 20 out of 20 pass |
 | Browser suites (Playwright, pre-installed Chromium) | `python tests/browser/run_mobile.py <suite>`, all 11 CI suites with CI environment variables | **11 out of 11 pass** after COM-1 (wix_sync, inbox, payroll_periods, hours_costs, staff_portal, client_participation, browser_recovery, estimate_delivery, mobile_schedule, today_workspace, team_chat) |
@@ -267,11 +299,10 @@ D1–D11 are listed in the 2026-11-05 takeover assessment. They cover:
 
 ## 10. Next executable task
 
-**COM-4 — company pricing and operational policies.**
-1. Inventory Crown-specific policy in code: `sales_crm_v6.py` truck minimums by crew size and the afternoon small-job exception (lines 60–82), service minimum hours, `seed.py` pricing and the rate workbook snapshot (`config/workbook_pricing_snapshot.json`), the $50 testimonial disclosure (`client_participation.DISCLOSURE`), and deposit defaults (`deposit_required` 300).
-2. Move each into validated, owner-approved company settings with versioning and an audit trail. Legacy installations default to today's values; new installations start unapproved and cannot quote until pricing is approved.
-3. Protect calculations by golden-value tests: record today's `calculate()` outputs for a fixed set of Crown inputs and assert they are unchanged.
-4. Then COM-2c (static pages and manifest branding) and COM-8 (owner settings screen).
+**COM-8 + COM-2c — owner settings and white-label pages (next).**
+1. COM-8: an owner/manager settings screen for the company profile (`/api/company/profile`) and the pricing policy (`/api/company/pricing-policy`), showing clear "not configured" states, plus a browser suite covering it at phone and desktop widths.
+2. COM-2c: remove the remaining Crown branding from static pages and scripts (`portal.html`, `client*.js`, `request.*`, `approval.*`, `participate.*`, `invoice_access.*`), plus the manifest and icon. Serve the name and logo from the company profile, and extend the brand guard to `app/static`.
+3. Then OPS-2 (independent deployment test) and OPS-1 (backup and restore drill).
 
 _Previous next-task note (completed server side in `03c3130`):_ COM-2b: brand the client-facing pages from `/api/company/public-profile`:
 - `portal.html` / `client*.js`
