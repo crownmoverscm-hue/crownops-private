@@ -4,9 +4,10 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from fastapi import Depends, HTTPException
 from .store import connect, transaction, rows, one, now, audit
+from .business_zone import BUSINESS_ZONE, zone_name
 
 EDITORS={'owner','manager','sales','dispatch'}
-ET=ZoneInfo('America/Toronto')
+ET=BUSINESS_ZONE
 
 def service_day(value):
     try:

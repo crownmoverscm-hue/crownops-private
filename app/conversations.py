@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException
 from .store import connect, transaction, one, rows, insert, uid, now, dumps, audit
 from .platform_common import require_role, staff_read_project, queue_message, text
 from .company_profile import company_profile
+from .business_zone import BUSINESS_ZONE, zone_name
 
 OFFICE={'owner','manager','sales','dispatch'}
 MANAGERS={'owner','manager'}
@@ -292,7 +293,7 @@ def register_conversations(app,path,auth):
             if status=='Waiting on client':
                 try:remind=date.fromisoformat(str(data.get('remind_on',''))).isoformat()
                 except ValueError:raise HTTPException(422,'Choose a reminder date.')
-                if remind<datetime.now(ZoneInfo('America/Toronto')).date().isoformat():raise HTTPException(422,'Choose today or a future date.')
+                if remind<datetime.now(BUSINESS_ZONE).date().isoformat():raise HTTPException(422,'Choose today or a future date.')
             key='conversation-reminder:'+lid
             db.execute("UPDATE tasks SET status='Done' WHERE legacy_id=?",(key,))
             if remind:

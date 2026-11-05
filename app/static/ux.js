@@ -23,8 +23,8 @@ function uxTimestampLabel(value){
  if(/^\d{4}-\d{2}-\d{2}$/.test(raw))return uxDateLabel(raw);
  if(!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(raw))return raw;
  const d=new Date(raw);if(Number.isNaN(d.getTime()))return raw;
- const day=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',month:'short',day:'numeric',year:'numeric'}).format(d);
- const time=new Intl.DateTimeFormat('en-US',{timeZone:'America/Toronto',hour:'numeric',minute:'2-digit',hour12:true}).format(d);
+ const day=new Intl.DateTimeFormat('en-CA',{timeZone:(window.CROWNOPS_TZ||'America/Toronto'),month:'short',day:'numeric',year:'numeric'}).format(d);
+ const time=new Intl.DateTimeFormat('en-US',{timeZone:(window.CROWNOPS_TZ||'America/Toronto'),hour:'numeric',minute:'2-digit',hour12:true}).format(d);
  return `${day} · ${time} ET`;
 }
 function uxHistoryDetail(value){

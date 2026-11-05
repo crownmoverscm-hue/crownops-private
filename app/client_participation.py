@@ -19,6 +19,7 @@ from .photo_safety import READY_STATUSES
 COOKIE='crownops_participation'
 STAFF={'owner','manager','sales','crew'}
 from .company_profile import LEGACY_REVIEW_PROFILES as PROFILES
+from .business_zone import BUSINESS_ZONE, zone_name
 DISCLOSURE='The customer received a $50 moving discount for participating in this testimonial.'
 
 def policy(db):
@@ -270,8 +271,8 @@ def register_client_participation(app,path,auth,public_url,secure):
     def my_feedback(u=Depends(auth)):
         today=date.fromisoformat(business_day());start=date(today.year,1 if today.month<=6 else 7,1).isoformat()
         end=date(today.year,6,30).isoformat() if today.month<=6 else date(today.year,12,31).isoformat()
-        lower=datetime.fromisoformat(start).replace(tzinfo=ZoneInfo('America/Toronto')).astimezone(timezone.utc).isoformat()
-        upper=datetime.fromisoformat((date.fromisoformat(end)+timedelta(days=1)).isoformat()).replace(tzinfo=ZoneInfo('America/Toronto')).astimezone(timezone.utc).isoformat()
+        lower=datetime.fromisoformat(start).replace(tzinfo=BUSINESS_ZONE).astimezone(timezone.utc).isoformat()
+        upper=datetime.fromisoformat((date.fromisoformat(end)+timedelta(days=1)).isoformat()).replace(tzinfo=BUSINESS_ZONE).astimezone(timezone.utc).isoformat()
         with closing(connect(path)) as db:
             records=rows(db,'SELECT r.*,j.title FROM service_review_records r JOIN jobs j ON j.id=r.job_id WHERE r.reviewed_at>=? AND r.reviewed_at<? ORDER BY r.reviewed_at DESC',(lower,upper))
             mine=[r for r in records if u.get('employee_id') in json.loads(r['crew_json'])]

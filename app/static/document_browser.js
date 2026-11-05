@@ -4,7 +4,7 @@
  const state={quotes:{period:'all',status:'all',search:'',history:false,page:0,sort:'newest'},invoices:{period:'all',status:'all',search:'',page:0,sort:'newest'}};
  let records={quotes:[],invoices:[]},visible=[],menu=null,trigger=null,timer;
  const office=()=>['owner','manager','sales'].includes(S.user?.role),admin=()=>['owner','manager'].includes(S.user?.role);
- const day=value=>value?(/^\d{4}-\d{2}-\d{2}$/.test(value)?value:new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value))):'';
+ const day=value=>value?(/^\d{4}-\d{2}-\d{2}$/.test(value)?value:new Intl.DateTimeFormat('en-CA',{timeZone:(window.CROWNOPS_TZ||'America/Toronto'),year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value))):'';
  const showDay=value=>value?h(uxDateLabel(day(value),'Not set')):'<span class="muted">Not set</span>';
  function inPeriod(doc,kind){
   const p=state[kind].period;if(p==='all')return true;

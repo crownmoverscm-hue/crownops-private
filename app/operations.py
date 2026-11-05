@@ -12,6 +12,7 @@ from .pricing import number,cents
 from .platform_common import *
 from .portal import detect
 from .staff_records import can_view_pay, PAY_PENDING
+from .business_zone import BUSINESS_ZONE, zone_name
 
 
 def prefill_payroll(db,inv,doc,actor):
@@ -426,7 +427,7 @@ def register_operations(app,path,auth):
                 db.execute('UPDATE vehicles SET version=version+1 WHERE id=?',(vid,))
             if rec['odometer_km']>old.get('odometer_km',0):
                 db.execute('UPDATE fleet_reference SET odometer_recorded_date=? WHERE vehicle_id=?',
-                    (datetime.now(ZoneInfo('America/Toronto')).date().isoformat(),vid))
+                    (datetime.now(BUSINESS_ZONE).date().isoformat(),vid))
         return {'ok':True}
 
     @app.post('/api/fleet/{vid}/inspection')
@@ -456,7 +457,7 @@ def register_operations(app,path,auth):
             insert(db,'inspections',rec)
             db.execute('UPDATE fleet_profiles SET odometer_km=?,updated_at=? WHERE vehicle_id=?',(odo,now(),vid))
             db.execute('UPDATE fleet_reference SET odometer_recorded_date=? WHERE vehicle_id=?',
-                (datetime.now(ZoneInfo('America/Toronto')).date().isoformat(),vid))
+                (datetime.now(BUSINESS_ZONE).date().isoformat(),vid))
             if severity=='Major':db.execute('UPDATE vehicles SET active=0,version=version+1 WHERE id=?',(vid,))
             audit(db,u['id'],'Truck check recorded','inspections',rec['id'],{'severity':severity,'unavailable':severity=='Major'})
         return {**rec,'truck_blocked':severity=='Major'}
@@ -551,7 +552,7 @@ def register_operations(app,path,auth):
             r['period_start']=None
             if cfg.get('period_anchor'):
                 from .payroll_periods import period_for
-                day=datetime.fromisoformat(r['start_at']).astimezone(ZoneInfo('America/Toronto')).date()
+                day=datetime.fromisoformat(r['start_at']).astimezone(BUSINESS_ZONE).date()
                 r['period_start']=period_for(cfg,day)['start']
             if not can_view_pay(u,r['employee_id']):r.pop('hourly_cents',None);r.pop('estimated_pay_cents',None)
         return result
@@ -607,7 +608,7 @@ def register_operations(app,path,auth):
             records=rows(db,"SELECT p.*,e.name,j.start_at FROM payroll_drafts p JOIN jobs j ON j.id=p.job_id JOIN employees e ON e.id=p.employee_id WHERE p.status IN ('Approved','Locked')")
         buf=io.StringIO();w=csv.writer(buf);w.writerow(['Period start','Period end','Employee','Job ID','Service hours','Travel hours','Break hours','Extra hours','Hourly rate CAD','Straight time estimate CAD','Warning'])
         for r in records:
-            day=datetime.fromisoformat(r['start_at']).astimezone(ZoneInfo('America/Toronto')).date()
+            day=datetime.fromisoformat(r['start_at']).astimezone(BUSINESS_ZONE).date()
             if not start<=day<=end:continue
             name=r['name'];name="'"+name if name.startswith(('=','+','-','@')) else name
             total=r['service_minutes']+r['transport_minutes']+r['extra_minutes']-r['break_minutes']

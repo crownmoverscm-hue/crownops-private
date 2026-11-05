@@ -6,7 +6,7 @@
  let data=null,tab='shifts',cover=null,lastUnread=-1;
  const days=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
  const action=(key,label,id='',cls='btn-soft')=>`<button type="button" class="${cls}" data-mp="${key}" data-id="${h(id)}">${label}</button>`;
- const stamp=value=>new Date(value).toLocaleString('en-CA',{timeZone:'America/Toronto',weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+ const stamp=value=>new Date(value).toLocaleString('en-CA',{timeZone:(window.CROWNOPS_TZ||'America/Toronto'),weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
  const hours=minutes=>(minutes/60).toLocaleString('en-CA',{maximumFractionDigits:2});
  const badge=status=>`<span class="mp-status ${['Approved','Acknowledged'].includes(status)?'mp-approved':status==='Declined'?'mp-declined':'mp-pending'}">${h(status)}</span>`;
  const blank=message=>`<p class="mp-empty">${h(message)}</p>`;

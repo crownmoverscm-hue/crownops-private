@@ -1,6 +1,7 @@
 """Operational planning permissions and resource availability, without HR data."""
 from fastapi import HTTPException
 from .store import one, rows
+from .business_zone import BUSINESS_ZONE, zone_name
 
 OFFICE_PLANNERS={'owner','manager','sales','dispatch','accounting'}
 
@@ -16,8 +17,8 @@ def planning_resources(db,job,start,end):
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from .company_ops import fleet_reference_blockers
-    first=datetime.fromisoformat(start).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
-    last=datetime.fromisoformat(end).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+    first=datetime.fromisoformat(start).astimezone(BUSINESS_ZONE).date().isoformat()
+    last=datetime.fromisoformat(end).astimezone(BUSINESS_ZONE).date().isoformat()
     result={}
     for key,table,kind in [('crew','employees','employee'),('trucks','vehicles','vehicle')]:
         items=[]

@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from .store import insert, now, one, rows, dumps
 from .platform_common import stamp_hash
 from .company_profile import profile_or_legacy, time_note, team_signoff, help_line
+from .business_zone import BUSINESS_ZONE, zone_name
 
 CONTACT_FIELDS=frozenset({'client_name','phone'})
 
@@ -54,7 +55,7 @@ def quote_scope_current(db,quote,lead):
 def booking_details(job,quote):
     """Use the actual scheduled start, preserving the sold window when it fits."""
     from .sales_crm_v6 import quote_start_window
-    start=datetime.fromisoformat(job['start_at'].replace('Z','+00:00')).astimezone(ZoneInfo('America/Toronto'))
+    start=datetime.fromisoformat(job['start_at'].replace('Z','+00:00')).astimezone(BUSINESS_ZONE)
     inputs=json.loads(quote['inputs_json'])
     expected,window=quote_start_window(inputs)
     if start.strftime('%H:%M')!=expected:

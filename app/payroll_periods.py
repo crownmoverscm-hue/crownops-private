@@ -5,6 +5,7 @@ import hashlib
 from fastapi import Depends, HTTPException
 from .store import connect, transaction, audit, now, dumps
 from .platform_common import settings, put_setting, require_role, business_day, OFFICE, MANAGERS
+from .business_zone import BUSINESS_ZONE, zone_name
 
 
 def validate_policy(data):
@@ -53,7 +54,7 @@ def register_payroll_periods(app,path,auth):
         with closing(connect(path)) as db:cfg=settings(db,'payroll_policy',{})
         ready=configured(cfg);days=cfg.get('period_days',14)
         result={'configured':ready,'period_days':days,'period_anchor':cfg.get('period_anchor',''),
-                'review_token':policy_token(cfg),'can_configure':u['role'] in MANAGERS,'timezone':'America/Toronto'}
+                'review_token':policy_token(cfg),'can_configure':u['role'] in MANAGERS,'timezone':zone_name()}
         if ready:
             current=period_for(cfg,day);start=date.fromisoformat(current['start'])
             result.update(selected=current,current=period_for(cfg,business_day()),

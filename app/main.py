@@ -56,6 +56,7 @@ from .job_planning import can_plan_jobs, require_planner, planning_resources
 from .staff_records import can_view_pay, resolve_invited_employee
 from .job_routes import job_route, validate_route
 from .platform_common import settings as platform_settings,business_day
+from .business_zone import BUSINESS_ZONE, zone_name
 from .account_access import (master_owner_id, remember_master_owner, protect_owner_account,
     check_invitation_email, invitation_request_id, previous_invitation_email,
     reserve_invitation_email, invitation_email_result, deliver_invitation_email)
@@ -92,7 +93,7 @@ def local_to_utc(value):
     try:
         d=datetime.fromisoformat(value)
         if d.tzinfo is None:
-            zone=ZoneInfo('America/Toronto')
+            zone=BUSINESS_ZONE
             a=d.replace(tzinfo=zone,fold=0)
             b=d.replace(tzinfo=zone,fold=1)
             if a.utcoffset()!=b.utcoffset():
@@ -182,6 +183,14 @@ def create_app(database_path=None, *, core_pilot=False):
         from .production import validate_runtime_storage
         validate_runtime_storage(path)
         initialize(path)
+    # COM-3: one company per installation and process; Core v1 keeps the original Eastern zone.
+    from .business_zone import set_business_zone, DEFAULT_ZONE
+    if core_v1_profile:
+        set_business_zone(DEFAULT_ZONE)
+    else:
+        from .company_profile import company_profile
+        with closing(connect(path)) as db:
+            set_business_zone(company_profile(db)['timezone'])
     import asyncio
     from contextlib import asynccontextmanager,suppress
     @asynccontextmanager
@@ -930,8 +939,8 @@ def create_app(database_path=None, *, core_pilot=False):
                 conflict=one(db,"SELECT j.id,j.title FROM assignments a JOIN jobs j ON j.id=a.job_id WHERE a.resource_type=? AND a.resource_id=? AND j.status NOT IN ('Cancelled','Completed') AND j.id!=? AND j.start_at<? AND j.end_at>?",(typ,rid,ignore_id,end,start))
                 if conflict:raise HTTPException(409,resource['name']+' overlaps with '+conflict['title']+'.')
                 if typ=='employee':
-                    start_day=datetime.fromisoformat(start).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
-                    end_day=datetime.fromisoformat(end).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+                    start_day=datetime.fromisoformat(start).astimezone(BUSINESS_ZONE).date().isoformat()
+                    end_day=datetime.fromisoformat(end).astimezone(BUSINESS_ZONE).date().isoformat()
                     off=one(db,"SELECT id,start_date,end_date FROM time_off_requests WHERE employee_id=? AND status='Approved' AND start_date<=? AND end_date>=? LIMIT 1",(rid,end_day,start_day))
                     if off:raise HTTPException(409,resource['name']+' is approved OFF '+off['start_date']+' to '+off['end_date']+' and cannot be assigned.')
         check_fleet_dispatch(db,trucks,crew,start)

@@ -11,6 +11,7 @@ import zipfile
 from openpyxl import load_workbook
 from .store import connect, transaction, rows, one, insert, audit, now, uid, dumps
 from .employee_contacts import clean, phone_key, name_key
+from .business_zone import BUSINESS_ZONE, zone_name
 
 STAFF = {'owner','manager', 'sales', 'dispatch', 'accounting', 'crew'}
 EDITORS = {'owner','manager', 'dispatch'}
@@ -414,7 +415,7 @@ def register_company_ops(app, path, auth):
                 if one(db,"SELECT id FROM inspections WHERE vehicle_id=? AND severity='Major' AND cleared_at IS NULL",(vid,)):
                     raise HTTPException(409,'Clear the recorded major defect before making this truck active.')
                 p=one(db,'SELECT inspection_due FROM fleet_profiles WHERE vehicle_id=?',(vid,)) or {}
-                if p.get('inspection_due') and p['inspection_due']<datetime.now(ZoneInfo('America/Toronto')).date().isoformat():
+                if p.get('inspection_due') and p['inspection_due']<datetime.now(BUSINESS_ZONE).date().isoformat():
                     raise HTTPException(409,'Update the recorded expired inspection before making this truck active.')
             affected=rows(db,"""SELECT j.id FROM assignments a JOIN jobs j ON j.id=a.job_id
                 WHERE a.resource_type='vehicle' AND a.resource_id=? AND j.status NOT IN ('Completed','Cancelled')""",(vid,))
@@ -433,7 +434,7 @@ def register_company_ops(app, path, auth):
         day=text(data.get('service_date',''),'Service date',10)
         try:date.fromisoformat(day)
         except ValueError:raise HTTPException(422,'Enter the service date as YYYY-MM-DD.')
-        if day>datetime.now(ZoneInfo('America/Toronto')).date().isoformat():raise HTTPException(422,'Use a maintenance task for future work. Service history records completed work.')
+        if day>datetime.now(BUSINESS_ZONE).date().isoformat():raise HTTPException(422,'Use a maintenance task for future work. Service history records completed work.')
         if not work:raise HTTPException(422,'Describe the work performed.')
         key=text(data.get('request_id',''),'Request ID',100)
         if not re.fullmatch(r'[a-zA-Z0-9-]{8,100}',key):raise HTTPException(422,'Refresh the service form before saving.')
@@ -503,7 +504,7 @@ def register_company_ops(app, path, auth):
                 db.execute(f'UPDATE fleet_reference SET {k}=? WHERE vehicle_id=?', (v, vid))
             if profile['odometer_km'] > old.get('odometer_km',0):
                 db.execute('UPDATE fleet_reference SET odometer_recorded_date=? WHERE vehicle_id=?',
-                    (datetime.now(ZoneInfo('America/Toronto')).date().isoformat(),vid))
+                    (datetime.now(BUSINESS_ZONE).date().isoformat(),vid))
             db.execute('UPDATE fleet_reference SET review_required=1,updated_at=? WHERE vehicle_id=?', (now(), vid))
             db.execute('UPDATE vehicles SET version=version+1 WHERE id=?',(vid,))
             audit(db, u['id'], 'Truck reference details updated', 'vehicles', vid)
@@ -523,7 +524,7 @@ def register_company_ops(app, path, auth):
                 raise HTTPException(404, 'Truck not found.')
             if not all(p.get(k) for k in ('plate', 'vin', 'model')) or not all(r.get(k) for k in ('year', 'make', 'fuel')):
                 raise HTTPException(409, 'Complete the plate, VIN, model, year, make and fuel before activating.')
-            if not p.get('inspection_due') or p['inspection_due'] < datetime.now(ZoneInfo('America/Toronto')).date().isoformat():
+            if not p.get('inspection_due') or p['inspection_due'] < datetime.now(BUSINESS_ZONE).date().isoformat():
                 raise HTTPException(409, 'Enter and verify the exact current inspection expiry date.')
             unresolved = one(db, '''SELECT h.id FROM fleet_service_history h JOIN maintenance m ON m.id=h.maintenance_id
                 WHERE h.vehicle_id=? AND m.status!='Completed' LIMIT 1''', (vid,))

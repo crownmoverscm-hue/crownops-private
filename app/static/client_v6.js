@@ -51,7 +51,7 @@ if(typeof estimates==='function'){
           accept+depositFor(q)+'</div>';
       }).join('')||empty(pageT('Your estimate will appear after review by Crown.','Votre devis apparaitra apres sa revision par Crown.'))
     )+panel(pageT('Confirmed services','Services confirmes'),
-      P.data.jobs.map(j=>'<div class="activity-row"><div><strong>'+esc(j.phase)+'</strong><p>'+esc(new Date(j.start_at).toLocaleString(pageFrench?'fr-CA':'en-CA',{timeZone:'America/Toronto'}))+' ET</p><span class="pill">'+esc(j.status)+'</span></div></div>').join('')||
+      P.data.jobs.map(j=>'<div class="activity-row"><div><strong>'+esc(j.phase)+'</strong><p>'+esc(new Date(j.start_at).toLocaleString(pageFrench?'fr-CA':'en-CA',{timeZone:(window.CROWNOPS_TZ||'America/Toronto')}))+' '+(window.CROWNOPS_TZ_LABEL||'ET')+'</p><span class="pill">'+esc(j.status)+'</span></div></div>').join('')||
       empty(pageT('No confirmed service is displayed yet.','Aucun service confirme n est encore affiche.')));
   };
 }

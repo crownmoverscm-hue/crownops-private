@@ -11,8 +11,9 @@ from .store import connect, transaction, rows, one, insert, now, uid, dumps, aud
 from .staff_records import schedule_identity
 from .platform_common import MANAGERS, require_role, text, business_day
 from .payroll_periods import default_range
+from .business_zone import BUSINESS_ZONE, zone_name
 
-ET = ZoneInfo('America/Toronto')
+ET = BUSINESS_ZONE
 
 
 def employee(db, user):

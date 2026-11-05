@@ -21,6 +21,7 @@ from .store import audit, connect, now, transaction
 
 SETTING_KEY = 'company_profile'
 MODE_KEY = 'company_identity_mode'
+CREATED_IN_TEST_KEY = 'database_created_in_test'
 LEGACY_MODE = 'legacy-crown'
 UNCONFIGURED_MODE = 'unconfigured'
 
@@ -66,9 +67,6 @@ LEGACY_COMMUNICATIONS = {
 
 EMAIL = re.compile(r'[^\s@]+@[^\s@]+\.[^\s@]+')
 PHONE_CHARS = re.compile(r'[0-9+()\-. ]+')
-# Scheduling, availability and payroll still interpret local times as America/Toronto (COM-3).
-# Until every site uses the company zone, another zone would shift booked times, so it is refused.
-SUPPORTED_TIMEZONES = ('America/Toronto',)
 EDITABLE = ('name', 'short_name', 'phone', 'email', 'timezone', 'local_time_label', 'local_time_label_fr')
 
 
@@ -116,8 +114,6 @@ def validate_profile(data):
         ZoneInfo(zone)
     except (ZoneInfoNotFoundError, ValueError):
         raise HTTPException(422, 'Enter a valid IANA time zone, for example America/Toronto.')
-    if zone not in SUPPORTED_TIMEZONES:
-        raise HTTPException(422, 'CrownOps schedules currently run on Eastern time (America/Toronto) only. Other time zones are not supported yet.')
     return {
         'name': name,
         'short_name': short_name,
@@ -140,11 +136,26 @@ def record_identity_mode(db):
     """
     if settings(db, SETTING_KEY) or settings(db, MODE_KEY):
         return
+    if os.getenv('CROWNOPS_ENV', 'test') == 'test':
+        # Remember that this database began life in the test environment, so a trial
+        # database later promoted to production is never mistaken for Crown's install.
+        if settings(db, CREATED_IN_TEST_KEY) is None:
+            put_setting(db, CREATED_IN_TEST_KEY, True)
+        return
     existing = db.execute('SELECT 1 FROM users LIMIT 1').fetchone() or db.execute('SELECT 1 FROM leads LIMIT 1').fetchone()
-    if existing:
-        put_setting(db, MODE_KEY, LEGACY_MODE)
-    elif os.getenv('CROWNOPS_ENV', 'test') != 'test':
-        put_setting(db, MODE_KEY, UNCONFIGURED_MODE)
+    put_setting(db, MODE_KEY, LEGACY_MODE if existing and not settings(db, CREATED_IN_TEST_KEY) else UNCONFIGURED_MODE)
+
+
+def set_identity_mode(db, mode, actor, reason):
+    """Explicit, audited owner decision (manage.py installation-identity). Overrides detection."""
+    if mode not in (LEGACY_MODE, UNCONFIGURED_MODE):
+        raise HTTPException(422, 'Choose legacy-crown or unconfigured.')
+    if not isinstance(reason, str) or len(reason.strip()) < 12:
+        raise HTTPException(422, 'Record why this installation identity is being set (12+ characters).')
+    previous = settings(db, MODE_KEY)
+    put_setting(db, MODE_KEY, mode)
+    audit(db, actor, 'Installation identity set', 'settings', MODE_KEY, {'from': previous, 'to': mode, 'reason': reason.strip()})
+    return mode
 
 
 def identity_mode(db):
@@ -243,6 +254,8 @@ def store_profile(db, data, actor):
     profile['version'] = current['version'] + 1
     profile['updated_at'] = now()
     put_setting(db, SETTING_KEY, profile)
+    from .business_zone import set_business_zone
+    set_business_zone(profile['timezone'])  # one installation per process (COM-3)
     audit(db, actor, 'Company profile updated', 'settings', SETTING_KEY,
           {'fields': sorted(k for k in EDITABLE if profile.get(k) != current.get(k)), 'version': profile['version']})
     return company_profile(db)
@@ -260,6 +273,19 @@ def register_company_profile(app, path, auth):
         require_role(u, MANAGERS)
         with transaction(path) as db:
             return store_profile(db, data, u['id'])
+
+    @app.get('/business-zone.js')
+    def business_zone_script():
+        """Browser pages format dates in the company zone; Toronto keeps the original 'ET' label."""
+        import json
+        from fastapi.responses import Response
+        from .business_zone import zone_name
+        with closing(connect(path)) as db:
+            c = company_profile(db)
+        zone = zone_name()
+        label = 'ET' if zone == 'America/Toronto' else (c.get('local_time_label') or zone.rsplit('/', 1)[-1].replace('_', ' ') + ' time')
+        body = 'window.CROWNOPS_TZ=' + json.dumps(zone) + ';window.CROWNOPS_TZ_LABEL=' + json.dumps(label) + ';'
+        return Response(body, media_type='application/javascript', headers={'Cache-Control': 'no-store'})
 
     @app.get('/api/company/public-profile')
     def public_profile():

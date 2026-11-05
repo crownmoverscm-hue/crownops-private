@@ -27,11 +27,18 @@ s=sub.add_parser('verify-backup',help='Verify checksums and restore privately to
 s=sub.add_parser('reset-mfa',help='Emergency local account recovery after verifying identity');s.add_argument('--email',required=True);s.add_argument('--reason',required=True)
 s=sub.add_parser('worker',help='Generate approved-rule tasks and unsent drafts; no automatic external writes');s.add_argument('--once',action='store_true');s.add_argument('--interval',type=int,default=60)
 s=sub.add_parser('doctor',help='Show configuration switches without exposing secrets')
+s=sub.add_parser('installation-identity',help='Explicitly record whether this database is the original Crown Movers installation (legacy-crown) or a new company (unconfigured)')
+s.add_argument('--mode',required=True,choices=['legacy-crown','unconfigured']);s.add_argument('--reason',required=True)
 s=sub.add_parser('setup-code',help='Generate a private one-installation web setup code and the hash to store as CROWNOPS_SETUP_CODE_HASH')
 s=sub.add_parser('company-profile',help='Set the company identity used in client emails and documents (new installations must run this)')
 s.add_argument('--name',required=True);s.add_argument('--phone',required=True);s.add_argument('--email',required=True);s.add_argument('--timezone',required=True)
 s.add_argument('--short-name',default='');s.add_argument('--time-label',default='');s.add_argument('--time-label-fr',default='')
 a=p.parse_args();path=Path(a.db).expanduser().resolve()
+def _identity(db_path):
+    if not db_path.exists():return 'no database'
+    from app.company_profile import company_profile
+    with closing(connect(db_path)) as db:return company_profile(db)['mode']
+
 def _company_configured(db_path):
     if not db_path.exists():return False
     from app.company_profile import company_profile
@@ -93,6 +100,13 @@ try:
             print(json.dumps(tick(path)),flush=True)
             if a.once:break
             time.sleep(a.interval)
+    elif a.command=='installation-identity':
+        from fastapi import HTTPException
+        from app.company_profile import set_identity_mode,company_profile
+        try:
+            with transaction(path) as db:set_identity_mode(db,a.mode,'owner-cli',a.reason);profile=company_profile(db)
+        except HTTPException as ex:raise ValueError(ex.detail)
+        print(json.dumps({'identity_mode':a.mode,'effective_identity':profile['mode'],'company':profile['name']},indent=2))
     elif a.command=='setup-code':
         import secrets,hashlib
         code=secrets.token_urlsafe(24)
@@ -100,7 +114,7 @@ try:
         print('Store this in the deployment secrets (not in Git):\n  CROWNOPS_SETUP_CODE_HASH='+hashlib.sha256(code.encode()).hexdigest())
         print('Remove CROWNOPS_SETUP_CODE_HASH after the owner account exists.')
     elif a.command=='doctor':
-        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','quickbooks_environment':os.getenv('QBO_ENV','sandbox'),'quickbooks_sandbox_writes':os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES')=='1','quickbooks_production_writes':os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','company_profile_configured':_company_configured(path),'web_setup_enabled':bool(__import__('re').fullmatch(r'[0-9a-fA-F]{64}',os.getenv('CROWNOPS_SETUP_CODE_HASH','').strip())),'notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
+        print(json.dumps({'environment':os.getenv('CROWNOPS_ENV','test'),'public_url':os.getenv('CROWNOPS_PUBLIC_URL','http://127.0.0.1:8080'),'database':str(path),'external_actions_enabled':os.getenv('CROWNOPS_ALLOW_EXTERNAL')=='1','quickbooks_environment':os.getenv('QBO_ENV','sandbox'),'quickbooks_sandbox_writes':os.getenv('CROWNOPS_ALLOW_QBO_SANDBOX_WRITES')=='1','quickbooks_production_writes':os.getenv('CROWNOPS_ALLOW_QBO_PRODUCTION_WRITES')=='1','server_secret_present':bool(os.getenv('CROWNOPS_SECRET_KEY')),'scanner_configured':bool(os.getenv('CROWNOPS_SCAN_COMMAND')),'secure_cookies':os.getenv('CROWNOPS_SECURE_COOKIES')=='1','company_profile_configured':_company_configured(path),'installation_identity':_identity(path),'web_setup_enabled':bool(__import__('re').fullmatch(r'[0-9a-fA-F]{64}',os.getenv('CROWNOPS_SETUP_CODE_HASH','').strip())),'notice':'Configuration flags are not proof of tested/live integrations.'},indent=2))
 except (ValueError,sqlite3.Error,OSError,zipfile.BadZipFile) as ex:
     print('Error: '+str(ex),file=sys.stderr);sys.exit(1)
 except KeyboardInterrupt:print('\nStopped.')

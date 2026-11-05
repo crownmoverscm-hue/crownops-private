@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException
 from .store import connect, transaction, rows, one, insert, uid, now, dumps, audit
 from .platform_common import require_role, text, business_day
 from .conversations import OFFICE, MANAGERS, conversation, entry
+from .business_zone import BUSINESS_ZONE, zone_name
 
 
 def obj(raw):
@@ -21,7 +22,7 @@ def activity_time(value):
     """Normalize source timestamps so offsets and import times cannot reorder activity."""
     try:
         stamp=datetime.fromisoformat(str(value or '').replace('Z','+00:00'))
-        if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=ZoneInfo('America/Toronto'))
+        if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=BUSINESS_ZONE)
         return stamp.astimezone(timezone.utc).isoformat()
     except (ValueError,TypeError,OverflowError):return ''
 
@@ -178,7 +179,7 @@ def update_task(db,tid,data,u):
             if action=='schedule':
                 try:due=date.fromisoformat(str(data.get('due_date',''))).isoformat()
                 except ValueError:raise HTTPException(422,'Choose a follow-up date.')
-                if due<datetime.now(ZoneInfo('America/Toronto')).date().isoformat():raise HTTPException(422,'Choose today or a future date.')
+                if due<datetime.now(BUSINESS_ZONE).date().isoformat():raise HTTPException(422,'Choose today or a future date.')
         else:raise HTTPException(422,'Choose a follow-up action.')
     meta=obj(t['raw_json']);meta['inbox_managed']=True
     if action in ('schedule','reopen','done'):
@@ -207,7 +208,7 @@ def register_inbox_tasks(app,path,auth):
             people={p['id']:p['name'] for p in rows(db,'SELECT id,name FROM users WHERE active=1')}
             call_details={c['id']:obj(c['payload_json']) for c in rows(db,'SELECT id,payload_json FROM calls')}
             unmatched={e['event_key']:obj(e['payload_json']) for e in rows(db,"SELECT event_key,payload_json FROM integration_events WHERE event_type IN ('gmail_quote','gmail_email','gmail_missed_call','gmail_voicemail')")}
-            names={v:k for k,v in people.items()};day=datetime.now(ZoneInfo('America/Toronto')).date().isoformat();items=[]
+            names={v:k for k,v in people.items()};day=datetime.now(BUSINESS_ZONE).date().isoformat();items=[]
             for t in rows(db,'SELECT t.*,l.client_name,l.email,l.phone,l.move_date,l.lead_type,x.client_id FROM tasks t LEFT JOIN leads l ON l.id=t.lead_id LEFT JOIN client_account_leads x ON x.lead_id=t.lead_id WHERE t.historical=0 AND COALESCE(l.archived_import,0)=0'):
                 task_contact(t,call_details,unmatched)
                 t['channel']=task_channel(t);owner=t['owner'] if t['owner'] in people else names.get(t['owner'],t['owner'])

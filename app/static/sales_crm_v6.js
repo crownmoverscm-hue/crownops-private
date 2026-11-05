@@ -26,8 +26,8 @@ async function crmSearchClients(q=''){
 function crmActivityTime(v){
  if(!v)return 'No inquiry activity';
  const d=new Date(v);if(Number.isNaN(d.getTime()))return h(v);
- const day=d.toLocaleDateString('en-CA',{timeZone:'America/Toronto',month:'short',day:'numeric'});
- const tm=d.toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'numeric',minute:'2-digit'});
+ const day=d.toLocaleDateString('en-CA',{timeZone:(window.CROWNOPS_TZ||'America/Toronto'),month:'short',day:'numeric'});
+ const tm=d.toLocaleTimeString('en-CA',{timeZone:(window.CROWNOPS_TZ||'America/Toronto'),hour:'numeric',minute:'2-digit'});
  return day+' · '+tm;
 }
 function crmActivityBadge(a){

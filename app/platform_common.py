@@ -8,6 +8,7 @@ import json, hashlib, os, secrets, re
 from fastapi import HTTPException
 from .store import connect, transaction, rows, one, insert, audit, uid, now, dumps
 from .job_planning import can_plan_jobs
+from .business_zone import BUSINESS_ZONE, zone_name
 
 MANAGERS={'owner','manager'}
 OFFICE={'owner','manager','sales','dispatch','accounting'}
@@ -163,7 +164,7 @@ def invoice_current(db,iid):
 
 def business_day(at=None):
     moment=datetime.fromisoformat(at) if isinstance(at,str) else at or datetime.now(timezone.utc)
-    return moment.astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+    return moment.astimezone(BUSINESS_ZONE).date().isoformat()
 
 def add_task(db,lid,title,owner='',key=None):
     if key and one(db,'SELECT id FROM tasks WHERE legacy_id=?',(key,)):return

@@ -17,6 +17,7 @@ from .store import connect,transaction,rows,one,insert,audit,uid,now,dumps
 from .pricing import number,cents
 from .platform_common import invoice_job
 from .invoice_checks import allocated_credits,actuals_need_review,deposit_review_state,apply_unambiguous_deposits
+from .business_zone import BUSINESS_ZONE, zone_name
 
 
 def short(v,label,maximum=4000):
@@ -153,7 +154,7 @@ def register_invoices(app,path,auth,visible_job,require):
         needs_review=actuals_need_review(db,inv)
         if needs_review:calc['actual_hours_recorded']=False
         return {'id':inv['id'],'job_id':j['id'],'number':inv['number'],'status':inv['status'],'revision':inv['revision'],'version':inv['version'],
-                'service_date':__import__('datetime').datetime.fromisoformat(j['start_at']).astimezone(__import__('zoneinfo').ZoneInfo('America/Toronto')).date().isoformat(),'job_status':j['status'],'client_name':terms['customer']['name'],
+                'service_date':__import__('datetime').datetime.fromisoformat(j['start_at']).astimezone(BUSINESS_ZONE).date().isoformat(),'job_status':j['status'],'client_name':terms['customer']['name'],
                 'terms':terms,'actual':actual,'calculation':calc,'updated_at':inv['updated_at'],
                 'actuals_need_review':needs_review,'deposit_review':deposit_review_state(db,inv,j),
                 'pending_extras':db.execute("SELECT count(*) FROM invoice_change_orders WHERE invoice_id=? AND status='Requested'",(inv['id'],)).fetchone()[0],

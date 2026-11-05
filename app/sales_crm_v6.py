@@ -15,8 +15,9 @@ from .pricing import seasonal_rate, number as pricing_number
 from .inquiry_intake import intake_values, photo_link
 from .client_communications import pending_scope_changes, quote_scope_current, booking_details, booking_confirmation_key
 from .company_profile import company_profile, profile_or_legacy, time_note, team_signoff
+from .business_zone import BUSINESS_ZONE, zone_name
 
-MONTREAL=ZoneInfo("America/Toronto")
+MONTREAL=BUSINESS_ZONE
 LOCAL_FUEL=Decimal("35.00")
 EXTRA_TRUCK=Decimal("25.00")
 LONG_KM=Decimal("0.94")

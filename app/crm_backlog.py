@@ -7,8 +7,9 @@ import json
 from fastapi import HTTPException
 
 from .store import rows, one, audit, dumps, now
+from .business_zone import BUSINESS_ZONE, zone_name
 
-TORONTO = ZoneInfo('America/Toronto')
+TORONTO = BUSINESS_ZONE
 CALL_TITLES = ('Return missed call', 'Review voicemail')
 
 

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException
 from .store import connect, transaction, rows, insert, dumps, now, audit
+from .business_zone import BUSINESS_ZONE, zone_name
 
 
 def digest(value):
@@ -78,7 +79,7 @@ def parse_paste(value):
         identity = [norm(name), day, norm(r[2])]
         e = dict(id='CSP-' + digest(identity)[:20], source_key='PASTE:' + digest(identity),
                  source_type='pasted_schedule', source_row=line, source_ref=f'Pasted schedule / row {line}',
-                 source_fingerprint=digest(r), date=day, timezone='America/Toronto', client_name=name,
+                 source_fingerprint=digest(r), date=day, timezone=zone_name(), client_name=name,
                  client_label_raw=r[3], email=email, phone=r[4], service=r[2], source_status=r[8],
                  sales_owner=r[0], crew_size=r[1], crew_raw=r[17], truck_label='', time_label=r[10] or 'Time needed',
                  start_time=None, depart_base_raw=r[11], quoted_hours_raw=r[12], actual_hours_raw=r[16],
@@ -101,7 +102,7 @@ def preview(db, value):
     existing = [json.loads(r['payload_json']) for r in rows(db, 'SELECT payload_json FROM imported_schedule_events')]
     jobs = rows(db, "SELECT j.id,j.phase service,j.start_at,l.client_name,l.email,l.phone FROM jobs j JOIN leads l ON l.id=j.lead_id WHERE j.status!='Cancelled'")
     for j in jobs:
-        j['date'] = datetime.fromisoformat(j['start_at']).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+        j['date'] = datetime.fromisoformat(j['start_at']).astimezone(BUSINESS_ZONE).date().isoformat()
     seen = set()
     for e in events:
         e['action'] = 'Import'

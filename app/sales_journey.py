@@ -6,6 +6,7 @@ import json
 from fastapi import Depends, HTTPException
 from .store import connect, transaction, one, rows, insert, now, uid, dumps, audit
 from .platform_common import SALES, require_role, text, staff_read_project, queue_message, add_task
+from .business_zone import BUSINESS_ZONE, zone_name
 
 DETAIL_LABELS={
     'client_name':('Name','Nom'), 'phone':('Phone','Téléphone'),
@@ -150,7 +151,7 @@ def register_sales_journey(app,path,auth,public_url):
     @app.get('/api/sales/overview')
     def sales_overview(u=Depends(auth)):
         require_role(u,SALES)
-        today=datetime.now(ZoneInfo('America/Toronto')).date().isoformat();suggestions=[]
+        today=datetime.now(BUSINESS_ZONE).date().isoformat();suggestions=[]
         with closing(connect(path)) as db:
             users={r['id']:r['name'] for r in rows(db,'SELECT id,name FROM users WHERE active=1')}
             all_quotes=rows(db,'SELECT * FROM quotes ORDER BY revision DESC,created_at DESC')

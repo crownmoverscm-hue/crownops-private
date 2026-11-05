@@ -21,10 +21,11 @@ from .platform_common import require_role
 from .schedule_importer import setup as setup_schedule
 from .schedule_paste import same_client
 from .availability import assert_day_open
+from .business_zone import BUSINESS_ZONE, zone_name
 
 OFFICE = ('owner', 'manager', 'sales', 'dispatch', 'accounting')
 EDITORS = ('owner', 'manager', 'sales', 'dispatch')
-ET = ZoneInfo('America/Toronto')
+ET = BUSINESS_ZONE
 CUTOFF = '2026-10-19'
 FIELDS = ('event', 'documentId', 'number', 'title', 'customer', 'email', 'phone',
           'address', 'city', 'contactId', 'total', 'currency')
@@ -126,7 +127,7 @@ def add_calendar(db, record, payload, day, start, note):
         range_start=day, range_end=day, created_at=now(), report_json=dumps({'wix': True, 'events': 1})))
     calendar_id = uid('WIXCAL')
     calendar = dict(id=calendar_id, source_key=source_key, source_type='wix', source_ref='Wix quote '+payload['number'],
-        date=day, timezone='America/Toronto', client_name=payload['customer'], email=payload['email'], phone=payload['phone'], lead_id=record.get('lead_id'),
+        date=day, timezone=zone_name(), client_name=payload['customer'], email=payload['email'], phone=payload['phone'], lead_id=record.get('lead_id'),
         service='Moving / service', time_label=start or 'Time to confirm', start_time=start or None,
         source_status='Accepted in Wix', pickup_raw='', dropoffs_raw=[], crew_raw='', truck_label='',
         notes_raw=payload['title'], flags=['WIX_SERVICE_PLAN_REQUIRED', 'DURATION_NOT_SUPPLIED', 'CREW_NOT_ASSIGNED', 'TRUCK_NOT_IDENTIFIED'] + (['START_TIME_NOT_EXACT'] if not start else []),

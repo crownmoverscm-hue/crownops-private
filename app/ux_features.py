@@ -20,8 +20,9 @@ from .platform_common import require_role, OFFICE, MANAGERS, text, settings, put
 from .operations import hos_dispatch_status
 from .crm_backlog import callback_backlog_preview, archive_callbacks, restore_callback
 from .employee_contacts import register_employee_contacts, PAY_PENDING
+from .business_zone import BUSINESS_ZONE, zone_name
 
-TORONTO=ZoneInfo('America/Toronto')
+TORONTO=BUSINESS_ZONE
 PRIVATE_HR={'owner','manager'}
 
 

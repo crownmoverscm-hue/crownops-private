@@ -25,10 +25,10 @@ async function api(path,options={}){
  return body;
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),4200);}
-function today(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
-function localDay(v){if(!v)return '';const d=new Date(v);return Number.isNaN(d.getTime())?String(v).slice(0,10):new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);}
+function today(){return new Intl.DateTimeFormat('en-CA',{timeZone:(window.CROWNOPS_TZ||'America/Toronto'),year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
+function localDay(v){if(!v)return '';const d=new Date(v);return Number.isNaN(d.getTime())?String(v).slice(0,10):new Intl.DateTimeFormat('en-CA',{timeZone:(window.CROWNOPS_TZ||'America/Toronto'),year:'numeric',month:'2-digit',day:'2-digit'}).format(d);}
 function dateLabel(v){if(!v)return 'Date to confirm';const d=new Date(String(v).slice(0,10)+'T12:00:00');return Number.isNaN(d.getTime())?h(v):d.toLocaleDateString('en-CA',{month:'short',day:'numeric',year:'numeric'});}
-function timeLabel(v){return new Date(v).toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'numeric',minute:'2-digit'});}
+function timeLabel(v){return new Date(v).toLocaleTimeString('en-CA',{timeZone:(window.CROWNOPS_TZ||'America/Toronto'),hour:'numeric',minute:'2-digit'});}
 function pill(value){const s=String(value||'Unknown');const color=/accepted|paid|approved|complete/i.test(s)?'teal':/quote|review|draft/i.test(s)?'purple':/new|moving|confirm/i.test(s)?'blue':/missing|pending|tentative|partial/i.test(s)?'orange':/lost|unpaid|error/i.test(s)?'red':'gray';return `<span class="pill ${color}">${h(s)}</span>`;}
 function btn(action,text,cl='',attrs=''){return `<button class="${cl}" data-action="${action}" ${attrs}>${text}</button>`;}
 function head(title,sub,actions=''){return `<div class="page-head"><div><h1>${title}</h1><p>${sub}</p></div><div class="head-actions">${actions}</div></div>`;}

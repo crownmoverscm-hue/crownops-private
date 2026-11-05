@@ -4,6 +4,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import json
 from .store import transaction, insert, uid, now, dumps
+from .business_zone import BUSINESS_ZONE, zone_name
 
 ROOT=Path(__file__).resolve().parent.parent
 
@@ -19,7 +20,7 @@ def seed_fictional(path):
     with transaction(path) as db:
         if db.execute('SELECT count(*) FROM leads').fetchone()[0] or db.execute('SELECT count(*) FROM imports').fetchone()[0]:
             raise ValueError('Fictional data may only be seeded into an empty client database. Use a separate CROWNOPS_DB.')
-        t=now();base=datetime.now(ZoneInfo('America/Toronto')).date();sunday=base-timedelta(days=(base.weekday()+1)%7)
+        t=now();base=datetime.now(BUSINESS_ZONE).date();sunday=base-timedelta(days=(base.weekday()+1)%7)
         names=['Alex Laurent','Sophie Martin','Jordan Ellis','Camille Roy','Morgan Lee','Taylor Reed','Noah Bennett','Emilie Carter']
         stages=['New Lead','Details Requested','Estimate Ready','Quote Sent','Accepted','Booked','Follow-Up','New Lead']
         for i,name in enumerate(names):
@@ -47,7 +48,7 @@ def seed_fictional(path):
         service_blocks=[7,5,4,6,5,3,1,1]
         truck_numbers=[1,2,3,4,5,6,1,2]
         for i in range(8):
-            start=datetime.combine(sunday+timedelta(days=day_offsets[i]),datetime.min.time()).replace(hour=start_hours[i],tzinfo=ZoneInfo('America/Toronto'))
+            start=datetime.combine(sunday+timedelta(days=day_offsets[i]),datetime.min.time()).replace(hour=start_hours[i],tzinfo=BUSINESS_ZONE)
             jid='DEMO-JOB-'+str(i+1)
             insert(db,'jobs',dict(id=jid,lead_id='DEMO-LEAD-'+str(i+1),title=names[i],phase=phases[i],
                 start_at=start.astimezone(timezone.utc).isoformat(),end_at=(start+timedelta(hours=service_blocks[i])).astimezone(timezone.utc).isoformat(),status='Tentative',

@@ -88,7 +88,7 @@ class CompanyProfileApiTests(CompanyFixture):
         self.assertEqual(self.clients['owner'].get('/api/company/profile').json()['name'], NEW_COMPANY['name'])
 
     def test_invalid_profiles_are_refused_and_nothing_is_stored(self):
-        cases = [{'email': 'not-an-email'}, {'timezone': 'Mars/Olympus'}, {'timezone': 'America/Vancouver'}, {'phone': ''}, {'phone': '12'},
+        cases = [{'email': 'not-an-email'}, {'timezone': 'Mars/Olympus'}, {'phone': ''}, {'phone': '12'},
                  {'name': '<script>x</script>'}, {'name': ''}, {'name': 'x' * 121}, {'unexpected': 'field'}]
         for change in cases:
             with self.subTest(change=change):
@@ -274,6 +274,8 @@ class NewInstallationFailClosedTests(CompanyFixture):
             with patch.dict(os.environ, {'CROWNOPS_ENV': 'test'}):
                 initialize(existing)
             with transaction(existing) as db:
+                # Model Crown's production database, created by a release before this marker existed.
+                db.execute("DELETE FROM settings WHERE key='database_created_in_test'")
                 insert(db, 'users', dict(id='u1', email='u1@example.invalid', name='U', role='owner', password_hash='x', active=1, created_at=now()))
             initialize(existing)
             initialize(fresh)  # repeated startups never flip the decision
@@ -399,3 +401,31 @@ class ClientPagesAndDocumentsTests(CompanyFixture):
             self.assertTrue(body.endswith(NEW_COMPANY['name'] + '\n' + NEW_COMPANY['phone']))
         legacy_subject, legacy_body = quote_document(q, {'client_name': 'C', 'language': 'English'})
         self.assertIn('Jonathan here!', legacy_body); self.assertTrue(legacy_body.endswith('Jonathan\nCrown Movers\n514-606-4030'))
+
+
+class InstallationIdentityTests(unittest.TestCase):
+    def test_trial_database_promoted_from_test_is_not_mistaken_for_crown(self):
+        from app.store import initialize
+        from app.platform_common import settings
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'trial.sqlite3'
+            with patch.dict(os.environ, {'CROWNOPS_ENV': 'test'}):
+                initialize(path)
+            with transaction(path) as db:
+                insert(db, 'users', dict(id='u', email='u@example.invalid', name='U', role='owner', password_hash='x', active=1, created_at=now()))
+            with patch.dict(os.environ, {'CROWNOPS_ENV': 'production'}), patch('app.release_recovery.before_manager_migration'):
+                initialize(path)
+            with closing(connect(path)) as db:
+                self.assertEqual(settings(db, 'company_identity_mode'), 'unconfigured')
+
+    def test_explicit_identity_command_is_audited_and_requires_a_reason(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / 'x.sqlite3')
+            env = {**os.environ, 'CROWNOPS_ENV': 'staging', 'CROWNOPS_ALLOW_EXTERNAL': '0'}
+            base = [sys.executable, str(ROOT / 'manage.py'), '--db', db_path, 'installation-identity', '--mode', 'legacy-crown']
+            self.assertNotEqual(subprocess.run(base + ['--reason', 'short'], capture_output=True, text=True, env=env, cwd=ROOT, timeout=120).returncode, 0)
+            ok = subprocess.run(base + ['--reason', 'Owner confirmed this is Crown production'], capture_output=True, text=True, env=env, cwd=ROOT, timeout=120)
+            self.assertEqual(ok.returncode, 0, ok.stderr); self.assertIn('"effective_identity": "legacy-crown"', ok.stdout)
+            with closing(connect(db_path)) as db:
+                row = db.execute("SELECT actor,details_json FROM audit WHERE action='Installation identity set'").fetchone()
+            self.assertEqual(row[0], 'owner-cli'); self.assertIn('Owner confirmed', row[1])

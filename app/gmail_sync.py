@@ -19,9 +19,10 @@ import requests
 from fastapi import HTTPException
 
 from .store import connect, transaction, one, rows, insert, audit, uid, now, dumps
+from .business_zone import BUSINESS_ZONE, zone_name
 
 
-MONTREAL = ZoneInfo("America/Toronto")
+MONTREAL = BUSINESS_ZONE
 
 FEEDS = {
     'quote': 'New Quote Request',
@@ -438,7 +439,7 @@ def _record_call_and_followup(db, lead_id, parsed, subject, actor, gmail_id, eve
     open_task = one(db, "SELECT id,title FROM tasks WHERE lead_id=? AND title IN ('Return missed call','Review voicemail') AND status='Open' AND historical=0 ORDER BY CASE WHEN title='Review voicemail' THEN 0 ELSE 1 END, created_at DESC LIMIT 1", (lead_id,))
     if not open_task:
         lead = one(db, 'SELECT assigned_to FROM leads WHERE id=?', (lead_id,)) or {}
-        due_date = datetime.fromisoformat(occurred_at).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+        due_date = datetime.fromisoformat(occurred_at).astimezone(BUSINESS_ZONE).date().isoformat()
         insert(db, 'tasks', dict(id=uid('TASK'), legacy_id=None, lead_id=lead_id, title=title, due_date=due_date, owner=lead.get('assigned_to') or '', status='Open', historical=0, raw_json=dumps({'call_id': cid, 'gmail_id': gmail_id}), created_at=occurred_at))
     elif title=='Review voicemail' and open_task.get('title')!='Review voicemail':
         db.execute("UPDATE tasks SET title=?,raw_json=? WHERE id=?",('Review voicemail',dumps({'call_id':cid,'gmail_id':gmail_id}),open_task['id']))

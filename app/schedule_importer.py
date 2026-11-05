@@ -11,6 +11,7 @@ from io import BytesIO
 import hashlib, json, re, zipfile
 from openpyxl import load_workbook
 from .store import initialize, transaction, rows, insert, dumps, now, audit
+from .business_zone import BUSINESS_ZONE, zone_name
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS schedule_import_batches(
@@ -124,7 +125,7 @@ def parse(content, start='2026-09-27', end='2027-12-31', filename='Crown Schedul
         row_payload={'row':r,'raw':raw}
         digest=hashlib.sha256(dumps(row_payload).encode()).hexdigest()
         events.append({'id':'CS-'+digest[:20],'source_key':'CS:'+str(r)+':'+digest,
-          'source_ref':f'{filename} / CS!A{r}:AT{r}','source_row':r,'date':d.isoformat(),'timezone':'America/Toronto',
+          'source_ref':f'{filename} / CS!A{r}:AT{r}','source_row':r,'date':d.isoformat(),'timezone':zone_name(),
           'client_name':n,'client_label_raw':name,'email':email,'phone':text(s.cell(r,5).value),'service':service,
           'sales_owner':text(s.cell(r,1).value),'crew_size':scalar(s.cell(r,2).value),'crew_raw':worker,
           'team':team,'truck_label':truck,'truck_source':header_ref,

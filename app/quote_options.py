@@ -5,11 +5,12 @@ import re
 import json
 from fastapi import HTTPException
 from .platform_common import text
+from .business_zone import BUSINESS_ZONE, zone_name
 
 def expired_quote(quote):
     expiry=json.loads(quote['inputs_json']).get('expiry_date','')
     if not expiry:return False
-    try:return date.fromisoformat(expiry)<datetime.now(ZoneInfo('America/Toronto')).date()
+    try:return date.fromisoformat(expiry)<datetime.now(BUSINESS_ZONE).date()
     except (ValueError,TypeError):return True
 
 def document_options(data,lead):

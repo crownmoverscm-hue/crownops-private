@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 from .store import connect, transaction, rows, one, insert, audit, uid, now, dumps
 from .platform_common import require_role, SALES, OFFICE, MANAGERS, text, queue_message
 from .pricing import number, cents
+from .business_zone import BUSINESS_ZONE, zone_name
 
 
 def _token_hash(value: str) -> str:
@@ -156,8 +157,8 @@ def register_review_features(app,path,auth,public_url):
                 conflicts=[]
                 for job in assigned_jobs:
                     from .staff_portal import instant
-                    first=instant(job['start_at']).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
-                    last=(instant(job['end_at'])-timedelta(microseconds=1)).astimezone(ZoneInfo('America/Toronto')).date().isoformat()
+                    first=instant(job['start_at']).astimezone(BUSINESS_ZONE).date().isoformat()
+                    last=(instant(job['end_at'])-timedelta(microseconds=1)).astimezone(BUSINESS_ZONE).date().isoformat()
                     if first<=r['end_date'] and last>=r['start_date']:conflicts.append(job)
                 if conflicts:
                     raise HTTPException(409,'This employee is already assigned during the requested dates. Reassign those jobs before approving OFF.')
