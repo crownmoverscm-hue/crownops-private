@@ -89,10 +89,10 @@ The test counts come from test names that match each capability. They show cover
 | REL-3 | Release | `main` and production both report `0.12.7-rc6` | P0 | `app/main.py:237` | Bump the version on the next release; record the `/api/app-release` revision | D7 | Not started | Version differs from the deployed version |
 | REL-4 | CI | `core-v1-isolation.yml:35` hash gate fails after #95 | P1 | `requirements.txt` sha changed `0463b4…` → `92c2aa…` | Re-pin after the D4 decision | D4 | Not started | Workflow passes on its branch |
 | COM-1 | Communications | Client emails, the From header, QuickBooks memo, Square checkout and receipts hardcode Crown Movers' name, phone, email and Montréal time | P0 | 35+ sites | `app/company_profile.py`: stored profile, legacy Crown default, owner/manager API, `manage.py company-profile`, `doctor` flag | — | **Verified** (`tests/test_company_profile.py`, 14 tests) | With a configured profile, no generated message contains Crown identity; the legacy install output is byte-identical |
-| COM-2 | Branding | About 130 remaining Crown references in 44 files: portal/approval/invoice pages, invoice HTML (`invoices.py`), estimate delivery, staff invitations (`account_access.py`, `staff_onboarding.py`), error pages, manifest, icon, about 20 JS files | P0 | `grep` count 2026-11-05 | Serve `/api/company/public-profile` to pages; render server documents from `company_profile`; per-company logo upload | COM-1 | Not started | Brand guard test extended to all of `app/` passes |
+| COM-2 | Branding | Remaining Crown references in the client-facing pages and static UI: portal, approval, invoice-access, request and error pages, manifest, icon, about 20 JS files; plus `portal.py`, `invoice_access.py`, `client_participation.py`, `error_pages.py`, `ai.py` prompt | P0 | `grep` count 2026-11-05 | Serve `/api/company/public-profile` to pages; per-company logo upload | COM-1 | **Partial.** COM-2a done (staff invitations, recovery emails, QuickBooks estimate memo). Pages are not started. | Brand guard test extended to all of `app/` passes |
 | COM-3 | Scheduling | Business timezone hardcoded to America/Toronto (about 50 sites in 36 files, Python and JS) | P0 for companies outside Eastern time | `grep` | Single `business_zone(db)` from the profile; JS reads it from `/api/me` | COM-1 | Not started | Schedule, availability and payroll tests pass with a non-Eastern profile |
 | COM-4 | Pricing | Truck minimums, service minimums and rate import are Crown policy in code | P1 | `sales_crm_v6.py:60-82`, `seed.py`, `config/workbook_pricing_snapshot.json` | Move rules into owner-approved pricing settings; new installs start unapproved | — | Not started | A new company sets its own rules; Crown's results are unchanged |
-| COM-5 | Onboarding | Fresh installs seed Crown's mailboxes into `company_communications` | P0 (small) | `app/ux_features.py:55-64` | Seed empty, unapproved values when the profile is configured | COM-1 | Not started | A new install has no Crown address in its settings |
+| COM-5 | Onboarding | Fresh installs seed Crown's mailboxes into `company_communications`. **The billing settings form pre-filled Crown's legal name, address and GST/QST registration numbers for any company** | P0 | `app/ux_features.py:55-64`, `app/operations.py:263-274` | Configured companies get empty, unapproved mailboxes, their own issuer details, and **no** tax registrations. Legacy constants are centralized in `company_profile.py`. | COM-1 | **Verified** (`ConfiguredCompanyDefaultsTests`) | A new install shows no Crown address or tax number. Legacy install unchanged. |
 | COM-6 | Finance | Hardcoded CAD, Canadian and Québec tax assumptions | P1 (Canada-only first market) | `providers.py`, `invoices.py` | Document as a market limit; make tax codes configurable | D13 | Not started | Documented |
 | COM-8 | Admin UI | No owner screen for the company profile (API only) | P1 | — | Add a Settings → Company profile form | COM-1 | Not started | Owner edits the profile in the browser; a browser test covers it |
 | OPS-1 | Operations | Offsite backup and restore drill not executed | P1 | `release/OWNER-ACTIONS.txt` step 9 | Run the drill on a disposable deployment | D3 | Not started | Restore to a new path verified, with timing recorded |
@@ -123,6 +123,13 @@ The test counts come from test names that match each capability. They show cover
 - `manage.py` gained the `company-profile` command and a `doctor` flag.
 - Tests: `tests/test_company_profile.py`.
 
+**COM-5 / COM-2a (second commit):**
+- The billing issuer and tax pre-fill now come from the company profile; there are no foreign tax registrations.
+- Mailbox seeding is neutral for configured companies.
+- Staff invitation, recovery and password-change emails use the company name.
+- The QuickBooks estimate memo uses the company name and phone.
+- Legacy Crown defaults are centralized in `app/company_profile.py`.
+
 **Language note:** French sentences were only re-parameterized (the company name, phone and time label are substituted). No new French copy was written. A fluent reviewer should still confirm generated FR messages for a non-Crown company.
 
 **Test results:** see section 7.
@@ -135,10 +142,12 @@ The test counts come from test names that match each capability. They show cover
 |---|---|---|
 | Baseline `main`, single process (CI method) | `python -m unittest discover -s tests` | 622 tests, **12 errors** (same as CI) |
 | Pristine `main` (`db59167`), isolated | `python tests/run_isolated.py --min-tests 622 --jobs 4` | **55 modules, 622 tests, 0 failures** |
-| Working tree, isolated | `python tests/run_isolated.py --min-tests 636 --jobs 4` | see the session report |
+| After COM-1 commit, isolated | `python tests/run_isolated.py --min-tests 636 --jobs 4` | **56 modules, 636 tests, 0 failures** |
+| After COM-5 / COM-2a, isolated | `python tests/run_isolated.py --min-tests 640 --jobs 4` | **56 modules, 640 tests, 0 failures**; browser estimate_delivery and staff_portal pass |
 | JavaScript syntax | `node --check app/static/*.js` | All pass |
 | Node tests | `node --test tests/*.test.cjs` | 20 out of 20 pass |
-| Browser suites (Playwright) | `python tests/browser/run_mobile.py <suite>` | **Not run this session** |
+| Browser suites (Playwright, pre-installed Chromium) | `python tests/browser/run_mobile.py <suite>`, all 11 CI suites with CI environment variables | **11 out of 11 pass** after COM-1 (wix_sync, inbox, payroll_periods, hours_costs, staff_portal, client_participation, browser_recovery, estimate_delivery, mobile_schedule, today_workspace, team_chat) |
+| Smoke create | CI `create_app` snippet | 427 routes; `/api/company/profile` and `/api/company/public-profile` registered outside Core v1 |
 
 **Environment:** Python 3.13.18 and Node 22.23.4. `requirements.txt` was installed in a disposable virtualenv. Dependencies are as pinned on `main` (FastAPI 0.143.0, which production does not yet run; see D4).
 
@@ -182,12 +191,17 @@ D1–D11 are listed in the 2026-11-05 takeover assessment. They cover:
 
 ## 10. Next executable task
 
-**COM-2a:** brand the client-facing documents from the company profile:
-- the invoice HTML (`app/invoices.py`)
-- estimate delivery (`app/estimate_delivery.py`)
-- staff invitation and recovery emails (`app/account_access.py`, `app/staff_onboarding.py`)
-- the portal, approval and invoice-access pages, through `/api/company/public-profile`
+**COM-2b:** brand the client-facing pages from `/api/company/public-profile`:
+- `portal.html` / `client*.js`
+- `invoice_access.*`
+- `approval.*`
+- `participate.*`
+- `request.*`
+- `link_error.html` / `error_pages.py`
+- the manifest
 
-Then extend `CompanyBrandGuardTests` to all of `app/`.
+Run the browser suites `inbox`, `client_participation` and `browser_recovery`. Then extend `CompanyBrandGuardTests` to all of `app/`.
+
+The invoice HTML (`app/invoices.py`) already renders the issuer from billing terms; it was fixed through COM-5.
 
 Acceptance: with a configured profile, the full isolated suite passes and the brand guard finds no Crown identity outside `app/company_profile.py`.

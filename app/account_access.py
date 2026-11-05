@@ -87,6 +87,12 @@ def recovery_rate_limit(db, request, email='', purpose='request'):
     return True
 
 
+def _company_name(path):
+    from .company_profile import company_profile
+    with closing(connect(path)) as db:
+        return company_profile(db)['name']
+
+
 def send_account_email(path, person, public_url, body, subject, message_id):
     from .core_v1 import deny_if_enabled
     deny_if_enabled("send account email")
@@ -188,11 +194,13 @@ def send_invitation_email(path, invitation_id, raw_token, public_url, message_id
     from .staff_onboarding import invitation_content
     if stamp_hash(raw_token) != invitation_id:
         raise HTTPException(401, 'The private invitation link does not match.')
+    from .company_profile import company_profile
     with closing(connect(path)) as db:
         person = one(db, 'SELECT * FROM invitations WHERE token_hash=? AND used_at IS NULL AND expires_at>?', (invitation_id,now()))
+        company = company_profile(db)
     if not person:
         raise HTTPException(409, 'This invitation is no longer available. Create a new invitation if needed.')
-    content = invitation_content(person, public_url, public_url+'/#invite='+raw_token)
+    content = invitation_content(person, public_url, public_url+'/#invite='+raw_token, company)
     return _send_account_message(path, person['email'], public_url, content['body'], content['subject'], message_id, content['html'])
 
 
@@ -258,7 +266,7 @@ def deliver_recovery(path, email, public_url):
             +public_url+'/#reset='+raw+'\n\n'
             'The link works once. Your existing sign-ins will end after the reset. '
             'Your authenticator is still required if enabled.\n\n'
-            'If you did not request this, ignore the email and contact your CrownOps owner.\n\nCrown Movers')
+            'If you did not request this, ignore the email and contact your CrownOps owner.\n\n'+_company_name(path))
     try:
         provider_id = send_account_email(path, person, public_url, body, 'Reset your CrownOps password', key)
         with transaction(path) as db:
@@ -281,7 +289,7 @@ def notify_password_reset(path, user_id, public_url):
         send_account_email(path, person, public_url,
             'Your CrownOps password was changed. All previous sign-ins have ended.\n\n'
             'If you did not make this change, contact the owner immediately. '
-            'Your authenticator protection remains in place.\n\nCrown Movers',
+            'Your authenticator protection remains in place.\n\n'+_company_name(path),
             'Your CrownOps password was changed', uid('AUTHNOTICE'))
     except Exception:
         with transaction(path) as db:
@@ -397,7 +405,10 @@ def register_account_access(app, path, auth, public_url):
             person[key] = value.strip()
         if person['email'] and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',person['email']):
             raise HTTPException(422, 'Enter a valid invitation email.')
-        return invitation_content(person, public_url)
+        from .company_profile import company_profile
+        with closing(connect(path)) as db:
+            company = company_profile(db)
+        return invitation_content(person, public_url, company=company)
 
     @app.post('/api/account-access/invitations/{invitation_id}/send-email')
     def email_invitation(invitation_id:str, data:dict, u=Depends(auth)):

@@ -446,11 +446,13 @@ def create_app(database_path=None, *, core_pilot=False):
             if send_email:reserve_invitation_email(db,invitation,request_id,u)
             audit(db,u['id'],'Invitation created','users',email,{'role':role})
         from .staff_onboarding import invitation_content
+        from .company_profile import company_profile
+        with closing(connect(path)) as cdb:company_profile_for_preview=company_profile(cdb)
         url=public_url+'/#invite='+token
         out={'url':url,'expires_in':'48 hours','expires_at':invitation['expires_at'],'sent':False,
              'invitation_id':invitation['token_hash'],'recipient':email,'name':person['name'],'role':role,
              'email_requested':send_email,'delivery_status':'Not requested',
-             'email_preview':invitation_content(person,public_url,url)}
+             'email_preview':invitation_content(person,public_url,url,company_profile_for_preview)}
         if send_email:
             delivery=deliver_invitation_email(path,invitation['token_hash'],token,public_url,request_id,u)
             delivery.pop('url',None);delivery.pop('email_preview',None);out.update(delivery)

@@ -43,13 +43,15 @@ DEVICE_STEPS = [
 ]
 
 
-def invitation_content(person, public_url, signup_url=None):
+def invitation_content(person, public_url, signup_url=None, company=None):
+    from .company_profile import profile_or_legacy
+    company_name = profile_or_legacy(company)['name']
     """The preview uses a labeled placeholder; only the send path supplies a real link."""
     role = person['role']
     name = person.get('name') or 'Team member'
     email = person.get('email') or 'the email address on your invitation'
     address = public_url.rstrip('/')+'/'
-    subject = 'Crown Movers: set up your CrownOps account'
+    subject = company_name+': set up your CrownOps account'
     sections = [
         ('1. Create your account', [
             'Open your private signup link. It works once and expires after 48 hours.',
@@ -66,10 +68,10 @@ def invitation_content(person, public_url, signup_url=None):
             'Open Help & install inside CrownOps for device instructions. Use Important contacts for company service numbers.',
             'Check your name after opening the icon; sign in again if asked. Your role controls the screens you can use.',
             'Internet is required. Sign out on shared devices and keep your password and invitation link private.',
-            'If your name, role or assigned jobs look wrong, contact the Crown Movers owner before entering work.'
+            'If your name, role or assigned jobs look wrong, contact the '+company_name+' owner before entering work.'
         ])
     ]
-    intro = ('Hi '+name+',\n\nYou have been invited to CrownOps, the Crown Movers team workspace.\n'
+    intro = ('Hi '+name+',\n\nYou have been invited to CrownOps, the '+company_name+' team workspace.\n'
              'Your account email: '+email+'\nYour access: '+ROLE_LABELS[role])
     link = signup_url or '[Your private signup link will be added when the invitation is created.]'
     plain = intro+'\n\nCREATE YOUR ACCOUNT\n'+link+'\n\n'
@@ -77,11 +79,11 @@ def invitation_content(person, public_url, signup_url=None):
         plain += title+'\n'+'\n'.join('- '+item for item in items)+'\n\n'
         if title.startswith('2.'):
             plain += 'Regular app address: '+address+'\n\n'
-    plain += 'Crown Movers\nIf you were not expecting this invitation, contact the Crown Movers owner.'
+    plain += company_name+'\nIf you were not expecting this invitation, contact the '+company_name+' owner.'
     accent = '#c4510a'
     button = ('<a href="'+escape(signup_url,quote=True)+'" style="display:inline-block;padding:14px 22px;background:'+accent+';color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold">Create my CrownOps account</a>'
               if signup_url else '<p style="padding:14px;background:#fff2e9">Your private signup button will appear here.</p>')
-    body = '<p style="margin:0;color:#626262;font-size:14px;font-weight:bold;letter-spacing:1px">CROWN MOVERS</p><h1 style="font-size:28px;line-height:1.2;color:#161616">Welcome to CrownOps</h1>'
+    body = '<p style="margin:0;color:#626262;font-size:14px;font-weight:bold;letter-spacing:1px">'+escape(company_name.upper())+'</p><h1 style="font-size:28px;line-height:1.2;color:#161616">Welcome to CrownOps</h1>'
     body += '<p>Hi '+escape(name)+',</p><p>Your team account is ready to set up.</p><p><strong>Account email:</strong> '+escape(email)+'<br><strong>Access:</strong> '+escape(ROLE_LABELS[role])+'</p>'+button
     if signup_url:
         body += '<p style="font-size:14px;color:#626262;overflow-wrap:anywhere;word-break:break-all">If the button does not open, copy this private link:<br><a href="'+escape(signup_url,quote=True)+'">'+escape(signup_url)+'</a></p>'
@@ -90,6 +92,6 @@ def invitation_content(person, public_url, signup_url=None):
         body += '<ul style="padding-left:22px">'+''.join('<li style="margin:0 0 10px">'+escape(item)+'</li>' for item in items)+'</ul>'
         if title.startswith('2.'):
             body += '<p><strong>Regular app address:</strong><br><a style="overflow-wrap:anywhere;word-break:break-all" href="'+escape(address,quote=True)+'">'+escape(address)+'</a></p>'
-    body += '<p style="font-size:14px;color:#626262;border-top:1px solid #deddd9;padding-top:18px">Crown Movers<br>If you were not expecting this invitation, contact the Crown Movers owner.</p>'
+    body += '<p style="font-size:14px;color:#626262;border-top:1px solid #deddd9;padding-top:18px">'+escape(company_name)+'<br>If you were not expecting this invitation, contact the '+escape(company_name)+' owner.</p>'
     html = '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Welcome to CrownOps</title></head><body style="margin:0;padding:16px;background:#f6f5f2;font:17px/1.6 Arial,sans-serif;color:#202020"><div style="max-width:620px;margin:0 auto;padding:24px;background:#ffffff;border:1px solid #deddd9;border-radius:12px;overflow-wrap:anywhere">'+body+'</div></body></html>'
     return {'subject':subject,'body':plain,'html':html}

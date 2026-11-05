@@ -31,6 +31,29 @@ LEGACY_PROFILE = {
     'local_time_label_fr': 'heure de Montréal',
 }
 
+# Legacy-only defaults for the original Crown Movers installation. They are used ONLY
+# while no company profile is configured, so another company never inherits them.
+LEGACY_ISSUER = {
+    'name': '9411-8213 Quebec Inc. / Déménagement Crown / Crown Movers',
+    'address': '4030 Blvd. de la Côte-Vertu, Suite 111, Montréal, QC H4R 1V4',
+    'email': 'info@crownmovers.ca',
+    'phone': '514-606-4030',
+}
+LEGACY_TAXES = [
+    {'name': 'GST', 'rate_percent': 5.0, 'registration': '737446534RT001'},
+    {'name': 'QST', 'rate_percent': 9.975, 'registration': '1227197265TQ001'},
+]
+LEGACY_COMMUNICATIONS = {
+    'connected_mailbox': 'crownmovers.cm@gmail.com',
+    'send_as': 'info@crownmovers.ca',
+    'reply_to': 'info@crownmovers.ca',
+    'default_from': 'info@crownmovers.ca',
+    'secondary_inbox': 'crownmovers.cm@gmail.com',
+    'client_email_rule': 'Use the paid Gmail mailbox for storage and send client mail as the Crown Movers domain address when the alias is verified.',
+    'approved': False,
+    'note': 'Review build default. Connect and verify both mailboxes before live use.',
+}
+
 EMAIL = re.compile(r'[^\s@]+@[^\s@]+\.[^\s@]+')
 PHONE_CHARS = re.compile(r'[0-9+()\-. ]+')
 EDITABLE = ('name', 'short_name', 'phone', 'email', 'timezone', 'local_time_label', 'local_time_label_fr')

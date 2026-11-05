@@ -260,18 +260,23 @@ def register_operations(app,path,auth):
         require_role(u,OFFICE)
         with closing(connect(path)) as db:
             result={k:settings(db,k,{}) for k in ('billing_policy','client_terms','media_program','payroll_policy','automation_policy','deposit_policy')}
+            from .company_profile import company_profile
+            company=company_profile(db)
         billing=dict(result.get('billing_policy') or {})
         terms=dict(billing.get('terms') or {})
         issuer=dict(terms.get('issuer') or {})
-        issuer.setdefault('name','9411-8213 Quebec Inc. / Déménagement Crown / Crown Movers')
-        issuer.setdefault('address','4030 Blvd. de la Côte-Vertu, Suite 111, Montréal, QC H4R 1V4')
-        issuer.setdefault('email','info@crownmovers.ca')
-        issuer.setdefault('phone','514-606-4030')
+        if company['configured']:
+            # Another company's legal name, address and tax registrations must never pre-fill this form.
+            issuer.setdefault('name',company['name']);issuer.setdefault('address','')
+            issuer.setdefault('email',company['email']);issuer.setdefault('phone',company['phone'])
+            terms.setdefault('taxes',[])
+        else:
+            from .company_profile import LEGACY_ISSUER
+            for field,value in LEGACY_ISSUER.items():issuer.setdefault(field,value)
         terms['issuer']=issuer
-        if not terms.get('taxes'):
-            terms['taxes']=[
-              {'name':'GST','rate_percent':5.0,'registration':'737446534RT001'},
-              {'name':'QST','rate_percent':9.975,'registration':'1227197265TQ001'}]
+        if not terms.get('taxes') and not company['configured']:
+            from .company_profile import LEGACY_TAXES
+            terms['taxes']=[dict(tax) for tax in LEGACY_TAXES]
         terms.setdefault('catalogue',[])
         billing['terms']=terms
         result['billing_policy']=billing

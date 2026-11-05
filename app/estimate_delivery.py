@@ -65,7 +65,9 @@ def delivery_source(db, qid):
     return q, lead, terms, fingerprint
 
 
-def estimate_payload(q, lead, terms, basis, item, tax, discount_account):
+def estimate_payload(q, lead, terms, basis, item, tax, discount_account, company=None):
+    from .company_profile import profile_or_legacy
+    c = profile_or_legacy(company)
     if basis not in ('low', 'high'): raise HTTPException(422, 'Choose which end of the estimate range QuickBooks will display.')
     if not item or not tax: raise HTTPException(503, 'Configure the reviewed QuickBooks service item and tax code.')
     inp = json.loads(q['inputs_json']); result = json.loads(q['result_json'])
@@ -103,8 +105,8 @@ def estimate_payload(q, lead, terms, basis, item, tax, discount_account):
     # Description-only lines preserve full terms; never truncate a signed scope.
     for start in range(0,len(details),3500):
         lines.append({'DetailType':'DescriptionOnly','Description':details[start:start+3500]})
-    memo = (f"Bonjour {lead['client_name']}, merci de considérer Crown Movers! Estimation avant taxes : {result['low_cents']/100:.2f}–{result['high_cents']/100:.2f} $ CA. Le total affiché utilise la borne {'haute' if basis=='high' else 'basse'}. Le temps réel sera facturé selon les conditions ci-dessous. Acceptez ce devis pour demander la réservation. La date et l’équipe restent à confirmer par Crown. Besoin d’aide? 514-606-4030." if fr else
-            f"Hi {lead['client_name']}, thank you for considering Crown Movers! Estimated range before tax: CAD {result['low_cents']/100:.2f}–{result['high_cents']/100:.2f}. The displayed total uses the {basis} end. Actual service time is billed under the terms below. Accept this estimate to request booking. Crown will confirm your date and crew separately. Questions? 514-606-4030.")
+    memo = (f"Bonjour {lead['client_name']}, merci de considérer {c['name']}! Estimation avant taxes : {result['low_cents']/100:.2f}–{result['high_cents']/100:.2f} $ CA. Le total affiché utilise la borne {'haute' if basis=='high' else 'basse'}. Le temps réel sera facturé selon les conditions ci-dessous. Acceptez ce devis pour demander la réservation. La date et l’équipe restent à confirmer par {c['short_name']}. Besoin d’aide? {c['phone']}." if fr else
+            f"Hi {lead['client_name']}, thank you for considering {c['name']}! Estimated range before tax: CAD {result['low_cents']/100:.2f}–{result['high_cents']/100:.2f}. The displayed total uses the {basis} end. Actual service time is billed under the terms below. Accept this estimate to request booking. {c['short_name']} will confirm your date and crew separately. Questions? {c['phone']}.")
     return {'CurrencyRef':{'value':'CAD'},'GlobalTaxCalculation':'TaxExcluded','ApplyTaxAfterDiscount':True,
             'TxnDate':now()[:10],'ExpirationDate':inp['expiry_date'],'BillEmail':{'Address':lead['email']},
             'Line':lines,'CustomerMemo':{'value':memo},'PrivateNote':'CrownOps '+q['id']+' revision '+str(q['revision']),
@@ -168,7 +170,9 @@ def prepare(path, qid, basis, actor):
         old=one(db,'SELECT * FROM qbo_estimate_deliveries WHERE quote_id=?',(qid,))
         if old: return {'prepared':old['state']=='Ready','state':old['state'],'external_id':old['external_id']}
         q,lead,terms,fingerprint=delivery_source(db,qid)
-    body=estimate_payload(q,lead,terms,basis,qbo_mapping(path,'service_item_id'),qbo_mapping(path,'tax_code_id'),qbo_mapping(path,'discount_account_id'))
+        from .company_profile import company_profile
+        company=company_profile(db)
+    body=estimate_payload(q,lead,terms,basis,qbo_mapping(path,'service_item_id'),qbo_mapping(path,'tax_code_id'),qbo_mapping(path,'discount_account_id'),company)
     _,realm,_=_qbo_connection(path)
     with transaction(path) as db:
         if delivery_source(db,qid)[3]!=fingerprint: raise HTTPException(409,'Estimate changed. Reopen it.')

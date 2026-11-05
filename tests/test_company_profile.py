@@ -30,10 +30,13 @@ NEW_COMPANY = {
 }
 # Modules that compose client-facing messages. Brand text belongs only in app/company_profile.py.
 OUTBOUND_MODULES = ['client_communications', 'sales_crm_v6', 'workflows', 'extensions', 'sales_journey',
-                    'review_features', 'conversations', 'providers', 'worker', 'invoice_quickbooks_delivery']
+                    'review_features', 'conversations', 'providers', 'worker', 'invoice_quickbooks_delivery',
+                    'operations', 'ux_features', 'staff_onboarding', 'account_access', 'estimate_delivery']
 
 
-class CompanyProfileApiTests(unittest.TestCase):
+class CompanyFixture(unittest.TestCase):
+    """Shared fictional installation with one signed-in user per role (no tests of its own)."""
+
     def setUp(self):
         env = patch.dict(os.environ, {'CROWNOPS_ENV': 'test', 'CROWNOPS_ALLOW_EXTERNAL': '0', 'QBO_ENV': 'sandbox'})
         env.start(); self.addCleanup(env.stop)
@@ -55,6 +58,9 @@ class CompanyProfileApiTests(unittest.TestCase):
     def save(self, role='owner', **changes):
         current = self.clients['owner'].get('/api/company/profile').json()
         return self.clients[role].put('/api/company/profile', json={**NEW_COMPANY, **changes, 'version': current['version']})
+
+
+class CompanyProfileApiTests(CompanyFixture):
 
     def test_existing_installation_keeps_legacy_identity_until_configured(self):
         profile = self.clients['sales'].get('/api/company/profile').json()
@@ -122,6 +128,44 @@ class CompanyProfileApiTests(unittest.TestCase):
         self.assertIsNone(LEGACY_MARKERS.search(html + str(mime['From'])))
 
 
+class ConfiguredCompanyDefaultsTests(CompanyFixture):
+    """A configured company never inherits Crown's legal identity, tax numbers or mailboxes."""
+
+    def test_billing_form_prefills_own_identity_and_no_foreign_tax_registrations(self):
+        legacy = self.clients['owner'].get('/api/platform/settings').json()['billing_policy']['terms']
+        self.assertIn('Crown Movers', legacy['issuer']['name'])  # existing installation unchanged
+        self.assertEqual([t['registration'] for t in legacy['taxes']], ['737446534RT001', '1227197265TQ001'])
+        self.save()
+        terms = self.clients['owner'].get('/api/platform/settings').json()['billing_policy']['terms']
+        self.assertEqual(terms['issuer'], {'name': NEW_COMPANY['name'], 'address': '', 'email': NEW_COMPANY['email'], 'phone': NEW_COMPANY['phone']})
+        self.assertEqual(terms['taxes'], [])
+        self.assertIsNone(LEGACY_MARKERS.search(str(terms)))
+
+    def test_staff_invitation_preview_uses_company_name(self):
+        self.save()
+        preview = self.clients['owner'].post('/api/account-access/invitation-preview',
+                                             json={'name': 'Fictional Mover', 'email': 'mover@example.invalid', 'role': 'crew'})
+        self.assertEqual(preview.status_code, 200, preview.text)
+        content = preview.json()
+        self.assertIn(NEW_COMPANY['name'], content['subject'])
+        self.assertIsNone(LEGACY_MARKERS.search(content['subject'] + content['body'] + content['html']))
+
+    def test_new_installation_with_profile_does_not_seed_another_companys_mailboxes(self):
+        from app.company_profile import store_profile
+        from app.platform_common import settings
+        from app.store import initialize
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'fresh.sqlite3'
+            initialize(path)
+            with transaction(path) as db:
+                store_profile(db, {**NEW_COMPANY, 'version': 0}, 'test')
+            create_app(path)
+            with closing(connect(path)) as db:
+                comms = settings(db, 'company_communications')
+            self.assertEqual(comms['send_as'], ''); self.assertFalse(comms['approved'])
+            self.assertIsNone(LEGACY_MARKERS.search(str(comms)))
+
+
 class CompanyTemplateTests(unittest.TestCase):
     def setUp(self):
         from app.company_profile import validate_profile
@@ -170,6 +214,13 @@ class CompanyTemplateTests(unittest.TestCase):
                'calculation': {'lines': [], 'discount_cents': 0}}
         memo = qbo_invoice_payload(doc, 'C1', 'ITEM', 'TAX', '', self.company)['CustomerMemo']['value']
         self.assert_clean(memo)
+
+    def test_quickbooks_estimate_memo_uses_company(self):
+        from app.estimate_delivery import estimate_payload
+        import inspect
+        source = inspect.getsource(estimate_payload)
+        self.assertIn("c['name']", source); self.assertIn("c['phone']", source)
+        self.assertIsNone(re.search(r'Crown(?!Ops)|514-606-4030', source))  # CrownOps is the product name
 
     def test_legacy_default_output_is_unchanged_for_existing_installation(self):
         from app.client_communications import preparation_body

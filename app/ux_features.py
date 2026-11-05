@@ -52,17 +52,14 @@ def seed_ux_defaults(path):
         for e in rows(db,'SELECT * FROM employees ORDER BY name'):_profile_seed(db,e)
         if one(db,"SELECT employee_id FROM employee_directory_profiles WHERE employee_id='DEMO-EMP-1'"):
             db.execute("UPDATE employee_directory_profiles SET team_lead=1 WHERE employee_id='DEMO-EMP-1'")
+        from .company_profile import company_profile
+        if settings(db,'company_communications') is None and company_profile(db)['configured']:
+            put_setting(db,'company_communications',{'connected_mailbox':'','send_as':'','reply_to':'','default_from':'','secondary_inbox':'',
+                'client_email_rule':'Store mail in the connected Gmail mailbox and send as the company domain alias after Google verifies the alias.',
+                'approved':False,'note':'Connect and verify the company mailbox before live use.'})
         if settings(db,'company_communications') is None:
-            put_setting(db,'company_communications',{
-                'connected_mailbox':'crownmovers.cm@gmail.com',
-                'send_as':'info@crownmovers.ca',
-                'reply_to':'info@crownmovers.ca',
-                'default_from':'info@crownmovers.ca',
-                'secondary_inbox':'crownmovers.cm@gmail.com',
-                'client_email_rule':'Use the paid Gmail mailbox for storage and send client mail as the Crown Movers domain address when the alias is verified.',
-                'approved':False,
-                'note':'Review build default. Connect and verify both mailboxes before live use.'
-            })
+            from .company_profile import LEGACY_COMMUNICATIONS
+            put_setting(db,'company_communications',dict(LEGACY_COMMUNICATIONS))
 
 
 def _job_readiness(db,j):
@@ -786,6 +783,6 @@ def register_ux_features(app,path,auth):
         require_role(u,MANAGERS)
         connected=text(data.get('connected_mailbox',''),'Connected mailbox',240).lower();send_as=text(data.get('send_as',''),'Send-as address',240).lower();reply_to=text(data.get('reply_to',''),'Reply-to address',240).lower()
         if any(not __import__('re').fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email) for email in (connected,send_as,reply_to)):raise HTTPException(422,'Enter valid company email addresses.')
-        cfg={'connected_mailbox':connected,'send_as':send_as,'reply_to':reply_to,'default_from':send_as,'secondary_inbox':connected,'client_email_rule':'Store mail in the connected Gmail mailbox and send as the Crown Movers domain alias after Google verifies the alias.','approved':data.get('approved') is True,'note':text(data.get('note',''),'Note',2000)}
+        cfg={'connected_mailbox':connected,'send_as':send_as,'reply_to':reply_to,'default_from':send_as,'secondary_inbox':connected,'client_email_rule':'Store mail in the connected Gmail mailbox and send as the company domain alias after Google verifies the alias.','approved':data.get('approved') is True,'note':text(data.get('note',''),'Note',2000)}
         with transaction(path) as db:put_setting(db,'company_communications',cfg);audit(db,u['id'],'Company communication defaults updated','settings','company_communications')
         return cfg
