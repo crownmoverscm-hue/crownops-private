@@ -93,7 +93,7 @@ class ConfiguredCompanyWhiteLabelTests(Installation):
                         check = subprocess.run([node, '--check', str(target)], capture_output=True, text=True)
                         self.assertEqual(check.returncode, 0, rel + ': ' + check.stderr[-400:])
         client_js = self.public.get('/static/client.js').text
-        self.assertIn("O\\'Neil", client_js); self.assertIn('(902) 555-0147', self.public.get('/static/request.js').text)
+        self.assertIn("O\\u0027Neil", client_js); self.assertIn('\\u0028902\\u0029 555-0147', self.public.get('/static/request.js').text)  # JS-encoded phone
         manifest = json.loads(self.public.get('/manifest.webmanifest').text)
         self.assertIn("O'Neil Moving & Storage", manifest['name'])
         for page in ('/', '/portal', '/request', '/approval', '/participate', '/invoice-access'):
@@ -123,12 +123,56 @@ class ConfiguredCompanyWhiteLabelTests(Installation):
             with self.subTest(asset=asset):
                 self.assertIsNone(CROWN.search(self.public.get(asset).text), asset)
 
-    def test_unsafe_name_characters_are_refused(self):
-        version = self.c['owner'].get('/api/company/profile').json()['version']
-        for bad in ('Evil `x` Movers', 'Movers ${alert(1)}', 'Back\\slash Movers'):
-            with self.subTest(name=bad):
-                r = self.c['owner'].put('/api/company/profile', json={**COMPANY, 'name': bad, 'version': version})
-                self.assertEqual(r.status_code, 422)
+    def test_adversarial_names_are_encoded_inert_in_every_context(self):
+        node = shutil.which('node'); self.assertIsNotNone(node, 'Node.js is required')
+        from app.branding import _escape
+        hostile = ["Ann's \"Best\" Movers", 'Evil `x` ${globalThis.pwned=1} \\ Movers', 'Déménagement Élite 🚚', 'Movers */ --> // \u0027', "'+alert(1)+'"]
+        for name in hostile:
+            with self.subTest(name=name):
+                e = _escape(name, 'js')
+                probe = (f"const a='{e}',b=\"{e}\",c=`{e}`,r=/{e}/;"
+                         "process.stdout.write(JSON.stringify({a,b,c,r:r.source,pwned:globalThis.pwned===1}))")
+                out = subprocess.run([node, '-e', probe], capture_output=True, text=True)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                got = json.loads(out.stdout)
+                self.assertEqual((got['a'], got['b'], got['c'], got['pwned']), (name, name, name, False))
+                self.assertNotIn('*/', _escape(name, 'css')); self.assertEqual(json.loads('"' + _escape(name, 'json') + '"'), name)
+
+    def test_hostile_profile_keeps_every_asset_valid_and_product_references_intact(self):
+        node = shutil.which('node'); self.assertIsNotNone(node, 'Node.js is required')
+        name = 'Evil `x` ${alert(1)} \\ "Q" Ünïcode 🚚 */ Movers'
+        self.configure(name=name, short_name="O'Brien `")
+        with tempfile.TemporaryDirectory() as td:
+            paths = []
+            for p in TEXT_FILES:
+                body = self.public.get('/static/' + p.name).text; original = p.read_text()
+                with self.subTest(asset=p.name):
+                    self.assertEqual(body.count('CrownOps'), original.count('CrownOps'))
+                    self.assertIsNone(CROWN.search(body))
+                    if p.suffix == '.html':
+                        self.assertEqual((body.count('<'), body.count('>')), (original.count('<'), original.count('>')))
+                    if p.suffix == '.css':
+                        self.assertEqual(body.count('*/'), original.count('*/'))
+                if p.suffix == '.js':
+                    target = Path(td) / p.name; target.write_text(body); paths.append(str(target))
+            check = ("const vm=require('vm'),fs=require('fs');const bad=[];for(const f of process.argv.slice(1)){"
+                     "try{new vm.Script(fs.readFileSync(f,'utf8'),{filename:f});}catch(e){bad.push(f+': '+e.message);}}"
+                     "process.stdout.write(JSON.stringify(bad));")
+            out = subprocess.run([node, '-e', check, *paths], capture_output=True, text=True)
+            self.assertEqual(json.loads(out.stdout), [], out.stderr)
+        manifest = json.loads(self.public.get('/manifest.webmanifest').text)
+        self.assertIn(name, manifest['name'])
+        sources = {'/': self.app.state.ui_index, '/portal': (STATIC / 'portal.html').read_text(), '/invoice-access': (STATIC / 'invoice_access.html').read_text()}
+        for page, source in sources.items():
+            body = self.public.get(page).text  # name is HTML text: inert, and adds no elements or scripts
+            self.assertEqual((body.count('<'), body.count('<script')), (source.count('<'), source.count('<script')), page)
+
+    def test_branding_change_is_never_served_stale(self):
+        self.configure(name='First Fictional Movers')
+        self.assertIn('First Fictional Movers', self.public.get('/static/client.js').text)
+        self.configure(name='Second Fictional Movers')
+        body = self.public.get('/static/client.js').text
+        self.assertIn('Second Fictional Movers', body); self.assertNotIn('First Fictional Movers', body)
 
 
 class LogoUploadTests(Installation):

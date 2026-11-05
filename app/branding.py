@@ -33,13 +33,28 @@ ICON_SIZES = {'app-192.png': 192, 'app-512.png': 512, 'app-maskable-512.png': 51
 STANDALONE_CROWN = re.compile(r'\bCrown\b(?!Ops)')
 
 
+SAFE_JS = re.compile(r'[A-Za-z0-9 .,&-]')
+
+
 def _escape(value, fmt):
+    """Context-specific encoding; safety never depends on which characters a name contains."""
     if fmt == 'html':
         return html.escape(value, quote=True)
     if fmt == 'json':
-        return json.dumps(value)[1:-1]
-    # JavaScript/CSS: safe inside '…', "…" and `…` literals (profile names cannot contain ` $ { } \ < >).
-    return value.replace("'", "\\'").replace('"', '\\"')
+        return json.dumps(value, ensure_ascii=True)[1:-1]
+    if fmt == 'css':  # brand text appears only in comments: keep plain characters only
+        return re.sub(r"[^A-Za-z0-9 .,&'-]", '', value)
+    # JavaScript: \uXXXX for everything outside a small safe set. Valid and inert inside '…', "…",
+    # `…` (no ${ interpolation), regular expressions and comments; it cannot close a literal.
+    return ''.join(ch if SAFE_JS.fullmatch(ch) else ''.join(f'\\u{u:04x}' for u in _utf16(ch)) for ch in value)
+
+
+def _utf16(ch):
+    code = ord(ch)
+    if code < 0x10000:
+        return [code]
+    code -= 0x10000
+    return [0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF)]
 
 
 def replacements(company):
@@ -64,7 +79,9 @@ def rewrite(text, fmt, company):
 def _format_for(path, content_type):
     if path.endswith('.webmanifest') or 'manifest+json' in content_type:
         return 'json'
-    if path.endswith(('.js', '.css')) or 'javascript' in content_type or 'text/css' in content_type:
+    if path.endswith('.css') or 'text/css' in content_type:
+        return 'css'
+    if path.endswith('.js') or 'javascript' in content_type:
         return 'js'
     return 'html'
 

@@ -163,9 +163,6 @@ def validate_profile(data):
     if unknown:
         raise HTTPException(422, 'Unknown company profile field: ' + sorted(unknown)[0] + '.')
     name = _clean(data.get('name'), 'Company name', 120, True)
-    for label, value in (('Company name', data.get('name')), ('Short name', data.get('short_name'))):
-        if isinstance(value, str) and any(c in value for c in '`${}\\'):
-            raise HTTPException(422, f'{label} cannot contain ` $ {{ }} or backslash characters.')
     short_name = _clean(data.get('short_name'), 'Short name', 60) or name
     phone = _clean(data.get('phone'), 'Company phone', 40, True)
     if not PHONE_CHARS.fullmatch(phone) or not 7 <= len(re.sub(r'\D', '', phone)) <= 15:
