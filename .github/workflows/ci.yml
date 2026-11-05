@@ -30,12 +30,16 @@ jobs:
         run: pip install -r requirements.txt
       - name: Compile Python
         run: python -m compileall -q app manage.py tests
-      - name: Run release-readiness tests
+      - name: Run release-readiness tests (one interpreter per module)
+        # The Core v1 profile installs irreversible process-wide transport guards.
+        # A single `unittest discover` process leaks them into later modules, so each
+        # module runs in its own interpreter. The floor stops tests silently dropping out;
+        # raise it whenever tests are added.
         env:
           CROWNOPS_ENV: test
           CROWNOPS_ALLOW_EXTERNAL: "0"
           QBO_ENV: sandbox
-        run: python -m unittest discover -s tests -v
+        run: python tests/run_isolated.py --min-tests 622 --jobs 2
       - name: Check JavaScript syntax
         run: |
           for f in app/static/*.js; do
