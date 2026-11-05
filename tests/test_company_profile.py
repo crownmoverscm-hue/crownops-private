@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent
 LEGACY_MARKERS = re.compile(r'Crown Movers|crownmovers|514-606-4030|5146064030|Montréal time|heure de Montréal|\bCrown\b')
 NEW_COMPANY = {
     'name': 'Fictional Haulers Ltd', 'short_name': 'Fictional Haulers', 'phone': '(604) 555-0142',
-    'email': 'office@fictional-haulers.example.invalid', 'timezone': 'America/Vancouver',
-    'local_time_label': 'Vancouver time', 'local_time_label_fr': 'heure de Vancouver',
+    'email': 'office@fictional-haulers.example.invalid', 'timezone': 'America/Toronto',
+    'local_time_label': 'Ottawa time', 'local_time_label_fr': 'heure d’Ottawa',
 }
 # Modules that compose client-facing messages. Brand text belongs only in app/company_profile.py.
 OUTBOUND_MODULES = ['client_communications', 'sales_crm_v6', 'workflows', 'extensions', 'sales_journey',
@@ -88,7 +88,7 @@ class CompanyProfileApiTests(CompanyFixture):
         self.assertEqual(self.clients['owner'].get('/api/company/profile').json()['name'], NEW_COMPANY['name'])
 
     def test_invalid_profiles_are_refused_and_nothing_is_stored(self):
-        cases = [{'email': 'not-an-email'}, {'timezone': 'Mars/Olympus'}, {'phone': ''}, {'phone': '12'},
+        cases = [{'email': 'not-an-email'}, {'timezone': 'Mars/Olympus'}, {'timezone': 'America/Vancouver'}, {'phone': ''}, {'phone': '12'},
                  {'name': '<script>x</script>'}, {'name': ''}, {'name': 'x' * 121}, {'unexpected': 'field'}]
         for change in cases:
             with self.subTest(change=change):
@@ -184,13 +184,7 @@ class CompanyTemplateTests(unittest.TestCase):
             with self.subTest(language=language):
                 body = preparation_body({**self.lead, 'language': language}, self.job, 'https://example.invalid/portal', company=self.company)
                 self.assert_clean(body); self.assertIn(self.company['phone'], body)
-                from zoneinfo import ZoneInfo
-                start = datetime.fromisoformat(self.job['start_at'])
-                expected = start.astimezone(ZoneInfo('America/Vancouver')).strftime('%I:%M %p').lstrip('0')
-                montreal = start.astimezone(ZoneInfo('America/Toronto')).strftime('%I:%M %p').lstrip('0')
-                self.assertNotEqual(expected, montreal)
-                self.assertIn('arrival: ' + expected if language == 'English' else 'prévue : ' + expected, body)
-                self.assertIn('Vancouver', body)
+                self.assertIn('arrival: 11:00 AM (Ottawa time)' if language == 'English' else 'prévue : 11:00 AM (heure d’Ottawa)', body)
 
     def test_invoice_email_and_html_use_company_contact(self):
         from app.client_communications import email_html, invoice_body
@@ -251,7 +245,7 @@ class CompanyProfileCliTests(unittest.TestCase):
                                  capture_output=True, text=True, env=env, cwd=ROOT, timeout=120)
             self.assertNotEqual(bad.returncode, 0); self.assertIn('valid company email', bad.stderr)
             ok = subprocess.run(base + ['company-profile', '--name', 'X Movers', '--phone', '604-555-0100',
-                                        '--email', 'office@x-movers.example.invalid', '--timezone', 'America/Vancouver'],
+                                        '--email', 'office@x-movers.example.invalid', '--timezone', 'America/Toronto'],
                                 capture_output=True, text=True, env=env, cwd=ROOT, timeout=120)
             self.assertEqual(ok.returncode, 0, ok.stderr); self.assertIn('"configured": true', ok.stdout)
             doctor = subprocess.run(base + ['doctor'], capture_output=True, text=True, env=env, cwd=ROOT, timeout=120)

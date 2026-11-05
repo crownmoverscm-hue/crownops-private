@@ -66,6 +66,9 @@ LEGACY_COMMUNICATIONS = {
 
 EMAIL = re.compile(r'[^\s@]+@[^\s@]+\.[^\s@]+')
 PHONE_CHARS = re.compile(r'[0-9+()\-. ]+')
+# Scheduling, availability and payroll still interpret local times as America/Toronto (COM-3).
+# Until every site uses the company zone, another zone would shift booked times, so it is refused.
+SUPPORTED_TIMEZONES = ('America/Toronto',)
 EDITABLE = ('name', 'short_name', 'phone', 'email', 'timezone', 'local_time_label', 'local_time_label_fr')
 
 
@@ -113,6 +116,8 @@ def validate_profile(data):
         ZoneInfo(zone)
     except (ZoneInfoNotFoundError, ValueError):
         raise HTTPException(422, 'Enter a valid IANA time zone, for example America/Toronto.')
+    if zone not in SUPPORTED_TIMEZONES:
+        raise HTTPException(422, 'CrownOps schedules currently run on Eastern time (America/Toronto) only. Other time zones are not supported yet.')
     return {
         'name': name,
         'short_name': short_name,
