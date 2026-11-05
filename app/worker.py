@@ -16,6 +16,8 @@ def tick(path):
     # Never hold the SQLite writer lock during provider requests. Every result
     # is checked against the current revision/version in the draft transaction.
     with closing(connect(path)) as db:
+        from .company_profile import company_profile
+        if not company_profile(db)['ready']:return {'drafts_created':0,'skipped':'company profile not configured'}
         policy=settings(db,'automation_policy',{})
         candidates=rows(db,"SELECT i.id,r.issued_at FROM job_invoices i JOIN invoice_revisions r ON r.invoice_id=i.id AND r.revision=i.revision JOIN jobs j ON j.id=i.job_id JOIN leads l ON l.id=j.lead_id WHERE i.status='Issued' AND l.notifications_suppressed=0 AND l.email!=''") if policy.get('enabled') and policy.get('invoice_followup') else []
     from .invoice_payments import collection_payment_check

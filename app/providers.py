@@ -192,6 +192,7 @@ def send_gmail(path,message):
     if not isinstance(sender,str) or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',sender):raise ValueError('Gmail sender identity could not be confirmed.')
     from .company_profile import company_profile
     with closing(connect(path)) as db:identity=settings(db,'company_communications',{}) or {};company=company_profile(db)
+    if not company['ready']:raise ValueError('Set up the company profile before sending client email.')
     reply_to=sender
     if identity.get('approved') is True:
         if str(identity.get('connected_mailbox','')).lower()!=sender.lower():raise ValueError('The connected mailbox changed. Management must review company email rules before sending.')
@@ -595,6 +596,8 @@ def register_providers(app,path,auth,public_url,new_lead=None):
             if os.getenv('QBO_ENV','sandbox')!='sandbox' and doc.get('test_mode',True):raise HTTPException(409,'Test invoices cannot be exported to production accounting.')
             old=one(db,"SELECT * FROM external_records WHERE provider='quickbooks' AND kind='Invoice' AND object_id=? ORDER BY revision DESC LIMIT 1",(iid,))
             if old and old['revision']==inv['revision']:return {'already_synced':True,'external_id':old['external_id'],'amount_matches':old['amount_cents']==calc['total_cents']}
+            from .company_profile import ready_profile
+            ready_profile(db,'exporting invoices')
             key='qbo:invoice:'+iid+':'+str(inv['revision']);op=one(db,'SELECT * FROM provider_operations WHERE id=?',(key,))
             if op and op['status'] in ('Running','Unknown','Mismatch'):raise HTTPException(409,'This export needs reconciliation before retrying. No second invoice was created.')
             db.execute('DELETE FROM provider_operations WHERE id=?',(key,));insert(db,'provider_operations',dict(id=key,provider='quickbooks',object_id=iid,kind='Invoice',status='Running',created_at=now(),updated_at=now()))
@@ -638,7 +641,8 @@ def register_providers(app,path,auth,public_url,new_lead=None):
         with transaction(path) as db:
             inv,calc=invoice_current(db,iid);invoice_job(db,inv['job_id'],u)
             from .company_profile import company_profile
-            checkout_company=company_profile(db)['name']
+            from .company_profile import ready_profile
+            checkout_company=ready_profile(db,'creating payment links')['name']
             if inv['status']!='Issued':raise HTTPException(409,'Finalize the invoice before requesting payment.')
             issued_doc=json.loads(one(db,'SELECT document_json FROM invoice_revisions WHERE invoice_id=? AND revision=?',(iid,inv['revision']))['document_json'])
             if os.getenv('SQUARE_ENV','sandbox')!='sandbox' and issued_doc.get('test_mode',True):raise HTTPException(409,'A test invoice cannot create a production card charge.')

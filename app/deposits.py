@@ -30,6 +30,8 @@ def create_deposit_checkout(path,qid,lid,actor):
         existing_booking=one(db,"SELECT id FROM jobs WHERE quote_id=? AND status IN ('Confirmed','In progress','Completed')",(qid,))
         if not existing_booking:assert_day_open(db,json.loads(q['inputs_json']).get('move_date') or l.get('move_date',''))
         env=square_deposit_gate(l['email'])
+        from .company_profile import ready_profile
+        company=ready_profile(db,'creating deposit checkouts')
         if env=='production' and (lid.startswith('DEMO-') or l['email'].endswith('.invalid')):raise HTTPException(409,'Fictional clients cannot create production card deposits.')
         if not quote_scope_current(db,q,l) or pending_scope_changes(db,lid):raise HTTPException(409,'Ask Crown to review the latest changes before paying.')
         balance=deposit_state(db,lid,q)
@@ -42,14 +44,14 @@ def create_deposit_checkout(path,qid,lid,actor):
         key=uid('DEPOSIT');insert(db,'deposit_links',dict(id=key,lead_id=lid,quote_id=qid,amount_cents=balance['due_cents'],created_by=actor,created_at=now()))
     host='https://connect.squareupsandbox.com' if env=='sandbox' else 'https://connect.squareup.com'
     try:
-        r=requests.post(host+'/v2/online-checkout/payment-links',headers={'Authorization':'Bearer '+token,'Square-Version':os.getenv('SQUARE_API_VERSION','2026-09-16')},json={'idempotency_key':key,'quick_pay':{'name':'Crown Movers deposit','price_money':{'amount':balance['due_cents'],'currency':'CAD'},'location_id':loc},'checkout_options':{'allow_tipping':False}},timeout=30)
+        r=requests.post(host+'/v2/online-checkout/payment-links',headers={'Authorization':'Bearer '+token,'Square-Version':os.getenv('SQUARE_API_VERSION','2026-09-16')},json={'idempotency_key':key,'quick_pay':{'name':company['name']+' deposit','price_money':{'amount':balance['due_cents'],'currency':'CAD'},'location_id':loc},'checkout_options':{'allow_tipping':False}},timeout=30)
         r.raise_for_status();v=r.json()['payment_link']
         with transaction(path) as db:
             db.execute("UPDATE deposit_links SET status='Active',link_id=?,order_id=?,url=? WHERE id=?",(v['id'],v['order_id'],v['url'],key));audit(db,actor,'Deposit checkout prepared; not a booking','deposit_links',key)
         return {'url':v['url'],'booking_confirmed':False}
     except Exception:
         with transaction(path) as db:db.execute("UPDATE deposit_links SET status='Unknown' WHERE id=?",(key,))
-        raise HTTPException(502,'Deposit checkout not confirmed. Ask Crown to check before retrying or paying another way.')
+        raise HTTPException(502,'Deposit checkout not confirmed. Ask the moving company to check before retrying or paying another way.')
 
 
 def record_deposit_callback(db,p,event_id):

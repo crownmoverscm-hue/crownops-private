@@ -9,6 +9,7 @@ existing client messages stay byte-identical. New installations store their own
 profile at provisioning (`manage.py init --company-name ...`) or through the
 Owner/Manager settings API. `configured` reports which of the two is in effect.
 """
+import os
 import re
 from contextlib import closing
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -19,6 +20,9 @@ from .platform_common import MANAGERS, OFFICE, put_setting, require_role, settin
 from .store import audit, connect, now, transaction
 
 SETTING_KEY = 'company_profile'
+MODE_KEY = 'company_identity_mode'
+LEGACY_MODE = 'legacy-crown'
+UNCONFIGURED_MODE = 'unconfigured'
 
 LEGACY_PROFILE = {
     'name': 'Crown Movers',
@@ -115,21 +119,69 @@ def validate_profile(data):
     }
 
 
+def record_identity_mode(db):
+    """Decide once, on the first startup of this release, which identity an unconfigured install uses.
+
+    A database that already holds users or leads is the original Crown Movers installation and keeps
+    its legacy identity. An empty database is a new company installation: it stays unconfigured and
+    cannot send client messages or issue invoices until its own profile is stored. Disposable test
+    databases are not recorded (see identity_mode).
+    """
+    if settings(db, SETTING_KEY) or settings(db, MODE_KEY):
+        return
+    existing = db.execute('SELECT 1 FROM users LIMIT 1').fetchone() or db.execute('SELECT 1 FROM leads LIMIT 1').fetchone()
+    if existing:
+        put_setting(db, MODE_KEY, LEGACY_MODE)
+    elif os.getenv('CROWNOPS_ENV', 'test') != 'test':
+        put_setting(db, MODE_KEY, UNCONFIGURED_MODE)
+
+
+def identity_mode(db):
+    mode = settings(db, MODE_KEY)
+    if mode in (LEGACY_MODE, UNCONFIGURED_MODE):
+        return mode
+    # Unrecorded databases only exist in the disposable test environment, whose fixtures model Crown.
+    return LEGACY_MODE if os.getenv('CROWNOPS_ENV', 'test') == 'test' else UNCONFIGURED_MODE
+
+
 def company_profile(db):
-    """The effective identity: the stored profile, else the legacy Crown Movers identity."""
+    """The effective identity: the stored profile, the legacy Crown identity, or an unusable placeholder."""
     stored = settings(db, SETTING_KEY)
     if isinstance(stored, dict) and stored.get('name'):
         profile = {**LEGACY_PROFILE, 'local_time_label': '', 'local_time_label_fr': ''}
         profile.update({k: stored[k] for k in LEGACY_PROFILE if k in stored})
         profile['configured'] = True
+        profile['ready'] = True
+        profile['mode'] = 'configured'
         profile['version'] = int(stored.get('version') or 1)
         profile['updated_at'] = stored.get('updated_at', '')
         return profile
-    return {**LEGACY_PROFILE, 'configured': False, 'version': 0, 'updated_at': ''}
+    if identity_mode(db) == LEGACY_MODE:
+        return {**LEGACY_PROFILE, 'configured': False, 'ready': True, 'mode': LEGACY_MODE, 'version': 0, 'updated_at': ''}
+    return {'name': 'Moving company', 'short_name': 'the moving company', 'phone': '', 'phone_tel': '', 'email': '',
+            'timezone': 'America/Toronto', 'local_time_label': '', 'local_time_label_fr': '',
+            'configured': False, 'ready': False, 'mode': UNCONFIGURED_MODE, 'version': 0, 'updated_at': ''}
+
+
+NOT_READY = ('Set up your company profile before {action}. An Owner or Manager can do this in '
+             'company settings, or run manage.py company-profile.')
+
+
+def require_ready(company, action):
+    if not company.get('ready', True):
+        raise HTTPException(409, NOT_READY.format(action=action))
+    return company
+
+
+def ready_profile(db, action):
+    return require_ready(company_profile(db), action)
 
 
 def profile_or_legacy(company):
-    return company if company else {**LEGACY_PROFILE, 'configured': False}
+    """Templates: an explicit profile must be usable; None means a legacy caller."""
+    if company is None:
+        return {**LEGACY_PROFILE, 'configured': False, 'ready': True}
+    return require_ready(company, 'preparing client communications')
 
 
 def time_note(company, fr):

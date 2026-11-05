@@ -259,3 +259,82 @@ class CompanyProfileCliTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NewInstallationFailClosedTests(CompanyFixture):
+    """A new company without a profile can capture work but cannot speak or invoice as anyone."""
+
+    def setUp(self):
+        super().setUp()
+        from app.platform_common import put_setting
+        with transaction(self.path) as db:
+            put_setting(db, 'company_identity_mode', 'unconfigured')
+
+    def test_identity_mode_is_recorded_once_from_existing_data(self):
+        from app.store import initialize
+        from app.platform_common import settings
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {'CROWNOPS_ENV': 'staging'}):
+            fresh, existing = Path(td) / 'fresh.sqlite3', Path(td) / 'existing.sqlite3'
+            initialize(fresh)
+            with patch.dict(os.environ, {'CROWNOPS_ENV': 'test'}):
+                initialize(existing)
+            with transaction(existing) as db:
+                insert(db, 'users', dict(id='u1', email='u1@example.invalid', name='U', role='owner', password_hash='x', active=1, created_at=now()))
+            initialize(existing)
+            initialize(fresh)  # repeated startups never flip the decision
+            with closing(connect(fresh)) as a, closing(connect(existing)) as b:
+                self.assertEqual(settings(a, 'company_identity_mode'), 'unconfigured')
+                self.assertEqual(settings(b, 'company_identity_mode'), 'legacy-crown')
+
+    def test_profile_reports_not_ready_without_crown_identity(self):
+        profile = self.clients['owner'].get('/api/company/profile').json()
+        self.assertFalse(profile['ready']); self.assertEqual(profile['mode'], 'unconfigured')
+        self.assertIsNone(LEGACY_MARKERS.search(str(profile)))
+        self.assertIsNone(LEGACY_MARKERS.search(self.public.get('/api/company/public-profile').text))
+
+    def test_public_inquiry_and_callback_are_saved_but_no_message_is_prepared(self):
+        data = {'request_id': 'unconfigured-form-0001', 'permission_to_contact': True, 'callback_request': True,
+                'lead': {'client_name': 'Fictional Client', 'email': 'client@example.invalid', 'phone': '6045550100'}}
+        self.assertEqual(self.public.post('/api/request', json=data).status_code, 200)
+        with closing(connect(self.path)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM leads WHERE email='client@example.invalid'").fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT count(*) FROM client_callbacks').fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT count(*) FROM outbound_messages').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM portal_invites').fetchone()[0], 0)
+
+    def test_staff_cannot_prepare_client_messages_until_profile_exists(self):
+        from fastapi import HTTPException
+        from app.platform_common import queue_message
+        with transaction(self.path) as db:
+            insert(db, 'leads', dict(id='L1', client_name='Fictional', email='c@example.invalid', phone='6045550100',
+                                     stage='New Lead', created_at=now(), updated_at=now()))
+        with transaction(self.path) as db, self.assertRaises(HTTPException) as refused:
+            queue_message(db, 'L1', 'Subject', 'Body', 'Reply', 'owner', 'k1')
+        self.assertEqual(refused.exception.status_code, 409)
+        self.assertIn('company profile', refused.exception.detail)
+        self.save()
+        with transaction(self.path) as db:
+            self.assertEqual(queue_message(db, 'L1', 'Subject', 'Body', 'Reply', 'owner', 'k1')['recipient'], 'c@example.invalid')
+
+    def test_email_send_worker_and_billing_defaults_fail_closed(self):
+        from app.providers import send_gmail
+        from app.worker import tick
+        with patch('app.providers.provider_token', return_value={'access_token': 'not-a-real-token'}), \
+                patch('app.providers.requests.get') as get, patch('app.providers.requests.post') as post:
+            get.return_value.json.return_value = {'emailAddress': 'office@example.invalid'}
+            with self.assertRaises(ValueError):
+                send_gmail(self.path, {'id': 'M1', 'recipient': 'c@example.invalid', 'subject': 's', 'body': 'b', 'category': 'Reply', 'event_key': 'k'})
+            post.assert_not_called()
+        self.assertEqual(tick(self.path)['drafts_created'], 0)
+        terms = self.clients['owner'].get('/api/platform/settings').json()['billing_policy']['terms']
+        self.assertEqual(terms['issuer']['name'], ''); self.assertEqual(terms['taxes'], [])
+        self.assertIsNone(LEGACY_MARKERS.search(str(terms)))
+
+    def test_templates_refuse_an_unready_profile(self):
+        from fastapi import HTTPException
+        from app.client_communications import invoice_body
+        with closing(connect(self.path)) as db:
+            from app.company_profile import company_profile
+            unready = company_profile(db)
+        with self.assertRaises(HTTPException):
+            invoice_body({'client_name': 'C', 'language': 'English'}, {'number': 'I'}, {'total_cents': 1, 'deposit_cents': 0, 'balance_cents': 1}, 'https://x.invalid', company=unready)

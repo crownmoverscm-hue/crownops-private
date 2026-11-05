@@ -265,16 +265,16 @@ def register_operations(app,path,auth):
         billing=dict(result.get('billing_policy') or {})
         terms=dict(billing.get('terms') or {})
         issuer=dict(terms.get('issuer') or {})
-        if company['configured']:
+        if company['mode']!='legacy-crown':
             # Another company's legal name, address and tax registrations must never pre-fill this form.
-            issuer.setdefault('name',company['name']);issuer.setdefault('address','')
+            issuer.setdefault('name',company['name'] if company['configured'] else '');issuer.setdefault('address','')
             issuer.setdefault('email',company['email']);issuer.setdefault('phone',company['phone'])
             terms.setdefault('taxes',[])
         else:
             from .company_profile import LEGACY_ISSUER
             for field,value in LEGACY_ISSUER.items():issuer.setdefault(field,value)
         terms['issuer']=issuer
-        if not terms.get('taxes') and not company['configured']:
+        if not terms.get('taxes') and company['mode']=='legacy-crown':
             from .company_profile import LEGACY_TAXES
             terms['taxes']=[dict(tax) for tax in LEGACY_TAXES]
         terms.setdefault('catalogue',[])

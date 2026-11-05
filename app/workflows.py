@@ -109,14 +109,16 @@ def register_workflows(app,path,auth,new_lead,check_job_resources,public_url):
             if not r.get('duplicate'):
                 from .client_communications import portal_link
                 lead=one(db,'SELECT * FROM leads WHERE id=?',(r['lead_id'],));fr=lead['language'].lower().startswith('fr')
-                link=portal_link(db,lead,'public-request',public_url,tab='files')
                 from .company_profile import company_profile,team_signoff
                 c=company_profile(db)
-                body=(f"Bonjour {lead['client_name']},\n\nMerci d’avoir contacté {c['name']}! Nous avons reçu votre demande et notre équipe examinera les détails pour préparer votre devis.\n\nVous pouvez déjà ajouter vos photos et préciser les accès dans votre dossier privé :\n{link}\n\nVotre date souhaitée n’est pas encore réservée. Nous confirmerons les disponibilités et les prochaines étapes avec vous.\n\nUne question? Demandez un rappel dans votre dossier ou appelez le {c['phone']}."+team_signoff(c,True) if fr else f"Hi {lead['client_name']},\n\nThank you for contacting {c['name']}! We have received your request. Our team will review your details and prepare your estimate.\n\nYou can already add photos and share access details in your private moving file:\n{link}\n\nYour requested date is not booked yet. We will confirm availability and the next steps with you.\n\nQuestions? Request a callback in your file or call {c['phone']}."+team_signoff(c,False))
-                ack=queue_message(db,lead['id'],'Votre demande '+c['name']+' est reçue' if fr else 'We have your '+c['name']+' request',body,'Reply','public-request','request-ack:'+rid)
-                if live_enabled():
-                    db.execute("UPDATE outbound_messages SET status='Approved',approved_by='public-request-consent' WHERE id=?",(ack['id'],))
-                    background.add_task(send_ack,ack['id'])
+                # Never lose the inquiry: acknowledge only when this company's identity is configured.
+                if c['ready']:
+                    link=portal_link(db,lead,'public-request',public_url,tab='files')
+                    body=(f"Bonjour {lead['client_name']},\n\nMerci d’avoir contacté {c['name']}! Nous avons reçu votre demande et notre équipe examinera les détails pour préparer votre devis.\n\nVous pouvez déjà ajouter vos photos et préciser les accès dans votre dossier privé :\n{link}\n\nVotre date souhaitée n’est pas encore réservée. Nous confirmerons les disponibilités et les prochaines étapes avec vous.\n\nUne question? Demandez un rappel dans votre dossier ou appelez le {c['phone']}."+team_signoff(c,True) if fr else f"Hi {lead['client_name']},\n\nThank you for contacting {c['name']}! We have received your request. Our team will review your details and prepare your estimate.\n\nYou can already add photos and share access details in your private moving file:\n{link}\n\nYour requested date is not booked yet. We will confirm availability and the next steps with you.\n\nQuestions? Request a callback in your file or call {c['phone']}."+team_signoff(c,False))
+                    ack=queue_message(db,lead['id'],'Votre demande '+c['name']+' est reçue' if fr else 'We have your '+c['name']+' request',body,'Reply','public-request','request-ack:'+rid)
+                    if live_enabled():
+                        db.execute("UPDATE outbound_messages SET status='Approved',approved_by='public-request-consent' WHERE id=?",(ack['id'],))
+                        background.add_task(send_ack,ack['id'])
                 if data.get('callback_request') is True:
                     cid=uid('CALLBACK');preferred=text(data.get('preferred_time',''),'Preferred callback time',200)
                     insert(db,'client_callbacks',dict(id=cid,lead_id=lead['id'],request_key=rid,phone=lead['phone'],preferred_time=preferred,message='Callback requested with estimate form',created_at=now()))

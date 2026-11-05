@@ -223,6 +223,8 @@ def register_invoices(app,path,auth,visible_job,require):
             if j['status']!='Completed':raise HTTPException(409,'Mark the job completed before issuing its final invoice.')
             apply_unambiguous_deposits(db,inv,j,u['id'])
             doc=decorate(db,inv,j)
+            from .company_profile import ready_profile
+            ready_profile(db,'issuing invoices')
             if doc['pending_extras']:raise HTTPException(409,'Management must approve or decline the requested extra items before this invoice can be finalized.')
             if doc['deposit_review']['review_required']:raise HTTPException(409,'A verified deposit needs allocation or management review before issuing this invoice.')
             if not doc['calculation']['actual_hours_recorded']:raise HTTPException(422,'Enter actual hours first, not quoted hours.')

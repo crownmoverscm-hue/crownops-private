@@ -107,6 +107,9 @@ def send_account_email(path, person, public_url, body, subject, message_id):
 def _send_account_message(path, recipient, public_url, body, subject, message_id, html=None):
     from .core_v1 import deny_if_enabled
     deny_if_enabled(" send account message")
+    from .company_profile import ready_profile
+    with closing(connect(path)) as db:
+        ready_profile(db, 'sending staff account email')
     # Called only after the staff account or pending invitation is resolved from the database.
     if not recovery_email_allowed(path, public_url, recipient):
         raise RuntimeError('Account emails are not enabled for this staff account.')

@@ -42,6 +42,7 @@ class SquareDepositPermissionTests(unittest.TestCase):
                     quote_id TEXT REFERENCES quotes(id), amount_cents INTEGER,
                     status TEXT DEFAULT 'Creating', link_id TEXT, order_id TEXT UNIQUE,
                     url TEXT, created_by TEXT, created_at TEXT);
+                CREATE TABLE settings(key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
                 CREATE TABLE audit(id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, action TEXT, object_type TEXT, object_id TEXT,
                     details_json TEXT, created_at TEXT);
             ''')

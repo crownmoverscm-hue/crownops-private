@@ -170,6 +170,8 @@ def add_task(db,lid,title,owner='',key=None):
     insert(db,'tasks',dict(id=uid('TASK'),legacy_id=key,lead_id=lid,title=title,due_date=business_day(),owner=owner,created_at=now()))
 
 def queue_message(db,lid,subject,body,category,actor,key,jid=None,version=None):
+    from .company_profile import ready_profile
+    ready_profile(db,'preparing client messages')
     l=one(db,'SELECT * FROM leads WHERE id=?',(lid,))
     if not l or not l['email']:raise HTTPException(422,'A valid client email is required.')
     old=one(db,'SELECT * FROM outbound_messages WHERE event_key=?',(key,))

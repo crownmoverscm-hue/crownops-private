@@ -433,7 +433,8 @@ def register_review_features(app,path,auth,public_url):
             insert(db,'document_approvals',dict(id=aid,template_id=tmpl['id'],template_version=tmpl['version'],lead_id=lid,job_id=jid,rendered_body=rendered,recipient=recipient,delivery_method=method,status='Prepared',token_hash=_token_hash(raw),expires_at=exp,created_by=u['id'],created_at=now()))
             link=public_url.rstrip('/')+'/approval#token='+raw
             from .company_profile import company_profile
-            company_name=company_profile(db)['name']
+            from .company_profile import ready_profile
+            company_name=ready_profile(db,'preparing approval requests')['name']
             if method=='Email':
                 queue_message(db,lid,'Approval requested | '+company_name,f'Please review and approve the attached service acknowledgement using this private link:\n\n{link}\n\nNothing is approved until you submit the acknowledgement.', 'Document approval',u['id'],'document-approval:'+aid,jid)
             audit(db,u['id'],'Client approval request prepared','document_approvals',aid,{'template_id':tid,'method':method,'job_id':jid})

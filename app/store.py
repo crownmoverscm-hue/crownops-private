@@ -152,6 +152,9 @@ def initialize(path):
         palette=['#3B82F6','#22C55E','#F97316','#8B5CF6','#14B8A6','#EF4444','#EAB308','#94A3B8','#EC4899','#06B6D4','#84CC16','#A855F7']
         for i,row in enumerate(db.execute('SELECT id FROM vehicles ORDER BY name').fetchall()):
             db.execute('UPDATE vehicles SET color_hex=?,display_order=? WHERE id=?',(palette[i%len(palette)],i+1,row[0]))
+    from .company_profile import record_identity_mode
+    record_identity_mode(db)
+    db.commit()
     db.close()
     try:
         os.chmod(path, 0o600)

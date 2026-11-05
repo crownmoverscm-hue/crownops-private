@@ -53,7 +53,7 @@ def seed_ux_defaults(path):
         if one(db,"SELECT employee_id FROM employee_directory_profiles WHERE employee_id='DEMO-EMP-1'"):
             db.execute("UPDATE employee_directory_profiles SET team_lead=1 WHERE employee_id='DEMO-EMP-1'")
         from .company_profile import company_profile
-        if settings(db,'company_communications') is None and company_profile(db)['configured']:
+        if settings(db,'company_communications') is None and company_profile(db)['mode']!='legacy-crown':
             put_setting(db,'company_communications',{'connected_mailbox':'','send_as':'','reply_to':'','default_from':'','secondary_inbox':'',
                 'client_email_rule':'Store mail in the connected Gmail mailbox and send as the company domain alias after Google verifies the alias.',
                 'approved':False,'note':'Connect and verify the company mailbox before live use.'})
