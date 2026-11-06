@@ -40,7 +40,7 @@ jobs:
           CROWNOPS_ENV: test
           CROWNOPS_ALLOW_EXTERNAL: "0"
           QBO_ENV: sandbox
-        run: python tests/run_isolated.py --min-tests 746 --jobs 2
+        run: python tests/run_isolated.py --min-tests 747 --jobs 2
       - name: Check JavaScript syntax
         run: |
           for f in app/static/*.js; do
