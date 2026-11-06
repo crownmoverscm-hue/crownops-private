@@ -121,6 +121,16 @@ def collect(path):
             report['integration_operations_needing_review'] = stuck
             if stuck.get('Unknown') or stuck.get('Mismatch'):
                 add('warning', 'integration_reconciliation', 'Accounting or payment operations need reconciliation.', **{k.lower(): v for k, v in stuck.items()})
+            # Unknown Square checkout creation is not a provider_operation: it must be
+            # reconciled with Square before another checkout can be issued.
+            unconfirmed_checkouts = db.execute(
+                "SELECT count(*) FROM payment_links WHERE provider='square' AND status='Unknown'"
+            ).fetchone()[0]
+            report['square_checkouts_needing_review'] = unconfirmed_checkouts
+            if unconfirmed_checkouts:
+                add('warning', 'square_checkout_unconfirmed',
+                    'Square checkout creation is unconfirmed; reconcile with Square before retrying.',
+                    count=unconfirmed_checkouts)
             unreadable, encrypted = _encrypted_values_unreadable(db)
             report['encrypted_values'] = {'stored': encrypted, 'unreadable': unreadable}
             if unreadable:
