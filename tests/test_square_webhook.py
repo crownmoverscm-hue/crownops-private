@@ -140,6 +140,28 @@ class SquareWebhook(unittest.TestCase):
         self.assertEqual(self.count("SELECT count(*) FROM tasks WHERE title LIKE 'URGENT: Square refund/dispute%'"), 2)
         self.assertEqual(self.count("SELECT count(*) FROM payments WHERE reference='Square:PAY-REFUNDED' AND verified=1"), 1)
 
+    def test_unknown_checkout_is_visible_to_operations_without_exposing_payment_details(self):
+        from app.ops_status import collect
+        from app.store import transaction
+
+        with transaction(self.db) as db:
+            db.execute("UPDATE payment_links SET status='Unknown' WHERE order_id=?", (self.order,))
+        report = collect(self.db)
+        self.assertEqual(report['square_checkouts_needing_review'], 1)
+        finding = next(f for f in report['findings'] if f['code'] == 'square_checkout_unconfirmed')
+        self.assertEqual(finding['level'], 'warning')
+        self.assertEqual(finding['count'], 1)
+        serialized = json.dumps(report)
+        self.assertNotIn(self.order, serialized)
+        self.assertNotIn(self.invoice, serialized)
+        self.assertNotIn('https://x.invalid', serialized)
+
+        with transaction(self.db) as db:
+            db.execute("UPDATE payment_links SET status='Cancelled' WHERE order_id=?", (self.order,))
+        resolved = collect(self.db)
+        self.assertEqual(resolved['square_checkouts_needing_review'], 0)
+        self.assertNotIn('square_checkout_unconfirmed', {f['code'] for f in resolved['findings']})
+
     def test_oversized_events_are_refused(self):
         body = b'{"event_id":"big","pad":"' + b'x' * 200_001 + b'"}'
         self.assertEqual(self.post(body).status_code, 413)
